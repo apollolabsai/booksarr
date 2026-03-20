@@ -15,10 +15,22 @@ export default function BookCard({
     "cover_image_url" in book ? book.cover_image_url : null
   );
 
+  const hardcoverUrl = book.hardcover_slug
+    ? `https://hardcover.app/books/${book.hardcover_slug}`
+    : null;
+
+  const handleClick = () => {
+    if (hardcoverUrl) {
+      window.open(hardcoverUrl, "_blank", "noopener,noreferrer");
+    } else if (onClick) {
+      onClick();
+    }
+  };
+
   return (
     <div
       className={`group cursor-pointer ${!book.is_owned ? "opacity-60" : ""}`}
-      onClick={onClick}
+      onClick={handleClick}
     >
       <div className="relative aspect-[2/3] bg-slate-700 rounded-lg overflow-hidden border border-slate-600 group-hover:border-emerald-500/50 transition-all">
         {imgUrl ? (

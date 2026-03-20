@@ -35,7 +35,13 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database initialized")
+
+    from backend.app.services.scheduler import start_scheduler, stop_scheduler
+    await start_scheduler()
+
     yield
+
+    await stop_scheduler()
     logger.info("Shutting down Booksarr")
 
 

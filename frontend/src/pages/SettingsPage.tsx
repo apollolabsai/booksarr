@@ -10,10 +10,18 @@ export default function SettingsPage() {
   const [apiKey, setApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [scanInterval, setScanInterval] = useState("24");
+  const [intervalSaved, setIntervalSaved] = useState(false);
   const queryClient = useQueryClient();
 
   const { data: scanStatus } = useScanStatus(true);
   const isScanning = scanStatus?.status === "scanning";
+
+  useEffect(() => {
+    if (settings?.scan_interval_hours !== undefined) {
+      setScanInterval(String(settings.scan_interval_hours));
+    }
+  }, [settings?.scan_interval_hours]);
 
   const handleSaveKey = async () => {
     if (!apiKey.trim()) return;
@@ -22,9 +30,16 @@ export default function SettingsPage() {
     setTimeout(() => setSaved(false), 3000);
   };
 
+  const handleSaveInterval = async () => {
+    const hours = parseInt(scanInterval, 10);
+    if (isNaN(hours) || hours < 0) return;
+    await updateSettings.mutateAsync({ scan_interval_hours: hours });
+    setIntervalSaved(true);
+    setTimeout(() => setIntervalSaved(false), 3000);
+  };
+
   const handleScan = async (force?: boolean) => {
     await triggerScan.mutateAsync(force);
-    // After scan completes, refresh all data
     const pollUntilDone = setInterval(async () => {
       const status = await fetch("/api/library/status").then((r) => r.json());
       if (status.status === "idle" && status.progress >= 100) {
@@ -34,6 +49,9 @@ export default function SettingsPage() {
       }
     }, 3000);
   };
+
+  const parsedInterval = parseInt(scanInterval, 10);
+  const intervalChanged = !isNaN(parsedInterval) && parsedInterval >= 0 && parsedInterval !== (settings?.scan_interval_hours ?? 24);
 
   return (
     <div className="max-w-2xl">
@@ -106,10 +124,11 @@ export default function SettingsPage() {
       </div>
 
       {/* Scan Controls */}
-      <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
+      <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
         <h3 className="text-lg font-semibold mb-4">Library Scan</h3>
         <p className="text-sm text-slate-400 mb-4">
-          Scan your library folder, match books to Hardcover, and download metadata and covers.
+          Scan your library folder for new books, match to Hardcover, and download metadata and covers.
+          Only new and removed files are processed — existing books are untouched.
         </p>
 
         {isScanning && scanStatus && (
@@ -127,7 +146,7 @@ export default function SettingsPage() {
           </div>
         )}
 
-        <div className="flex gap-3">
+        <div className="flex gap-3 mb-4">
           <button
             onClick={() => handleScan()}
             disabled={isScanning}
@@ -143,13 +162,44 @@ export default function SettingsPage() {
             Full Refresh
           </button>
         </div>
-        <p className="text-xs text-slate-500 mt-3">
-          Scan Library runs incrementally (skips recently synced authors). Full Refresh re-fetches all data from Hardcover.
+        <p className="text-xs text-slate-500">
+          Scan Library detects new/removed files and only fetches metadata for changes. Full Refresh re-fetches all data from Hardcover.
         </p>
       </div>
 
+      {/* Scheduled Scan */}
+      <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
+        <h3 className="text-lg font-semibold mb-4">Scheduled Scan</h3>
+        <p className="text-sm text-slate-400 mb-4">
+          Automatically scan your library for changes on a schedule. Set to 0 to disable.
+        </p>
+        <div className="flex gap-2 items-center">
+          <input
+            type="number"
+            min="0"
+            value={scanInterval}
+            onChange={(e) => setScanInterval(e.target.value)}
+            className="w-24 bg-slate-700 border border-slate-600 text-slate-200 text-sm rounded-lg px-4 py-2"
+          />
+          <span className="text-sm text-slate-400">hours</span>
+          <button
+            onClick={handleSaveInterval}
+            disabled={!intervalChanged}
+            className="bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-600 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+          >
+            Save
+          </button>
+          {intervalSaved && <span className="text-emerald-400 text-sm">Schedule updated!</span>}
+        </div>
+        {(settings?.scan_interval_hours ?? 24) > 0 && (
+          <p className="text-xs text-emerald-400 mt-2">
+            Active: scanning every {settings?.scan_interval_hours ?? 24} hour(s)
+          </p>
+        )}
+      </div>
+
       {/* Logs */}
-      <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mt-6">
+      <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-lg font-semibold">Logs</h3>

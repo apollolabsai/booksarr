@@ -79,6 +79,7 @@ export interface Settings {
   hardcover_api_key: string;
   library_path: string;
   last_scan_at: string | null;
+  scan_interval_hours: number;
 }
 
 export interface BuildInfo {

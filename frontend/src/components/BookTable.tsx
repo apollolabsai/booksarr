@@ -83,7 +83,18 @@ export default function BookTable({
                   </div>
                 </td>
                 <td className="px-4 py-2">
-                  <span className="font-medium text-slate-200">{book.title}</span>
+                  {book.hardcover_slug ? (
+                    <a
+                      href={`https://hardcover.app/books/${book.hardcover_slug}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-medium text-slate-200 hover:text-emerald-400 transition-colors"
+                    >
+                      {book.title}
+                    </a>
+                  ) : (
+                    <span className="font-medium text-slate-200">{book.title}</span>
+                  )}
                 </td>
                 {showAuthor && (
                   <td className="px-4 py-2">
@@ -102,7 +113,7 @@ export default function BookTable({
                 <td className="px-4 py-2 text-slate-400 text-xs">
                   {seriesStr || "-"}
                 </td>
-                <td className="px-4 py-2 text-right text-slate-400">
+                <td className="px-4 py-2 text-right text-slate-400 whitespace-nowrap">
                   {book.release_date || "-"}
                 </td>
                 <td className="px-4 py-2 text-right text-slate-400">

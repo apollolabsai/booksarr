@@ -70,8 +70,10 @@ export default function BooksPage() {
           {books.map((book) => {
             const imgUrl = getImageUrl(book.cover_image_cached_path, book.cover_image_url);
             return (
-              <div key={book.id} className={`group ${!book.is_owned ? "opacity-60" : ""}`}>
-                <div className="relative aspect-[2/3] bg-slate-700 rounded-lg overflow-hidden border border-slate-600">
+              <div key={book.id} className={`group cursor-pointer ${!book.is_owned ? "opacity-60" : ""}`}
+                onClick={() => book.hardcover_slug && window.open(`https://hardcover.app/books/${book.hardcover_slug}`, "_blank", "noopener,noreferrer")}
+              >
+                <div className="relative aspect-[2/3] bg-slate-700 rounded-lg overflow-hidden border border-slate-600 group-hover:border-emerald-500/50 transition-all">
                   {imgUrl ? (
                     <img src={imgUrl} alt={book.title} className="w-full h-full object-cover" loading="lazy" />
                   ) : (
@@ -87,8 +89,10 @@ export default function BooksPage() {
                     </div>
                   )}
                 </div>
-                <p className="mt-1.5 text-xs font-medium text-slate-200 truncate">{book.title}</p>
-                <Link to={`/authors/${book.author_id}`} className="text-xs text-slate-500 hover:text-emerald-400 truncate block">
+                <p className="mt-1.5 text-xs font-medium text-slate-200 truncate group-hover:text-emerald-400 transition-colors">{book.title}</p>
+                <Link to={`/authors/${book.author_id}`} className="text-xs text-slate-500 hover:text-emerald-400 truncate block"
+                  onClick={(e) => e.stopPropagation()}
+                >
                   {book.author_name}
                 </Link>
               </div>

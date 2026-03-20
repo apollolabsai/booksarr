@@ -24,6 +24,7 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
         api_key = settings.get("hardcover_api_key", "")
 
     last_scan = settings.get("last_scan_at")
+    scan_interval = int(settings.get("scan_interval_hours", "24"))
 
     # Mask API key for display
     masked_key = ""
@@ -34,23 +35,32 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
         hardcover_api_key=masked_key,
         library_path=str(BOOKS_DIR),
         last_scan_at=last_scan,
+        scan_interval_hours=scan_interval,
     )
 
 
 @router.put("")
 async def update_settings(body: SettingsUpdate, db: AsyncSession = Depends(get_db)):
     if body.hardcover_api_key is not None:
-        result = await db.execute(
-            select(Setting).where(Setting.key == "hardcover_api_key")
-        )
-        setting = result.scalar_one_or_none()
-        if setting:
-            setting.value = body.hardcover_api_key
-        else:
-            db.add(Setting(key="hardcover_api_key", value=body.hardcover_api_key))
-        await db.commit()
+        await _upsert_setting(db, "hardcover_api_key", body.hardcover_api_key)
 
+    if body.scan_interval_hours is not None:
+        await _upsert_setting(db, "scan_interval_hours", str(body.scan_interval_hours))
+        # Update the running scheduler
+        from backend.app.services.scheduler import update_scan_schedule
+        await update_scan_schedule(body.scan_interval_hours)
+
+    await db.commit()
     return {"status": "ok"}
+
+
+async def _upsert_setting(db: AsyncSession, key: str, value: str):
+    result = await db.execute(select(Setting).where(Setting.key == key))
+    setting = result.scalar_one_or_none()
+    if setting:
+        setting.value = value
+    else:
+        db.add(Setting(key=key, value=value))
 
 
 @router.get("/build-info")

@@ -40,6 +40,7 @@ class HCBook:
     pages: int = 0
     language: str = ""
     is_canonical: bool = True
+    users_count: int = 0
     tags: list[str] = field(default_factory=list)
     series_refs: list[HCSeriesRef] = field(default_factory=list)
 
@@ -140,7 +141,7 @@ class HardcoverClient:
             image { url }
             default_cover_edition { language { code2 } }
             cached_contributors
-            cached_tags rating pages
+            cached_tags rating pages users_count
             book_series {
               position
               series { id name }
@@ -211,6 +212,7 @@ class HardcoverClient:
                 pages=b.get("pages", 0) or 0,
                 language=language,
                 is_canonical=b.get("canonical_id") is None,
+                users_count=b.get("users_count", 0) or 0,
                 tags=tags,
                 series_refs=series_refs,
             ))

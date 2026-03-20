@@ -12,7 +12,7 @@ export function useSettings() {
 export function useUpdateSettings() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (body: { hardcover_api_key?: string }) =>
+    mutationFn: (body: { hardcover_api_key?: string; scan_interval_hours?: number }) =>
       fetchApi("/settings", { method: "PUT", body: JSON.stringify(body) }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
   });
