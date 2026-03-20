@@ -1,0 +1,15 @@
+services:
+  booksarr:
+    build: .
+    container_name: booksarr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/Los_Angeles
+      - HARDCOVER_API_KEY=
+    volumes:
+      - ./config:/config
+      - /Users/jsg/Local Projects/sample_ebook:/books:ro
+    ports:
+      - 8889:8889
+    restart: unless-stopped

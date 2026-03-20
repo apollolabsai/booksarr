@@ -1,0 +1,15 @@
+import { useQuery } from "@tanstack/react-query";
+import { fetchApi } from "./client";
+import type { Book } from "../types";
+
+export function useBooks(sort: string = "title", owned?: boolean, search: string = "") {
+  return useQuery({
+    queryKey: ["books", sort, owned, search],
+    queryFn: () => {
+      const params = new URLSearchParams({ sort });
+      if (owned !== undefined) params.set("owned", String(owned));
+      if (search) params.set("search", search);
+      return fetchApi<Book[]>(`/books?${params}`);
+    },
+  });
+}
