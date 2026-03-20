@@ -4,8 +4,10 @@ import { useAuthor } from "../api/authors";
 import { getImageUrl } from "../types";
 import type { BookInAuthor } from "../types";
 import BookCard from "../components/BookCard";
+import BookTable from "../components/BookTable";
 import SeriesGroup from "../components/SeriesGroup";
 import SortControls from "../components/SortControls";
+import ViewToggle from "../components/ViewToggle";
 
 const SORT_OPTIONS = [
   { value: "series", label: "By Series" },
@@ -19,6 +21,7 @@ export default function AuthorDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { data: author, isLoading } = useAuthor(Number(id));
   const [sort, setSort] = useState("series");
+  const [view, setView] = useState<"grid" | "table">("grid");
   const [bioExpanded, setBioExpanded] = useState(false);
 
   if (isLoading || !author) {
@@ -54,6 +57,75 @@ export default function AuthorDetailPage() {
 
   const bioTruncated = author.bio && author.bio.length > 400;
   const displayBio = bioExpanded ? author.bio : author.bio?.substring(0, 400);
+
+  const renderBooks = () => {
+    if (view === "table") {
+      if (sort === "series") {
+        return (
+          <>
+            {author.series.map((s) => {
+              const seriesBookIds = new Set(s.books.map((b) => b.book_id));
+              const seriesFullBooks = author.books.filter((b) => seriesBookIds.has(b.id));
+              // Sort by series position
+              seriesFullBooks.sort((a, b) => {
+                const posA = s.books.find((sb) => sb.book_id === a.id)?.position ?? 9999;
+                const posB = s.books.find((sb) => sb.book_id === b.id)?.position ?? 9999;
+                return posA - posB;
+              });
+              const ownedCount = s.books.filter((b) => b.is_owned).length;
+              return (
+                <div key={s.id} className="mb-6">
+                  <div className="flex items-center gap-3 mb-3">
+                    <h3 className="text-lg font-semibold text-slate-200">{s.name}</h3>
+                    <span className="text-sm text-slate-400">
+                      <span className="text-emerald-400">{ownedCount}</span> / {s.books.length} books
+                    </span>
+                  </div>
+                  <BookTable books={seriesFullBooks} showAuthor={false} />
+                </div>
+              );
+            })}
+            {standaloneBooks.length > 0 && (
+              <div className="mb-6">
+                <h3 className="text-lg font-semibold text-slate-200 mb-3">Standalone</h3>
+                <BookTable books={standaloneBooks} showAuthor={false} />
+              </div>
+            )}
+          </>
+        );
+      }
+      return <BookTable books={sortedBooks} showAuthor={false} />;
+    }
+
+    // Grid view
+    if (sort === "series") {
+      return (
+        <>
+          {author.series.map((s) => (
+            <SeriesGroup key={s.id} series={s} allBooks={author.books} />
+          ))}
+          {standaloneBooks.length > 0 && (
+            <div className="mb-8">
+              <h3 className="text-lg font-semibold text-slate-200 mb-4">Standalone</h3>
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-4">
+                {standaloneBooks.map((book) => (
+                  <BookCard key={book.id} book={book} />
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      );
+    }
+
+    return (
+      <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-4">
+        {sortedBooks.map((book) => (
+          <BookCard key={book.id} book={book} />
+        ))}
+      </div>
+    );
+  };
 
   return (
     <div>
@@ -98,38 +170,16 @@ export default function AuthorDetailPage() {
         </div>
       </div>
 
-      {/* Sort + Stats Bar */}
+      {/* Sort + View Controls */}
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-semibold">Books</h2>
-        <SortControls options={SORT_OPTIONS} value={sort} onChange={setSort} />
+        <div className="flex items-center gap-3">
+          <SortControls options={SORT_OPTIONS} value={sort} onChange={setSort} />
+          <ViewToggle view={view} onChange={setView} />
+        </div>
       </div>
 
-      {sort === "series" ? (
-        <>
-          {/* Series groups */}
-          {author.series.map((s) => (
-            <SeriesGroup key={s.id} series={s} allBooks={author.books} />
-          ))}
-
-          {/* Standalone books */}
-          {standaloneBooks.length > 0 && (
-            <div className="mb-8">
-              <h3 className="text-lg font-semibold text-slate-200 mb-4">Standalone</h3>
-              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-4">
-                {standaloneBooks.map((book) => (
-                  <BookCard key={book.id} book={book} />
-                ))}
-              </div>
-            </div>
-          )}
-        </>
-      ) : (
-        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-4">
-          {sortedBooks.map((book) => (
-            <BookCard key={book.id} book={book} />
-          ))}
-        </div>
-      )}
+      {renderBooks()}
     </div>
   );
 }

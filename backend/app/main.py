@@ -21,6 +21,11 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
+# Attach in-memory log store for the UI
+from backend.app.utils.log_store import log_store  # noqa: E402
+log_store.setFormatter(logging.Formatter("%(message)s"))
+logging.getLogger("booksarr").addHandler(log_store)
+
 logger = logging.getLogger("booksarr.main")
 
 
@@ -45,13 +50,14 @@ app.add_middleware(
 )
 
 # Register routers
-from backend.app.routers import authors, books, series, library, settings  # noqa: E402
+from backend.app.routers import authors, books, series, library, settings, logs  # noqa: E402
 
 app.include_router(authors.router)
 app.include_router(books.router)
 app.include_router(series.router)
 app.include_router(library.router)
 app.include_router(settings.router)
+app.include_router(logs.router)
 
 
 @app.get("/api/health")

@@ -1,8 +1,8 @@
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.config import BOOKS_DIR
@@ -14,6 +14,9 @@ from backend.app.services.matcher import titles_match
 from backend.app.services.image_cache import cache_author_image, cache_book_image, cache_local_cover
 
 logger = logging.getLogger("booksarr.sync")
+
+# Authors synced within this window are skipped on incremental scans
+SYNC_COOLDOWN_HOURS = 168  # 7 days
 
 
 class ScanStatus:
@@ -40,8 +43,8 @@ async def get_api_key(db: AsyncSession) -> str:
     return setting.value if setting else ""
 
 
-async def run_full_sync():
-    """Run a full library sync: scan files, enrich from Hardcover, match, cache images."""
+async def run_full_sync(force: bool = False):
+    """Run a library sync. Incremental by default; force=True refreshes all authors."""
     if scan_status.status == "scanning":
         return
 
@@ -51,11 +54,18 @@ async def run_full_sync():
 
     try:
         async with async_session() as db:
-            # Phase 1: Filesystem scan
+            # Phase 1: Filesystem scan (always runs — fast local IO)
             scan_status.message = "Scanning filesystem..."
             scan_status.progress = 5.0
             stats = await scan_library(db, BOOKS_DIR)
             logger.info("Scan stats: %s", stats)
+            scan_status.progress = 15.0
+
+            # Phase 1b: Clean up deleted files
+            scan_status.message = "Checking for removed files..."
+            removed = await _cleanup_deleted_files(db)
+            if removed:
+                logger.info("Cleaned up %d removed file(s)", removed)
             scan_status.progress = 20.0
 
             # Get API key
@@ -69,14 +79,16 @@ async def run_full_sync():
 
             client = HardcoverClient(api_key)
             try:
-                # Phase 2: Match authors to Hardcover
+                # Phase 2: Match authors to Hardcover (only new authors)
                 scan_status.message = "Matching authors to Hardcover..."
                 result = await db.execute(select(Author))
                 authors = result.scalars().all()
                 total_authors = len(authors)
 
+                new_author_count = 0
                 for i, author in enumerate(authors):
                     if not author.hardcover_id:
+                        new_author_count += 1
                         scan_status.message = f"Looking up author: {author.name}"
                         hc_author = await client.search_author(author.name)
                         if hc_author:
@@ -84,9 +96,7 @@ async def run_full_sync():
                             author.hardcover_slug = hc_author.slug
                             author.bio = hc_author.bio
                             author.image_url = hc_author.image_url
-                            author.last_synced_at = datetime.utcnow()
 
-                            # Cache author image
                             if hc_author.image_url:
                                 cached = await cache_author_image(hc_author.id, hc_author.image_url)
                                 if cached:
@@ -96,24 +106,45 @@ async def run_full_sync():
                     scan_status.progress = progress
 
                 await db.commit()
+                if new_author_count:
+                    logger.info("Matched %d new author(s) to Hardcover", new_author_count)
 
-                # Phase 3: Fetch all books for each author from Hardcover
+                # Phase 3: Fetch books from Hardcover (incremental)
+                cutoff = datetime.utcnow() - timedelta(hours=SYNC_COOLDOWN_HOURS)
                 scan_status.message = "Fetching books from Hardcover..."
+                authors_synced = 0
+                authors_skipped = 0
+
                 for i, author in enumerate(authors):
                     if not author.hardcover_id:
                         continue
 
+                    # Skip recently synced authors unless force
+                    if not force and author.last_synced_at and author.last_synced_at > cutoff:
+                        authors_skipped += 1
+                        progress = 50.0 + (25.0 * (i + 1) / max(total_authors, 1))
+                        scan_status.progress = progress
+                        continue
+
                     scan_status.message = f"Fetching books for: {author.name}"
                     hc_books = await client.get_author_books(author.hardcover_id)
-                    author.book_count_total = len(hc_books)
 
-                    for hc_book in hc_books:
-                        # Check if book already exists
+                    # Filter to canonical books only (skip translations/alternate editions)
+                    canonical_books = [b for b in hc_books if b.is_canonical]
+                    author.book_count_total = len(canonical_books)
+                    authors_synced += 1
+                    if len(hc_books) != len(canonical_books):
+                        logger.info(
+                            "Author %s: %d total, %d canonical (skipped %d non-canonical)",
+                            author.name, len(hc_books), len(canonical_books),
+                            len(hc_books) - len(canonical_books),
+                        )
+
+                    for hc_book in canonical_books:
                         existing = await db.execute(
                             select(Book).where(Book.hardcover_id == hc_book.id)
                         )
                         book = existing.scalar_one_or_none()
-
                         tags_json = json.dumps(hc_book.tags) if hc_book.tags else None
 
                         if book:
@@ -125,6 +156,7 @@ async def run_full_sync():
                             book.rating = hc_book.rating
                             book.pages = hc_book.pages
                             book.hardcover_slug = hc_book.slug
+                            book.language = hc_book.language or book.language
                         else:
                             book = Book(
                                 title=hc_book.title,
@@ -137,15 +169,14 @@ async def run_full_sync():
                                 tags=tags_json,
                                 rating=hc_book.rating,
                                 pages=hc_book.pages,
+                                language=hc_book.language,
                                 is_owned=False,
                             )
                             db.add(book)
                             await db.flush()
 
-                        # Handle series relationships
                         for sr in hc_book.series_refs:
                             series = await _get_or_create_series(db, sr.id, sr.name)
-                            # Check if relationship exists
                             existing_bs = await db.execute(
                                 select(BookSeries).where(
                                     BookSeries.book_id == book.id,
@@ -160,18 +191,23 @@ async def run_full_sync():
                                 )
                                 db.add(bs)
 
+                    author.last_synced_at = datetime.utcnow()
                     progress = 50.0 + (25.0 * (i + 1) / max(total_authors, 1))
                     scan_status.progress = progress
 
                 await db.commit()
+                logger.info(
+                    "Hardcover sync: %d author(s) fetched, %d skipped (recently synced)",
+                    authors_synced, authors_skipped,
+                )
 
                 # Phase 4: Match local files to Hardcover books
                 scan_status.message = "Matching local files to Hardcover books..."
                 result = await db.execute(select(BookFile).where(BookFile.book_id.is_(None)))
                 unmatched_files = result.scalars().all()
 
+                matched_count = 0
                 for bf in unmatched_files:
-                    # Get author for this file
                     author_result = await db.execute(
                         select(Author).where(Author.name == bf.opf_author)
                     )
@@ -179,7 +215,6 @@ async def run_full_sync():
                     if not author:
                         continue
 
-                    # Get all books for this author
                     books_result = await db.execute(
                         select(Book).where(Book.author_id == author.id)
                     )
@@ -206,8 +241,8 @@ async def run_full_sync():
                         matched_book.is_owned = True
                         if bf.opf_isbn and not matched_book.isbn:
                             matched_book.isbn = bf.opf_isbn
+                        matched_count += 1
                     else:
-                        # Create a local-only book record
                         local_book = Book(
                             title=bf.opf_title or bf.file_name,
                             author_id=author.id,
@@ -221,9 +256,11 @@ async def run_full_sync():
                         bf.book_id = local_book.id
 
                 await db.commit()
+                if unmatched_files:
+                    logger.info("Matched %d/%d unmatched file(s)", matched_count, len(unmatched_files))
                 scan_status.progress = 85.0
 
-                # Phase 5: Cache book cover images
+                # Phase 5: Cache book cover images (only uncached)
                 scan_status.message = "Caching book covers..."
                 result = await db.execute(
                     select(Book).where(
@@ -286,6 +323,41 @@ async def run_full_sync():
         scan_status.message = f"Error: {str(e)}"
         scan_status.status = "idle"
         scan_status.progress = 0.0
+
+
+async def _cleanup_deleted_files(db: AsyncSession) -> int:
+    """Remove BookFile records for files no longer on disk and update ownership."""
+    result = await db.execute(select(BookFile))
+    all_files = result.scalars().all()
+    removed = 0
+
+    for bf in all_files:
+        full_path = BOOKS_DIR / bf.file_path
+        if not full_path.exists():
+            book_id = bf.book_id
+            await db.delete(bf)
+            removed += 1
+
+            # If this was the last file for a book, mark it not owned
+            if book_id:
+                remaining = await db.execute(
+                    select(func.count(BookFile.id)).where(
+                        BookFile.book_id == book_id,
+                        BookFile.id != bf.id,
+                    )
+                )
+                if remaining.scalar() == 0:
+                    book_result = await db.execute(select(Book).where(Book.id == book_id))
+                    book = book_result.scalar_one_or_none()
+                    if book:
+                        if book.hardcover_id:
+                            book.is_owned = False
+                        else:
+                            await db.delete(book)
+
+    if removed:
+        await db.commit()
+    return removed
 
 
 async def _get_or_create_series(db: AsyncSession, hardcover_id: int, name: str) -> Series:

@@ -38,6 +38,8 @@ class HCBook:
     image_url: str = ""
     rating: float = 0.0
     pages: int = 0
+    language: str = ""
+    is_canonical: bool = True
     tags: list[str] = field(default_factory=list)
     series_refs: list[HCSeriesRef] = field(default_factory=list)
 
@@ -134,8 +136,10 @@ class HardcoverClient:
             where: {contributions: {author_id: {_eq: $author_id}}}
             order_by: {users_count: desc}
           ) {
-            id title slug description release_date
+            id title slug description release_date canonical_id
             image { url }
+            default_cover_edition { language { code2 } }
+            cached_contributors
             cached_tags rating pages
             book_series {
               position
@@ -177,6 +181,25 @@ class HardcoverClient:
                         position=bs.get("position"),
                     ))
 
+            # Extract language from default cover edition
+            language = ""
+            dce = b.get("default_cover_edition")
+            if dce and isinstance(dce, dict):
+                lang_obj = dce.get("language")
+                if lang_obj and isinstance(lang_obj, dict):
+                    language = lang_obj.get("code2", "")
+
+            # If no edition language, check for translator contributors
+            # Books with translators are almost certainly non-English editions
+            if not language:
+                contributors = b.get("cached_contributors") or []
+                for contrib in contributors:
+                    if isinstance(contrib, dict):
+                        role = (contrib.get("contribution") or "").lower()
+                        if "translat" in role:
+                            language = "translated"
+                            break
+
             books.append(HCBook(
                 id=b["id"],
                 title=b["title"],
@@ -186,6 +209,8 @@ class HardcoverClient:
                 image_url=image_url,
                 rating=b.get("rating", 0) or 0,
                 pages=b.get("pages", 0) or 0,
+                language=language,
+                is_canonical=b.get("canonical_id") is None,
                 tags=tags,
                 series_refs=series_refs,
             ))

@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,3 +51,12 @@ async def update_settings(body: SettingsUpdate, db: AsyncSession = Depends(get_d
         await db.commit()
 
     return {"status": "ok"}
+
+
+@router.get("/build-info")
+async def get_build_info():
+    return {
+        "branch": os.environ.get("BUILD_BRANCH", "dev"),
+        "commit": os.environ.get("BUILD_COMMIT", "local"),
+        "date": os.environ.get("BUILD_DATE", ""),
+    }

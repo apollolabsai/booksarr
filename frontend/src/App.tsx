@@ -4,6 +4,7 @@ import AuthorsPage from "./pages/AuthorsPage";
 import AuthorDetailPage from "./pages/AuthorDetailPage";
 import BooksPage from "./pages/BooksPage";
 import SettingsPage from "./pages/SettingsPage";
+import LogsPage from "./pages/LogsPage";
 
 export default function App() {
   return (
@@ -13,6 +14,7 @@ export default function App() {
         <Route path="/authors/:id" element={<AuthorDetailPage />} />
         <Route path="/books" element={<BooksPage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/logs" element={<LogsPage />} />
       </Route>
     </Routes>
   );

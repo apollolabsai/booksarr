@@ -3,6 +3,8 @@ import { useBooks } from "../api/books";
 import { getImageUrl } from "../types";
 import SortControls from "../components/SortControls";
 import SearchBar from "../components/SearchBar";
+import ViewToggle from "../components/ViewToggle";
+import BookTable from "../components/BookTable";
 import { Link } from "react-router-dom";
 
 const SORT_OPTIONS = [
@@ -23,6 +25,7 @@ export default function BooksPage() {
   const [sort, setSort] = useState("title");
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
+  const [view, setView] = useState<"grid" | "table">("grid");
   const owned = filter === "owned" ? true : filter === "missing" ? false : undefined;
   const { data: books, isLoading } = useBooks(sort, owned, search);
 
@@ -52,6 +55,7 @@ export default function BooksPage() {
             ))}
           </select>
           <SortControls options={SORT_OPTIONS} value={sort} onChange={setSort} />
+          <ViewToggle view={view} onChange={setView} />
         </div>
       </div>
 
@@ -59,6 +63,8 @@ export default function BooksPage() {
         <div className="text-center py-16">
           <p className="text-slate-400 text-lg">No books found</p>
         </div>
+      ) : view === "table" ? (
+        <BookTable books={books} showAuthor={true} />
       ) : (
         <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-4">
           {books.map((book) => {

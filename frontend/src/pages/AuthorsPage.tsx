@@ -1,8 +1,10 @@
 import { useState, useCallback } from "react";
 import { useAuthors } from "../api/authors";
 import AuthorCard from "../components/AuthorCard";
+import AuthorTable from "../components/AuthorTable";
 import SortControls from "../components/SortControls";
 import SearchBar from "../components/SearchBar";
+import ViewToggle from "../components/ViewToggle";
 
 const SORT_OPTIONS = [
   { value: "name", label: "Name A-Z" },
@@ -14,6 +16,7 @@ const SORT_OPTIONS = [
 export default function AuthorsPage() {
   const [sort, setSort] = useState("name");
   const [search, setSearch] = useState("");
+  const [view, setView] = useState<"grid" | "table">("grid");
   const { data: authors, isLoading } = useAuthors(sort, search);
 
   const handleSearch = useCallback((v: string) => setSearch(v), []);
@@ -33,6 +36,7 @@ export default function AuthorsPage() {
         <div className="flex items-center gap-3">
           <SearchBar value={search} onChange={handleSearch} placeholder="Search authors..." />
           <SortControls options={SORT_OPTIONS} value={sort} onChange={setSort} />
+          <ViewToggle view={view} onChange={setView} />
         </div>
       </div>
 
@@ -46,6 +50,8 @@ export default function AuthorsPage() {
             Go to <a href="/settings" className="text-emerald-400 hover:underline">Settings</a> to configure your API key and scan your library.
           </p>
         </div>
+      ) : view === "table" ? (
+        <AuthorTable authors={authors} />
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
           {authors.map((author) => (

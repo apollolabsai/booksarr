@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchApi } from "./client";
-import type { Settings, ScanStatus } from "../types";
+import type { Settings, ScanStatus, BuildInfo } from "../types";
 
 export function useSettings() {
   return useQuery({
@@ -29,9 +29,18 @@ export function useScanStatus(enabled: boolean) {
 export function useTriggerScan() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: () => fetchApi("/library/scan", { method: "POST" }),
+    mutationFn: (force?: boolean) =>
+      fetchApi(`/library/scan${force ? "?force=true" : ""}`, { method: "POST" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["scanStatus"] });
     },
+  });
+}
+
+export function useBuildInfo() {
+  return useQuery({
+    queryKey: ["buildInfo"],
+    queryFn: () => fetchApi<BuildInfo>("/settings/build-info"),
+    staleTime: Infinity,
   });
 }

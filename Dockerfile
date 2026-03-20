@@ -22,10 +22,17 @@ COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 
 RUN mkdir -p /config/cache/authors /config/cache/books
 
+ARG BUILD_BRANCH=unknown
+ARG BUILD_COMMIT=unknown
+ARG BUILD_DATE=unknown
+
 ENV PYTHONPATH=/app
 ENV CONFIG_DIR=/config
 ENV BOOKS_DIR=/books
 ENV PORT=8889
+ENV BUILD_BRANCH=$BUILD_BRANCH
+ENV BUILD_COMMIT=$BUILD_COMMIT
+ENV BUILD_DATE=$BUILD_DATE
 
 EXPOSE 8889
 

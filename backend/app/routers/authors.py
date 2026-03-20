@@ -1,5 +1,7 @@
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -11,6 +13,21 @@ from backend.app.schemas.author import (
 )
 
 router = APIRouter(prefix="/api/authors", tags=["authors"])
+
+
+def _is_visible(book: Book) -> bool:
+    """Check if a book should be visible (not unreleased, not non-English, unless owned)."""
+    if book.is_owned:
+        return True
+    today = date.today().isoformat()
+    # Hide future releases
+    if book.release_date and book.release_date > today:
+        return False
+    # Hide non-English
+    lang = (book.language or "").lower()
+    if lang and not lang.startswith("en"):
+        return False
+    return True
 
 
 @router.get("", response_model=list[AuthorSummary])
@@ -53,7 +70,10 @@ async def get_author(author_id: int, db: AsyncSession = Depends(get_db)):
         .where(Book.author_id == author_id)
         .options(selectinload(Book.book_series).selectinload(BookSeries.series))
     )
-    books = books_result.scalars().all()
+    all_books = books_result.scalars().all()
+
+    # Filter to visible books only
+    books = [b for b in all_books if _is_visible(b)]
 
     # Build series map
     series_map: dict[int, dict] = {}
@@ -114,7 +134,7 @@ async def get_author(author_id: int, db: AsyncSession = Depends(get_db)):
         image_url=author.image_url,
         image_cached_path=author.image_cached_path,
         book_count_local=author.book_count_local,
-        book_count_total=author.book_count_total,
+        book_count_total=len(books),
         books=books_out,
         series=series_out,
     )

@@ -1,5 +1,7 @@
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import select, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -8,6 +10,34 @@ from backend.app.models import Author, Book, BookSeries
 from backend.app.schemas.book import BookSummary, BookDetail, SeriesPositionInfo
 
 router = APIRouter(prefix="/api/books", tags=["books"])
+
+# Allowed language prefixes — books with other languages are hidden unless owned
+ALLOWED_LANGUAGES = {"en", "english"}
+
+
+def _apply_visibility_filters(query):
+    """Exclude unreleased and non-English books unless they are owned."""
+    today = date.today().isoformat()
+    # Exclude future-release books that aren't owned
+    query = query.where(
+        or_(
+            Book.is_owned == True,
+            Book.release_date.is_(None),
+            Book.release_date == "",
+            Book.release_date <= today,
+        )
+    )
+    # Exclude non-English books that aren't owned
+    query = query.where(
+        or_(
+            Book.is_owned == True,
+            Book.language.is_(None),
+            Book.language == "",
+            Book.language.ilike("en%"),
+            Book.language.ilike("english%"),
+        )
+    )
+    return query
 
 
 @router.get("", response_model=list[BookSummary])
@@ -18,7 +48,11 @@ async def list_books(
     search: str = Query("", max_length=200),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(Book).options(selectinload(Book.author))
+    query = select(Book).options(
+        selectinload(Book.author),
+        selectinload(Book.book_series).selectinload(BookSeries.series),
+    )
+    query = _apply_visibility_filters(query)
 
     if search:
         query = query.where(Book.title.ilike(f"%{search}%"))
@@ -58,6 +92,14 @@ async def list_books(
             rating=b.rating,
             pages=b.pages,
             is_owned=b.is_owned,
+            series_info=[
+                SeriesPositionInfo(
+                    series_id=bs.series.id,
+                    series_name=bs.series.name,
+                    position=bs.position,
+                )
+                for bs in b.book_series
+            ],
         )
         for b in books
     ]

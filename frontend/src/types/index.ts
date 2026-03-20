@@ -66,6 +66,7 @@ export interface Book {
   rating: number | null;
   pages: number | null;
   is_owned: boolean;
+  series_info: SeriesPositionInfo[];
 }
 
 export interface ScanStatus {
@@ -78,6 +79,24 @@ export interface Settings {
   hardcover_api_key: string;
   library_path: string;
   last_scan_at: string | null;
+}
+
+export interface BuildInfo {
+  branch: string;
+  commit: string;
+  date: string;
+}
+
+export interface LogEntry {
+  timestamp: string;
+  level: string;
+  category: string;
+  message: string;
+}
+
+export interface LogsResponse {
+  entries: LogEntry[];
+  categories: string[];
 }
 
 export function getImageUrl(cachedPath: string | null, fallbackUrl: string | null): string {

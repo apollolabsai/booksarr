@@ -1,6 +1,12 @@
 from pydantic import BaseModel
 
 
+class SeriesPositionInfo(BaseModel):
+    series_id: int
+    series_name: str
+    position: float | None
+
+
 class BookSummary(BaseModel):
     id: int
     title: str
@@ -15,6 +21,7 @@ class BookSummary(BaseModel):
     rating: float | None
     pages: int | None
     is_owned: bool
+    series_info: list[SeriesPositionInfo]
 
     class Config:
         from_attributes = True
@@ -25,16 +32,6 @@ class BookDetail(BookSummary):
     publisher: str | None
     language: str | None
     tags: str | None
-    series_info: list["SeriesPositionInfo"]
 
     class Config:
         from_attributes = True
-
-
-class SeriesPositionInfo(BaseModel):
-    series_id: int
-    series_name: str
-    position: float | None
-
-
-BookDetail.model_rebuild()
