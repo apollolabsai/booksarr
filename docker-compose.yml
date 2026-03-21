@@ -7,6 +7,7 @@ services:
       - PGID=1000
       - TZ=America/Los_Angeles
       - HARDCOVER_API_KEY=
+      - GOOGLE_BOOKS_API_KEY=    # Optional but recommended: for accurate publish dates (free)
     volumes:
       - ./config:/config
       - /Users/jsg/Local Projects/sample_ebook:/books:ro

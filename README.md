@@ -30,6 +30,7 @@ services:
       - PGID=1000
       - TZ=America/Los_Angeles
       - HARDCOVER_API_KEY=         # Optional: or set via Settings UI
+      - GOOGLE_BOOKS_API_KEY=      # Optional but recommended: for accurate publish dates (free)
     volumes:
       - ./config:/config           # Database, settings, image cache
       - /path/to/your/ebooks:/books:ro
@@ -65,8 +66,9 @@ Booksarr expects your ebooks organized by author:
 
 1. Navigate to **Settings**
 2. Enter your [Hardcover API key](https://hardcover.app/account/api)
-3. Click **Scan Library**
-4. Browse your collection on the **Authors** and **Books** pages
+3. *(Optional but recommended)* Enter a [Google Books API key](https://console.cloud.google.com/apis/library/books.googleapis.com) for more accurate publish dates — free, 1,000 requests/day
+4. Click **Scan Library**
+5. Browse your collection on the **Authors** and **Books** pages
 
 ## Configuration
 
@@ -76,6 +78,7 @@ Booksarr expects your ebooks organized by author:
 | `PGID` | `1000` | Group ID for file permissions |
 | `TZ` | `UTC` | Timezone |
 | `HARDCOVER_API_KEY` | | Hardcover API key (overrides UI setting) |
+| `GOOGLE_BOOKS_API_KEY` | | Optional. Google Books API key for accurate publish dates (overrides UI setting) |
 | `CONFIG_DIR` | `/config` | Config/database directory |
 | `BOOKS_DIR` | `/books` | Ebook library mount point |
 | `PORT` | `8889` | Web UI port |

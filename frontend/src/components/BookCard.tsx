@@ -56,9 +56,6 @@ export default function BookCard({
             </svg>
           </div>
         )}
-        {!book.is_owned && (
-          <div className="absolute inset-0 border-2 border-dashed border-slate-500 rounded-lg" />
-        )}
       </div>
       <div className="mt-2">
         <p className="text-sm font-medium text-slate-200 truncate group-hover:text-emerald-400 transition-colors">

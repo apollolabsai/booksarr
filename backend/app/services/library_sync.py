@@ -1,5 +1,8 @@
+import asyncio
 import json
 import logging
+import re
+import unicodedata
 from datetime import datetime
 
 from sqlalchemy import select, func
@@ -11,15 +14,24 @@ from backend.app.models import Author, Book, BookFile, BookSeries, Series, Setti
 from backend.app.services.scanner import scan_library, ScanResult
 from backend.app.services.hardcover import HardcoverClient
 from backend.app.services.matcher import titles_match
-from backend.app.services.image_cache import cache_author_image, cache_book_image, cache_local_cover
-
-import re
-import unicodedata
+from backend.app.services.image_cache import (
+    cache_author_image,
+    cache_best_local_cover,
+    download_image_bytes,
+    cache_cover_data,
+    get_cached_cover_height,
+)
+from backend.app.services.openlibrary import OpenLibraryClient
+from backend.app.services.google_books import GoogleBooksClient
+from backend.app.utils.epub_cover import get_image_dimensions
 
 logger = logging.getLogger("booksarr.sync")
 
 # Articles to strip when comparing titles for deduplication
 _ARTICLE_RE = re.compile(r"^(a|an|the)\s+", re.IGNORECASE)
+
+# Cover height threshold — stop looking for better covers once met
+COVER_HEIGHT_THRESHOLD = 2000
 
 
 def _is_valid_title(title: str) -> bool:
@@ -73,10 +85,12 @@ def _metadata_score(book) -> tuple:
 
 
 def _deduplicate_books(books: list) -> list:
-    """Deduplicate books using two strategies:
+    """Deduplicate books using three strategies:
     1. Normalized title match (catches 'A Time for Mercy' vs 'Time for Mercy')
     2. Same series + same position (catches 'The Exchange' vs 'The Exchange After the Firm')
-    In both cases, the book with the best metadata (users_count, rating, etc.) wins.
+    3. Title prefix — one title starts with another (catches 'Camino Ghosts' vs
+       'Camino Ghosts The New Thrilling Novel from...')
+    In all cases, the book with the best metadata (users_count, rating, etc.) wins.
     """
     total_removed = 0
 
@@ -100,7 +114,6 @@ def _deduplicate_books(books: list) -> list:
             )
 
     # Pass 2: Deduplicate by series + position
-    # Books sharing the same series and position are almost certainly duplicates
     series_groups: dict[tuple, list] = {}
     no_series = []
     for book in after_title_dedup:
@@ -116,16 +129,16 @@ def _deduplicate_books(books: list) -> list:
             no_series.append(book)
 
     seen_ids = set()
-    result = list(no_series)
+    after_series_dedup = list(no_series)
     for key, group in series_groups.items():
         if len(group) == 1:
             if group[0].id not in seen_ids:
-                result.append(group[0])
+                after_series_dedup.append(group[0])
                 seen_ids.add(group[0].id)
         else:
             group.sort(key=_metadata_score, reverse=True)
             if group[0].id not in seen_ids:
-                result.append(group[0])
+                after_series_dedup.append(group[0])
                 seen_ids.add(group[0].id)
             total_removed += len(group) - 1
             logger.debug(
@@ -134,10 +147,122 @@ def _deduplicate_books(books: list) -> list:
                 len(group) - 1, key[0], key[1],
             )
 
+    # Pass 3: Title prefix — if one normalized title starts with another, they're dupes
+    after_series_dedup.sort(key=lambda b: len(_normalize_title(b.title)))
+    result = []
+    for book in after_series_dedup:
+        norm = _normalize_title(book.title)
+        is_dup = False
+        for kept in result:
+            kept_norm = _normalize_title(kept.title)
+            # Check if the shorter title is a prefix of the longer one
+            if norm.startswith(kept_norm) or kept_norm.startswith(norm):
+                # Keep the one with better metadata
+                if _metadata_score(book) > _metadata_score(kept):
+                    result.remove(kept)
+                    result.append(book)
+                    logger.debug(
+                        "Dedup (prefix): replaced '%s' with '%s' (better metadata)",
+                        kept.title, book.title,
+                    )
+                else:
+                    logger.debug(
+                        "Dedup (prefix): kept '%s', dropped '%s'",
+                        kept.title, book.title,
+                    )
+                is_dup = True
+                total_removed += 1
+                break
+        if not is_dup:
+            result.append(book)
+
     if total_removed:
         logger.info("Deduplicated %d book(s) total", total_removed)
     return result
 
+
+def _extract_year(date_str: str | None) -> int | None:
+    """Extract year from a date string like '2024-01-15' or '2024'."""
+    if not date_str or len(date_str) < 4:
+        return None
+    try:
+        return int(date_str[:4])
+    except ValueError:
+        return None
+
+
+def _reconcile_year_3way(
+    hc_date: str | None,
+    google_year: int | None,
+    ol_year: int | None,
+) -> str | None:
+    """Reconcile publish year across up to 3 sources.
+
+    Strategy:
+    - HC date is preferred (may have full YYYY-MM-DD format)
+    - If HC and Google agree (within 1 year), keep HC date
+    - If HC and Google disagree, use OL as tiebreaker
+    - If all three differ, use the latest year
+    """
+    hc_year = _extract_year(hc_date)
+
+    sources = {}
+    if hc_year:
+        sources["HC"] = hc_year
+    if google_year:
+        sources["Google"] = google_year
+    if ol_year:
+        sources["OL"] = ol_year
+
+    if not sources:
+        return hc_date  # No data from any source
+
+    if len(sources) == 1:
+        if hc_year:
+            return hc_date  # Preserve full HC date format
+        return f"{list(sources.values())[0]}-01-01"
+
+    # Multiple sources — check for agreement
+    if hc_year and google_year:
+        if abs(hc_year - google_year) <= 1:
+            return hc_date  # HC and Google agree — keep HC
+
+        # HC and Google disagree
+        if ol_year:
+            if abs(ol_year - hc_year) <= 1:
+                return hc_date  # OL agrees with HC
+            if abs(ol_year - google_year) <= 1:
+                return f"{google_year}-01-01"  # OL agrees with Google
+            # All three differ — use latest
+            best = max(hc_year, google_year, ol_year)
+            source = [k for k, v in sources.items() if v == best][0]
+            logger.debug(
+                "Year 3-way: HC=%s Google=%s OL=%s -> %d (%s)",
+                hc_year, google_year, ol_year, best, source,
+            )
+            return hc_date if best == hc_year else f"{best}-01-01"
+
+        # No OL data — use later year (common error is too-early dates)
+        best = max(hc_year, google_year)
+        return hc_date if best == hc_year else f"{google_year}-01-01"
+
+    # HC + OL only (no Google key)
+    if hc_year and ol_year:
+        if abs(hc_year - ol_year) <= 1:
+            return hc_date
+        best = max(hc_year, ol_year)
+        source = "HC" if best == hc_year else "OL"
+        logger.debug("Year reconcile: HC=%s OL=%s -> %d (%s)", hc_year, ol_year, best, source)
+        return hc_date if best == hc_year else f"{ol_year}-01-01"
+
+    # Google + OL only (no HC date) — unlikely but handle it
+    if google_year and ol_year:
+        if abs(google_year - ol_year) <= 1:
+            return f"{google_year}-01-01"
+        best = max(google_year, ol_year)
+        return f"{best}-01-01"
+
+    return hc_date
 
 
 class ScanStatus:
@@ -154,12 +279,23 @@ scan_status = ScanStatus()
 
 
 async def get_api_key(db: AsyncSession) -> str:
-    """Get API key from env var (via config) or database settings."""
+    """Get Hardcover API key from env var (via config) or database settings."""
     from backend.app.config import HARDCOVER_API_KEY
     if HARDCOVER_API_KEY:
         return HARDCOVER_API_KEY
 
     result = await db.execute(select(Setting).where(Setting.key == "hardcover_api_key"))
+    setting = result.scalar_one_or_none()
+    return setting.value if setting else ""
+
+
+async def get_google_api_key(db: AsyncSession) -> str:
+    """Get Google Books API key from env var or database settings."""
+    from backend.app.config import GOOGLE_BOOKS_API_KEY
+    if GOOGLE_BOOKS_API_KEY:
+        return GOOGLE_BOOKS_API_KEY
+
+    result = await db.execute(select(Setting).where(Setting.key == "google_books_api_key"))
     setting = result.scalar_one_or_none()
     return setting.value if setting else ""
 
@@ -411,44 +547,336 @@ async def run_full_sync(force: bool = False):
                 await db.commit()
                 if unmatched_files:
                     logger.info("Matched %d/%d unmatched file(s)", matched_count, len(unmatched_files))
-                scan_status.progress = 85.0
+                scan_status.progress = 80.0
 
-                # Phase 5: Cache book cover images (only uncached)
-                scan_status.message = "Caching book covers..."
-                result = await db.execute(
-                    select(Book).where(
-                        Book.cover_image_url.isnot(None),
-                        Book.cover_image_cached_path.is_(None),
-                        Book.hardcover_id.isnot(None),
+                # Phase 5: Year reconciliation
+                # Source priority: Hardcover → Google Books → Open Library
+                # Google is secondary (if API key available), OL is tiebreaker only
+                scan_status.message = "Reconciling publish dates..."
+                google_api_key = await get_google_api_key(db)
+                synced_author_ids = [a.id for a in authors if a.hardcover_id]
+                google_data = {}  # book_id -> GBook (reused for cover URLs in Phase 6)
+                ol_data = {}      # book_id -> OLBook
+
+                if synced_author_ids:
+                    books_result = await db.execute(
+                        select(Book).where(
+                            Book.author_id.in_(synced_author_ids),
+                            Book.hardcover_id.isnot(None),
+                        )
                     )
-                )
-                books_needing_covers = result.scalars().all()
-                total_covers = len(books_needing_covers)
+                    all_hc_books = books_result.scalars().all()
+                    author_map = {a.id: a.name for a in authors}
 
-                for i, book in enumerate(books_needing_covers):
-                    cached = await cache_book_image(book.hardcover_id, book.cover_image_url)
+                    # 5a: Fetch Google data concurrently (if API key available)
+                    if google_api_key:
+                        scan_status.message = "Fetching dates from Google Books..."
+                        google_client = GoogleBooksClient(google_api_key)
+                        try:
+                            sem = asyncio.Semaphore(5)
+
+                            async def _fetch_google(book):
+                                async with sem:
+                                    try:
+                                        if book.isbn:
+                                            result = await google_client.search_by_isbn(book.isbn)
+                                            if result:
+                                                return result
+                                        author_name = author_map.get(book.author_id, "")
+                                        return await google_client.search_by_title_author(
+                                            book.title, author_name
+                                        )
+                                    except Exception as e:
+                                        logger.warning(
+                                            "Google Books lookup failed for '%s': %s",
+                                            book.title[:50], e,
+                                        )
+                                        return None
+
+                            results = await asyncio.gather(
+                                *[_fetch_google(b) for b in all_hc_books]
+                            )
+                            for book, gbook in zip(all_hc_books, results):
+                                if gbook:
+                                    google_data[book.id] = gbook
+                            logger.info(
+                                "Google Books: fetched data for %d/%d books",
+                                len(google_data), len(all_hc_books),
+                            )
+                        finally:
+                            await google_client.close()
+
+                    # 5b: Identify books needing OL tiebreaker
+                    books_needing_ol = []
+                    if google_api_key:
+                        # With Google: only fetch OL for HC/Google year disagreements
+                        for book in all_hc_books:
+                            hc_year = _extract_year(book.release_date)
+                            gbook = google_data.get(book.id)
+                            g_year = gbook.publish_year if gbook else None
+                            if hc_year and g_year and abs(hc_year - g_year) > 1:
+                                books_needing_ol.append(book)
+                        if books_needing_ol:
+                            logger.info(
+                                "Year disagreements: %d book(s) need OL tiebreaker",
+                                len(books_needing_ol),
+                            )
+                    else:
+                        # No Google key: fall back to HC vs OL for all books
+                        books_needing_ol = list(all_hc_books)
+
+                    if books_needing_ol:
+                        scan_status.message = (
+                            f"Verifying {len(books_needing_ol)} date(s) with Open Library..."
+                        )
+                        ol_client = OpenLibraryClient()
+                        try:
+                            sem = asyncio.Semaphore(10)
+
+                            async def _fetch_ol_year(book):
+                                async with sem:
+                                    try:
+                                        if book.isbn:
+                                            result = await ol_client.search_book_by_isbn(book.isbn)
+                                            if result:
+                                                return result
+                                        author_name = author_map.get(book.author_id, "")
+                                        return await ol_client.search_book(book.title, author_name)
+                                    except Exception as e:
+                                        logger.warning(
+                                            "Open Library lookup failed for '%s': %s",
+                                            book.title[:50], e,
+                                        )
+                                        return None
+
+                            results = await asyncio.gather(
+                                *[_fetch_ol_year(b) for b in books_needing_ol]
+                            )
+                            for book, ol_book in zip(books_needing_ol, results):
+                                if ol_book:
+                                    ol_data[book.id] = ol_book
+                        finally:
+                            await ol_client.close()
+
+                    # 5c: Apply reconciled dates
+                    reconciled = 0
+                    for book in all_hc_books:
+                        gbook = google_data.get(book.id)
+                        g_year = gbook.publish_year if gbook else None
+                        ol_book = ol_data.get(book.id)
+                        ol_year = ol_book.first_publish_year if ol_book else None
+
+                        new_date = _reconcile_year_3way(book.release_date, g_year, ol_year)
+                        if new_date and new_date != book.release_date:
+                            logger.info(
+                                "Date fix: '%s' %s -> %s (Google: %s, OL: %s)",
+                                book.title, book.release_date, new_date, g_year, ol_year,
+                            )
+                            book.release_date = new_date
+                            reconciled += 1
+
+                    await db.commit()
+                    if reconciled:
+                        logger.info("Reconciled %d publish date(s)", reconciled)
+
+                scan_status.progress = 87.0
+
+                # Phase 6: Cover pipeline
+                # Source priority: local → Hardcover → Google → Open Library
+                # Stop per-book once cover height >= 2000px
+                scan_status.message = "Processing book covers..."
+
+                result = await db.execute(select(Book))
+                all_books = result.scalars().all()
+
+                # Track cover heights in memory to avoid re-reading cached files
+                cover_heights = {}
+                for book in all_books:
+                    cover_heights[book.id] = get_cached_cover_height(
+                        book.cover_image_cached_path
+                    )
+
+                # 6a: Local covers (cover.jpg + EPUB embedded) for owned books
+                scan_status.message = "Checking local covers..."
+                local_cached = 0
+                for book in all_books:
+                    if not book.is_owned:
+                        continue
+                    if cover_heights.get(book.id, 0) >= COVER_HEIGHT_THRESHOLD:
+                        continue
+                    if not book.files:
+                        continue
+                    bf = book.files[0]
+                    local_cover = bf.local_cover_path
+                    epub_path = (
+                        BOOKS_DIR / bf.file_path if bf.file_format == "epub" else None
+                    )
+                    cached = cache_best_local_cover(
+                        local_cover, epub_path, book.id,
+                        existing_cached_path=book.cover_image_cached_path,
+                    )
                     if cached:
                         book.cover_image_cached_path = cached
-                    if (i + 1) % 50 == 0:
-                        await db.commit()
-                        scan_status.progress = 85.0 + (10.0 * (i + 1) / max(total_covers, 1))
+                        cover_heights[book.id] = get_cached_cover_height(cached)
+                        local_cached += 1
+                if local_cached:
+                    logger.info("Cached/upgraded %d local cover(s)", local_cached)
+                await db.commit()
 
-                # Cache local covers for unmatched books
-                result = await db.execute(
-                    select(Book).where(
-                        Book.hardcover_id.is_(None),
-                        Book.cover_image_cached_path.is_(None),
+                # 6b: Hardcover covers — concurrent download for books under threshold
+                # Skip books that already have an HC or cover_* cached file
+                scan_status.message = "Downloading covers from Hardcover..."
+                books_for_hc = [
+                    b for b in all_books
+                    if cover_heights.get(b.id, 0) < COVER_HEIGHT_THRESHOLD
+                    and b.cover_image_url
+                    and not (b.cover_image_cached_path or "").startswith("cache/books/hc_")
+                    and not (b.cover_image_cached_path or "").startswith("cache/books/cover_")
+                ]
+                hc_covers = 0
+                if books_for_hc:
+                    sem = asyncio.Semaphore(20)
+
+                    async def _dl_hc(book):
+                        async with sem:
+                            return await download_image_bytes(book.cover_image_url)
+
+                    hc_results = await asyncio.gather(
+                        *[_dl_hc(b) for b in books_for_hc]
                     )
-                )
-                local_books = result.scalars().all()
-                for book in local_books:
-                    if book.files:
-                        for bf in book.files:
-                            if bf.local_cover_path:
-                                cached = cache_local_cover(bf.local_cover_path, book.id)
-                                if cached:
-                                    book.cover_image_cached_path = cached
-                                break
+                    for book, data in zip(books_for_hc, hc_results):
+                        if not data:
+                            continue
+                        dims = get_image_dimensions(data)
+                        new_height = dims[1] if dims else 0
+                        if new_height > cover_heights.get(book.id, 0):
+                            path = cache_cover_data(data, book.id, "hardcover")
+                            if path:
+                                book.cover_image_cached_path = path
+                                cover_heights[book.id] = new_height
+                                hc_covers += 1
+                    await db.commit()
+                if hc_covers:
+                    logger.info("Cached %d cover(s) from Hardcover", hc_covers)
+                scan_status.progress = 90.0
+
+                # 6c: Google covers — for books still under threshold
+                if google_data:
+                    scan_status.message = "Downloading covers from Google Books..."
+                    books_for_google = [
+                        b for b in all_books
+                        if cover_heights.get(b.id, 0) < COVER_HEIGHT_THRESHOLD
+                        and google_data.get(b.id)
+                        and google_data[b.id].cover_url
+                    ]
+                    google_covers = 0
+                    if books_for_google:
+                        sem = asyncio.Semaphore(20)
+
+                        async def _dl_google(book):
+                            async with sem:
+                                return await download_image_bytes(
+                                    google_data[book.id].cover_url
+                                )
+
+                        g_results = await asyncio.gather(
+                            *[_dl_google(b) for b in books_for_google]
+                        )
+                        for book, data in zip(books_for_google, g_results):
+                            if not data:
+                                continue
+                            dims = get_image_dimensions(data)
+                            new_height = dims[1] if dims else 0
+                            if new_height > cover_heights.get(book.id, 0):
+                                path = cache_cover_data(data, book.id, "google")
+                                if path:
+                                    book.cover_image_cached_path = path
+                                    cover_heights[book.id] = new_height
+                                    google_covers += 1
+                        await db.commit()
+                    if google_covers:
+                        logger.info("Cached %d cover(s) from Google Books", google_covers)
+                scan_status.progress = 93.0
+
+                # 6d: Open Library covers — last resort for books with NO cover
+                books_no_cover = [
+                    b for b in all_books
+                    if not b.cover_image_cached_path and b.hardcover_id
+                ]
+                if books_no_cover:
+                    scan_status.message = "Fetching missing covers from Open Library..."
+                    ol_covers = 0
+
+                    # Search OL for books not already in ol_data (from Phase 5)
+                    books_need_ol_search = [
+                        b for b in books_no_cover if b.id not in ol_data
+                    ]
+                    if books_need_ol_search:
+                        ol_cover_map = {a.id: a.name for a in authors}
+                        ol_client2 = OpenLibraryClient()
+                        try:
+                            sem = asyncio.Semaphore(10)
+
+                            async def _fetch_ol_cover(book):
+                                async with sem:
+                                    try:
+                                        if book.isbn:
+                                            result = await ol_client2.search_book_by_isbn(
+                                                book.isbn
+                                            )
+                                            if result:
+                                                return result
+                                        author_name = ol_cover_map.get(book.author_id, "")
+                                        return await ol_client2.search_book(
+                                            book.title, author_name
+                                        )
+                                    except Exception as e:
+                                        logger.warning(
+                                            "OL cover lookup failed for '%s': %s",
+                                            book.title[:50], e,
+                                        )
+                                        return None
+
+                            results = await asyncio.gather(
+                                *[_fetch_ol_cover(b) for b in books_need_ol_search]
+                            )
+                            for book, ol_book in zip(books_need_ol_search, results):
+                                if ol_book:
+                                    ol_data[book.id] = ol_book
+                        finally:
+                            await ol_client2.close()
+
+                    # Download OL covers concurrently
+                    ol_download_books = []
+                    ol_download_urls = []
+                    for book in books_no_cover:
+                        ol_book = ol_data.get(book.id)
+                        if ol_book and ol_book.cover_id:
+                            ol_download_books.append(book)
+                            ol_download_urls.append(ol_book.cover_url_large)
+
+                    if ol_download_urls:
+                        sem = asyncio.Semaphore(10)
+
+                        async def _dl_ol(url):
+                            async with sem:
+                                return await download_image_bytes(url)
+
+                        ol_dl_results = await asyncio.gather(
+                            *[_dl_ol(u) for u in ol_download_urls]
+                        )
+                        for book, data in zip(ol_download_books, ol_dl_results):
+                            if data:
+                                path = cache_cover_data(data, book.id, "openlibrary")
+                                if path:
+                                    book.cover_image_cached_path = path
+                                    ol_covers += 1
+
+                    await db.commit()
+                    if ol_covers:
+                        logger.info("Cached %d cover(s) from Open Library", ol_covers)
+
+                scan_status.progress = 96.0
 
                 # Update author local book counts
                 for author in authors:

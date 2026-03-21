@@ -12,7 +12,7 @@ export function useSettings() {
 export function useUpdateSettings() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (body: { hardcover_api_key?: string; scan_interval_hours?: number }) =>
+    mutationFn: (body: { hardcover_api_key?: string; google_books_api_key?: string; scan_interval_hours?: number }) =>
       fetchApi("/settings", { method: "PUT", body: JSON.stringify(body) }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
   });
@@ -33,6 +33,16 @@ export function useTriggerScan() {
       fetchApi(`/library/scan${force ? "?force=true" : ""}`, { method: "POST" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["scanStatus"] });
+    },
+  });
+}
+
+export function useResetData() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => fetchApi("/settings/reset", { method: "POST" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries();
     },
   });
 }

@@ -34,9 +34,8 @@ export default function BookTable({
             <th className="px-4 py-3">Title</th>
             {showAuthor && <th className="px-4 py-3">Author</th>}
             <th className="px-4 py-3">Series</th>
-            <th className="px-4 py-3 text-right">Released</th>
+            <th className="px-4 py-3 text-right">Year</th>
             <th className="px-4 py-3 text-right">Rating</th>
-            <th className="px-4 py-3 text-right">Pages</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-700">
@@ -114,12 +113,11 @@ export default function BookTable({
                   {seriesStr || "-"}
                 </td>
                 <td className="px-4 py-2 text-right text-slate-400 whitespace-nowrap">
-                  {book.release_date || "-"}
+                  {book.release_date ? book.release_date.substring(0, 4) : "-"}
                 </td>
                 <td className="px-4 py-2 text-right text-slate-400">
                   {book.rating ? book.rating.toFixed(1) : "-"}
                 </td>
-                <td className="px-4 py-2 text-right text-slate-400">{book.pages || "-"}</td>
               </tr>
             );
           })}

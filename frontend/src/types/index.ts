@@ -77,6 +77,9 @@ export interface ScanStatus {
 
 export interface Settings {
   hardcover_api_key: string;
+  hardcover_api_key_from_env: boolean;
+  google_books_api_key: string;
+  google_books_api_key_from_env: boolean;
   library_path: string;
   last_scan_at: string | null;
   scan_interval_hours: number;
