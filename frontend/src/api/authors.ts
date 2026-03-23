@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { fetchApi } from "./client";
 import type { Author, AuthorDetail } from "../types";
 
@@ -10,6 +10,7 @@ export function useAuthors(sort: string = "name", search: string = "") {
       if (search) params.set("search", search);
       return fetchApi<Author[]>(`/authors?${params}`);
     },
+    placeholderData: keepPreviousData,
   });
 }
 

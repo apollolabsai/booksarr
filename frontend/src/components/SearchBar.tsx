@@ -12,6 +12,10 @@ export default function SearchBar({
   const [local, setLocal] = useState(value);
 
   useEffect(() => {
+    setLocal(value);
+  }, [value]);
+
+  useEffect(() => {
     const timer = setTimeout(() => onChange(local), 300);
     return () => clearTimeout(timer);
   }, [local, onChange]);
