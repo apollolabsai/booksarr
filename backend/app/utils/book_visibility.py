@@ -22,6 +22,20 @@ VISIBILITY_CATEGORY_DEFAULTS = {
     "likely_excerpts": False,
 }
 
+VISIBILITY_CATEGORY_LABELS = {
+    "standard_books": "Standard Books",
+    "short_fiction": "Short Fiction",
+    "collections_and_compilations": "Collections & Compilations",
+    "likely_collections_by_title": "Likely Collections by Title Heuristic",
+    "graphic_and_alternate_formats": "Graphic & Alternate Formats",
+    "research_non_book_material": "Research / Non-Book Material",
+    "fan_fiction": "Fan Fiction",
+    "non_english_books": "Non-English Books",
+    "upcoming_unreleased": "Upcoming / Unreleased",
+    "pending_hardcover_records": "Pending Hardcover Records",
+    "likely_excerpts": "Likely Excerpts / Samples",
+}
+
 _COLLECTION_KEYWORD_RE = re.compile(
     r"\b("
     r"collection|value collection|boxed set|box set|omnibus|complete\b|"
@@ -123,3 +137,26 @@ def is_book_visible(book: Book, visibility_settings: dict[str, bool], today: str
         return False
 
     return visibility_settings.get(get_primary_visibility_category(book), True)
+
+
+def get_hidden_category(book: Book, visibility_settings: dict[str, bool], today: str | None = None) -> tuple[str, str] | None:
+    if book.is_owned:
+        return None
+
+    if is_non_english(book) and not visibility_settings["non_english_books"]:
+        key = "non_english_books"
+        return key, VISIBILITY_CATEGORY_LABELS[key]
+    if is_upcoming(book, today=today) and not visibility_settings["upcoming_unreleased"]:
+        key = "upcoming_unreleased"
+        return key, VISIBILITY_CATEGORY_LABELS[key]
+    if is_likely_excerpt(book) and not visibility_settings["likely_excerpts"]:
+        key = "likely_excerpts"
+        return key, VISIBILITY_CATEGORY_LABELS[key]
+    if (book.hardcover_state or "").lower() == "pending" and not visibility_settings["pending_hardcover_records"]:
+        key = "pending_hardcover_records"
+        return key, VISIBILITY_CATEGORY_LABELS[key]
+
+    key = get_primary_visibility_category(book)
+    if not visibility_settings.get(key, True):
+        return key, VISIBILITY_CATEGORY_LABELS[key]
+    return None

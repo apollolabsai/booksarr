@@ -391,6 +391,17 @@ export default function SettingsPage() {
             </button>
             {visibilitySaved && <span className="text-emerald-400 text-sm">Visibility rules updated!</span>}
           </div>
+          <div className="mt-4 pt-4 border-t border-slate-700">
+            <Link
+              to="/books/hidden"
+              className="inline-flex items-center gap-2 bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12H9m12 0A9 9 0 113 12a9 9 0 0118 0z" />
+              </svg>
+              View Hidden Books
+            </Link>
+          </div>
         </div>
 
       {/* Library Info */}
@@ -416,7 +427,7 @@ export default function SettingsPage() {
       <section id="metadata-refreshes" className="scroll-mt-6 mb-8">
         <div className="mb-3">
           <h3 className="text-lg font-semibold">Metadata Refreshes</h3>
-          <p className="text-sm text-slate-400">Run scans, manage refresh cadence, review API usage, and reset metadata state when needed.</p>
+          <p className="text-sm text-slate-400">Run scans, manage refresh cadence, and reset metadata state when needed.</p>
         </div>
 
         {/* Scan Controls */}

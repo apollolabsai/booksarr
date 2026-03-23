@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "./client";
-import type { Book } from "../types";
+import type { Book, HiddenBook } from "../types";
 
 export function useBooks(sort: string = "title", owned?: boolean, search: string = "") {
   return useQuery({
@@ -10,6 +10,17 @@ export function useBooks(sort: string = "title", owned?: boolean, search: string
       if (owned !== undefined) params.set("owned", String(owned));
       if (search) params.set("search", search);
       return fetchApi<Book[]>(`/books?${params}`);
+    },
+  });
+}
+
+export function useHiddenBooks(search: string = "") {
+  return useQuery({
+    queryKey: ["hiddenBooks", search],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (search) params.set("search", search);
+      return fetchApi<HiddenBook[]>(`/books/hidden${params.toString() ? `?${params}` : ""}`);
     },
   });
 }

@@ -81,6 +81,11 @@ export interface Book {
   series_info: SeriesPositionInfo[];
 }
 
+export interface HiddenBook extends Book {
+  hidden_category_key: string;
+  hidden_category_label: string;
+}
+
 export interface ScanStatus {
   status: "idle" | "scanning";
   progress: number;

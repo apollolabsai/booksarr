@@ -41,3 +41,11 @@ class BookDetail(BookSummary):
 
     class Config:
         from_attributes = True
+
+
+class HiddenBookSummary(BookSummary):
+    hidden_category_key: str
+    hidden_category_label: str
+
+    class Config:
+        from_attributes = True
