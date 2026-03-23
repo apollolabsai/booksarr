@@ -8,11 +8,12 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from backend.app.config import BOOKS_DIR
 from backend.app.database import async_session
 from backend.app.models import Author, Book, BookFile, BookSeries, Series, Setting
-from backend.app.services.scanner import scan_library, ScanResult
+from backend.app.services.scanner import scan_library, extract_best_metadata
 from backend.app.services.hardcover import HardcoverClient, HardcoverLookupError
 from backend.app.services.matcher import titles_match
 from backend.app.services.image_cache import (
@@ -37,6 +38,7 @@ from backend.app.services.google_books import (
 )
 from backend.app.utils.epub_cover import get_image_dimensions
 from backend.app.utils.api_usage import begin_api_usage_batch, clear_api_usage_batch, flush_api_usage_batch
+from backend.app.utils.isbn import normalize_isbn
 
 logger = logging.getLogger("booksarr.sync")
 
@@ -308,6 +310,165 @@ def _get_cached_cover_source(cached_path: str | None) -> str | None:
     return "unknown"
 
 
+def _preferred_google_isbns(book: Book) -> list[str]:
+    ordered = [
+        book.isbn,
+        book.hardcover_isbn_13,
+        book.hardcover_isbn_10,
+    ]
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in ordered:
+        if not value:
+            continue
+        normalized = value.replace("-", "").replace(" ", "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return result
+
+
+async def _count_local_match_candidates(db: AsyncSession) -> int:
+    result = await db.execute(
+        select(func.count(BookFile.id))
+        .outerjoin(Book, Book.id == BookFile.book_id)
+        .where((BookFile.book_id.is_(None)) | (Book.hardcover_id.is_(None)))
+    )
+    return result.scalar() or 0
+
+
+async def _repair_local_file_links(db: AsyncSession) -> tuple[int, int, int]:
+    result = await db.execute(
+        select(BookFile).options(selectinload(BookFile.book))
+    )
+    candidate_files = [
+        bf for bf in result.scalars().all()
+        if bf.book_id is None or (bf.book and bf.book.hardcover_id is None)
+    ]
+
+    matched_count = 0
+    repaired_count = 0
+    books_added = 0
+
+    for bf in candidate_files:
+        current_book = bf.book
+        ebook_path = BOOKS_DIR / bf.file_path
+        path_parts = bf.file_path.split("/")
+        fallback_author = path_parts[0] if path_parts else (bf.opf_author or "")
+        fallback_book_dir = path_parts[1] if len(path_parts) > 1 else (current_book.title if current_book else bf.file_name)
+
+        if ebook_path.exists():
+            opf = extract_best_metadata(ebook_path, fallback_author, fallback_book_dir)
+            bf.opf_title = opf.title or None
+            bf.opf_author = opf.author or fallback_author
+            bf.opf_isbn = opf.isbn or None
+            bf.opf_series = opf.series or None
+            bf.opf_series_index = opf.series_index
+            bf.opf_publisher = opf.publisher or None
+            bf.opf_description = opf.description or None
+
+        author_result = await db.execute(
+            select(Author).where(Author.name == bf.opf_author)
+        )
+        author = author_result.scalar_one_or_none()
+        if not author:
+            continue
+
+        books_result = await db.execute(
+            select(Book).where(Book.author_id == author.id)
+        )
+        author_books = sorted(
+            books_result.scalars().all(),
+            key=lambda candidate: (candidate.hardcover_id is None, candidate.id),
+        )
+        candidate_books = [
+            book for book in author_books
+            if not current_book or book.id != current_book.id
+        ]
+
+        matched_book = None
+
+        if bf.opf_isbn:
+            target_isbn = normalize_isbn(bf.opf_isbn)
+            for book in candidate_books:
+                book_isbns = [
+                    normalize_isbn(book.isbn),
+                    normalize_isbn(book.hardcover_isbn_13),
+                    normalize_isbn(book.hardcover_isbn_10),
+                    normalize_isbn(book.google_isbn_13),
+                    normalize_isbn(book.google_isbn_10),
+                ]
+                if target_isbn and target_isbn in {value for value in book_isbns if value}:
+                    matched_book = book
+                    break
+
+        if not matched_book and bf.opf_title:
+            for book in candidate_books:
+                if titles_match(bf.opf_title, book.title):
+                    matched_book = book
+                    break
+
+        if matched_book:
+            previous_book_id = bf.book_id
+            bf.book = matched_book
+            matched_book.is_owned = True
+            if bf.opf_isbn and not matched_book.isbn:
+                matched_book.isbn = bf.opf_isbn
+                if matched_book.google_id == "_none":
+                    matched_book.google_id = None
+                if matched_book.ol_edition_key == "_none":
+                    matched_book.ol_edition_key = None
+                matched_book.publish_date_checked_at = None
+            matched_count += 1
+            if previous_book_id and previous_book_id != matched_book.id:
+                repaired_count += 1
+                previous_result = await db.execute(
+                    select(Book).where(Book.id == previous_book_id)
+                )
+                previous_book = previous_result.scalar_one_or_none()
+                if previous_book and not previous_book.hardcover_id:
+                    remaining = await db.execute(
+                        select(func.count(BookFile.id)).where(
+                            BookFile.book_id == previous_book_id,
+                            BookFile.id != bf.id,
+                        )
+                    )
+                    if (remaining.scalar() or 0) == 0:
+                        await db.delete(previous_book)
+        else:
+            if current_book and not current_book.hardcover_id:
+                current_book.title = bf.opf_title or current_book.title
+                current_book.author_id = author.id
+                current_book.isbn = bf.opf_isbn or current_book.isbn
+                current_book.publisher = bf.opf_publisher or current_book.publisher
+                current_book.description = bf.opf_description or current_book.description
+                current_book.is_owned = True
+            else:
+                local_book = Book(
+                    title=bf.opf_title or bf.file_name,
+                    author_id=author.id,
+                    isbn=bf.opf_isbn,
+                    publisher=bf.opf_publisher,
+                    description=bf.opf_description,
+                    is_owned=True,
+                )
+                db.add(local_book)
+                await db.flush()
+                bf.book = local_book
+                books_added += 1
+
+    await db.commit()
+    if candidate_files:
+        logger.info(
+            "Matched %d/%d candidate file(s); repaired %d existing local link(s)",
+            matched_count,
+            len(candidate_files),
+            repaired_count,
+        )
+    return matched_count, repaired_count, books_added
+
+
 class ScanStatus:
     def __init__(self):
         self.status: str = "idle"
@@ -457,7 +618,8 @@ async def run_full_sync(force: bool = False):
 
             # If no changes and not forced, we can skip Hardcover phases
             has_changes = bool(scan_result.new_files or scan_result.deleted_files)
-            if not has_changes and not force:
+            repair_candidates = await _count_local_match_candidates(db)
+            if not has_changes and not force and repair_candidates == 0:
                 logger.info("No filesystem changes detected — skipping Hardcover sync")
                 scan_status.message = "No changes detected."
                 scan_status.progress = 100.0
@@ -470,10 +632,24 @@ async def run_full_sync(force: bool = False):
                     message="No changes detected.",
                 )
                 return
+            if not has_changes and not force and repair_candidates > 0:
+                logger.info(
+                    "No filesystem changes detected, but %d local file link(s) need repair",
+                    repair_candidates,
+                )
 
             # Get API key
             api_key = await get_api_key(db)
             if not api_key:
+                if repair_candidates > 0:
+                    scan_status.message = "Repairing local file matches..."
+                    matched_count, repaired_count, new_local_books = await _repair_local_file_links(db)
+                    summary.books_added += new_local_books
+                    logger.info(
+                        "Local-only repair without Hardcover API key: matched %d candidate file(s), repaired %d link(s)",
+                        matched_count,
+                        repaired_count,
+                    )
                 scan_status.message = "No Hardcover API key configured. Scan complete (local only)."
                 scan_status.progress = 100.0
                 scan_status.status = "idle"
@@ -598,6 +774,8 @@ async def run_full_sync(force: bool = False):
                                 book.google_id = None
                                 book.google_published_date = None
                                 book.google_cover_url = None
+                                book.google_isbn_10 = None
+                                book.google_isbn_13 = None
                                 book.ol_edition_key = None
                                 book.ol_first_publish_year = None
                                 book.ol_cover_url = None
@@ -618,6 +796,8 @@ async def run_full_sync(force: bool = False):
                             book.literary_type_id = hc_book.literary_type_id
                             book.literary_type_name = get_literary_type_name(hc_book.literary_type_id)
                             book.hardcover_state = hc_book.state or None
+                            book.hardcover_isbn_10 = hc_book.isbn_10
+                            book.hardcover_isbn_13 = hc_book.isbn_13
                             book.language = hc_book.language or book.language
                         else:
                             book = Book(
@@ -631,6 +811,8 @@ async def run_full_sync(force: bool = False):
                                 literary_type_id=hc_book.literary_type_id,
                                 literary_type_name=get_literary_type_name(hc_book.literary_type_id),
                                 hardcover_state=hc_book.state or None,
+                                hardcover_isbn_10=hc_book.isbn_10,
+                                hardcover_isbn_13=hc_book.isbn_13,
                                 description=hc_book.description,
                                 release_date=hc_book.release_date,
                                 cover_image_url=hc_book.image_url,
@@ -670,72 +852,12 @@ async def run_full_sync(force: bool = False):
                     authors_synced, authors_skipped,
                 )
 
-                # Phase 4: Match local files to Hardcover books (only unmatched)
+                # Phase 4: Match local files to Hardcover books and repair
+                # existing local-only links using freshly parsed file metadata.
                 scan_status.message = "Matching local files to Hardcover books..."
-                result = await db.execute(select(BookFile).where(BookFile.book_id.is_(None)))
-                unmatched_files = result.scalars().all()
-
-                matched_count = 0
-                for bf in unmatched_files:
-                    author_result = await db.execute(
-                        select(Author).where(Author.name == bf.opf_author)
-                    )
-                    author = author_result.scalar_one_or_none()
-                    if not author:
-                        continue
-
-                    books_result = await db.execute(
-                        select(Book).where(Book.author_id == author.id)
-                    )
-                    author_books = books_result.scalars().all()
-
-                    matched_book = None
-
-                    # Strategy 1: ISBN match
-                    if bf.opf_isbn:
-                        for book in author_books:
-                            if book.isbn and book.isbn == bf.opf_isbn:
-                                matched_book = book
-                                break
-
-                    # Strategy 2: Title match
-                    if not matched_book and bf.opf_title:
-                        for book in author_books:
-                            if titles_match(bf.opf_title, book.title):
-                                matched_book = book
-                                break
-
-                    if matched_book:
-                        bf.book_id = matched_book.id
-                        matched_book.is_owned = True
-                        if bf.opf_isbn and not matched_book.isbn:
-                            matched_book.isbn = bf.opf_isbn
-                            # ISBN gained — clear negative cache for retry
-                            # (ISBN lookups are far more precise)
-                            if matched_book.google_id == "_none":
-                                matched_book.google_id = None
-                            if matched_book.ol_edition_key == "_none":
-                                matched_book.ol_edition_key = None
-                            matched_book.publish_date_checked_at = None
-                        matched_count += 1
-                    else:
-                        local_book = Book(
-                            title=bf.opf_title or bf.file_name,
-                            author_id=author.id,
-                            isbn=bf.opf_isbn,
-                            publisher=bf.opf_publisher,
-                            description=bf.opf_description,
-                            is_owned=True,
-                        )
-                        db.add(local_book)
-                        await db.flush()
-                        bf.book_id = local_book.id
-                        books_added += 1
-
-                await db.commit()
+                matched_count, repaired_count, new_local_books = await _repair_local_file_links(db)
+                books_added += new_local_books
                 summary.books_added = books_added
-                if unmatched_files:
-                    logger.info("Matched %d/%d unmatched file(s)", matched_count, len(unmatched_files))
                 scan_status.progress = 80.0
 
                 # Phase 5: Year reconciliation
@@ -783,6 +905,8 @@ async def run_full_sync(force: bool = False):
                                     published_date=book.google_published_date,
                                     cover_url=book.google_cover_url,
                                     google_id=book.google_id,
+                                    isbn_10=book.google_isbn_10,
+                                    isbn_13=book.google_isbn_13,
                                 )
                                 summary.google.record_cached()
                             else:
@@ -802,10 +926,12 @@ async def run_full_sync(force: bool = False):
                                     try:
                                         gbook = None
                                         final_reason = "no_result"
-                                        if book.isbn:
-                                            isbn_result = await google_client.search_by_isbn_result(book.isbn)
+                                        for isbn in _preferred_google_isbns(book):
+                                            isbn_result = await google_client.search_by_isbn_result(isbn)
                                             gbook = isbn_result.book
                                             final_reason = isbn_result.reason
+                                            if gbook or final_reason not in {"no_result"}:
+                                                break
                                         if not gbook:
                                             author_name = author_map.get(book.author_id, "")
                                             title_result = await google_client.search_by_title_author_result(
@@ -820,6 +946,8 @@ async def run_full_sync(force: bool = False):
                                             book.google_id = gbook.google_id
                                             book.google_published_date = gbook.published_date
                                             book.google_cover_url = gbook.cover_url
+                                            book.google_isbn_10 = gbook.isbn_10
+                                            book.google_isbn_13 = gbook.isbn_13
                                             fetched += 1
                                         else:
                                             summary.google.record_failure(final_reason)
@@ -1301,6 +1429,195 @@ async def run_full_sync(force: bool = False):
             logger.exception("Failed to persist scan summary after sync error")
     finally:
         clear_api_usage_batch(usage_batch_token)
+
+
+async def refresh_single_book(book_id: int):
+    async with async_session() as db:
+        result = await db.execute(
+            select(Book)
+            .where(Book.id == book_id)
+            .options(
+                selectinload(Book.author),
+                selectinload(Book.files),
+                selectinload(Book.book_series).selectinload(BookSeries.series),
+            )
+        )
+        book = result.scalar_one_or_none()
+        if not book:
+            raise ValueError("Book not found")
+
+        author_name = book.author.name if book.author else ""
+        tags_json = None
+        gbook: GBook | None = None
+        ol_book: OLBook | None = None
+        google_retry = False
+
+        # Clear external metadata so this behaves like a targeted re-import.
+        book.google_id = None
+        book.google_published_date = None
+        book.google_cover_url = None
+        book.google_isbn_10 = None
+        book.google_isbn_13 = None
+        book.ol_edition_key = None
+        book.ol_first_publish_year = None
+        book.ol_cover_url = None
+        book.publish_date_checked_at = None
+
+        api_key = await get_api_key(db)
+        if book.hardcover_id and api_key:
+            client = HardcoverClient(api_key)
+            try:
+                hc_book = await client.get_book(book.hardcover_id)
+            finally:
+                await client.close()
+
+            if hc_book:
+                tags_json = json.dumps(hc_book.tags) if hc_book.tags else None
+                book.title = hc_book.title
+                book.hardcover_slug = hc_book.slug
+                book.description = hc_book.description
+                book.release_date = hc_book.release_date
+                book.cover_image_url = hc_book.image_url
+                book.tags = tags_json
+                book.rating = hc_book.rating
+                book.pages = hc_book.pages
+                book.compilation = hc_book.compilation
+                book.book_category_id = hc_book.book_category_id
+                book.book_category_name = get_book_category_name(hc_book.book_category_id)
+                book.literary_type_id = hc_book.literary_type_id
+                book.literary_type_name = get_literary_type_name(hc_book.literary_type_id)
+                book.hardcover_state = hc_book.state or None
+                book.hardcover_isbn_10 = hc_book.isbn_10
+                book.hardcover_isbn_13 = hc_book.isbn_13
+                book.language = hc_book.language or book.language
+
+                for existing_bs in list(book.book_series):
+                    await db.delete(existing_bs)
+                await db.flush()
+
+                for sr in hc_book.series_refs:
+                    series = await _get_or_create_series(db, sr.id, sr.name)
+                    db.add(BookSeries(
+                        book_id=book.id,
+                        series_id=series.id,
+                        position=sr.position,
+                    ))
+
+        google_api_key = await get_google_api_key(db)
+        if google_api_key:
+            google_client = GoogleBooksClient(google_api_key)
+            try:
+                final_reason = "no_result"
+                for isbn in _preferred_google_isbns(book):
+                    isbn_result = await google_client.search_by_isbn_result(isbn)
+                    gbook = isbn_result.book
+                    final_reason = isbn_result.reason
+                    if gbook or final_reason not in {"no_result"}:
+                        break
+
+                if not gbook:
+                    title_result = await google_client.search_by_title_author_result(
+                        book.title,
+                        author_name,
+                    )
+                    gbook = title_result.book
+                    final_reason = title_result.reason
+
+                if gbook:
+                    book.google_id = gbook.google_id
+                    book.google_published_date = gbook.published_date
+                    book.google_cover_url = gbook.cover_url
+                    book.google_isbn_10 = gbook.isbn_10
+                    book.google_isbn_13 = gbook.isbn_13
+                elif final_reason in {"no_result", "title_mismatch", "author_mismatch"}:
+                    book.google_id = "_none"
+            except (GoogleBooksThrottledError, GoogleBooksLookupError):
+                google_retry = True
+                logger.warning("Single-book Google refresh failed for '%s'", book.title)
+            finally:
+                await google_client.close()
+
+        ol_client = OpenLibraryClient()
+        try:
+            for isbn in _preferred_google_isbns(book):
+                lookup = await ol_client.search_book_by_isbn_with_result(isbn)
+                if lookup.book:
+                    ol_book = lookup.book
+                    break
+                if lookup.reason not in {"no_result"}:
+                    break
+
+            if not ol_book:
+                lookup = await ol_client.search_book_with_result(book.title, author_name)
+                if lookup.book:
+                    ol_book = lookup.book
+                elif lookup.reason == "no_result":
+                    book.ol_edition_key = "_none"
+
+            if ol_book:
+                book.ol_edition_key = ol_book.cover_edition_key or "_found"
+                book.ol_first_publish_year = ol_book.first_publish_year
+                if ol_book.cover_id:
+                    book.ol_cover_url = ol_book.cover_url_large
+        finally:
+            await ol_client.close()
+
+        new_date = _reconcile_year_3way(
+            book.release_date,
+            gbook.publish_year if gbook else None,
+            ol_book.first_publish_year if ol_book else None,
+        )
+        if new_date:
+            book.release_date = new_date
+        if not google_retry:
+            book.publish_date_checked_at = datetime.utcnow()
+
+        cover_height = get_cached_cover_height(book.cover_image_cached_path)
+        cover_source = _get_cached_cover_source(book.cover_image_cached_path)
+
+        if book.is_owned and book.files:
+            bf = book.files[0]
+            epub_path = BOOKS_DIR / bf.file_path if bf.file_format == "epub" else None
+            cached = cache_best_local_cover(
+                bf.local_cover_path,
+                epub_path,
+                book.id,
+                existing_cached_path=book.cover_image_cached_path,
+            )
+            if cached:
+                book.cover_image_cached_path = cached
+                cover_height = get_cached_cover_height(cached)
+                cover_source = _get_cached_cover_source(cached)
+
+        if book.cover_image_url:
+            data = await download_image_bytes(book.cover_image_url)
+            if data:
+                dims = get_image_dimensions(data)
+                new_height = dims[1] if dims else 0
+                should_replace = cover_source in {None, "legacy_remote", "google", "openlibrary"}
+                if should_replace or new_height > cover_height:
+                    path = cache_cover_data(data, book.id, "hardcover")
+                    if path:
+                        book.cover_image_cached_path = path
+                        cover_height = new_height
+                        cover_source = "hardcover"
+
+        if not book.cover_image_cached_path and not book.cover_image_url and gbook and gbook.cover_url:
+            data = await download_image_bytes(gbook.cover_url)
+            if data:
+                path = cache_cover_data(data, book.id, "google")
+                if path:
+                    book.cover_image_cached_path = path
+                    cover_source = "google"
+
+        if not book.cover_image_cached_path and ol_book and ol_book.cover_id:
+            data = await download_image_bytes(ol_book.cover_url_large)
+            if data:
+                path = cache_cover_data(data, book.id, "openlibrary")
+                if path:
+                    book.cover_image_cached_path = path
+
+        await db.commit()
 
 
 async def _get_or_create_series(db: AsyncSession, hardcover_id: int, name: str) -> Series:

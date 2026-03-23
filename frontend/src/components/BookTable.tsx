@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import type { Book, BookInAuthor } from "../types";
 import { getImageUrl } from "../types";
+import { useRefreshBook } from "../api/books";
 
 type BookLike = Book | BookInAuthor;
 
@@ -57,6 +58,8 @@ export default function BookTable({
   books: BookLike[];
   showAuthor?: boolean;
 }) {
+  const refreshBook = useRefreshBook();
+
   return (
     <div className="bg-slate-800 rounded-lg border border-slate-700 overflow-hidden">
       <table className="w-full text-sm text-left">
@@ -69,6 +72,7 @@ export default function BookTable({
             <th className="px-4 py-3">Series</th>
             <th className="px-4 py-3 text-right">Year</th>
             <th className="px-4 py-3 text-right">Rating</th>
+            <th className="px-4 py-3 text-right">Refresh</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-700">
@@ -151,6 +155,19 @@ export default function BookTable({
                 </td>
                 <td className="px-4 py-2 text-right text-slate-400">
                   {book.rating ? book.rating.toFixed(1) : "-"}
+                </td>
+                <td className="px-4 py-2 text-right">
+                  <button
+                    type="button"
+                    onClick={() => refreshBook.mutate(book.id)}
+                    disabled={refreshBook.isPending}
+                    className="inline-flex items-center justify-center rounded-md border border-slate-600 bg-slate-700 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+                    title="Delete and re-import metadata for this book"
+                  >
+                    <svg className={`h-4 w-4 ${refreshBook.isPending && refreshBook.variables === book.id ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m14.836 2A8.001 8.001 0 005.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.356-2m15.356 2H15" />
+                    </svg>
+                  </button>
                 </td>
               </tr>
             );

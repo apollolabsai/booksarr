@@ -27,7 +27,11 @@ export interface BookInAuthor {
   literary_type_id: number | null;
   literary_type_name: string | null;
   hardcover_state: string | null;
+  hardcover_isbn_10: string | null;
+  hardcover_isbn_13: string | null;
   isbn: string | null;
+  google_isbn_10: string | null;
+  google_isbn_13: string | null;
   has_valid_isbn: boolean;
   matched_google: boolean;
   matched_openlibrary: boolean;
@@ -74,7 +78,11 @@ export interface Book {
   literary_type_id: number | null;
   literary_type_name: string | null;
   hardcover_state: string | null;
+  hardcover_isbn_10: string | null;
+  hardcover_isbn_13: string | null;
   isbn: string | null;
+  google_isbn_10: string | null;
+  google_isbn_13: string | null;
   has_valid_isbn: boolean;
   matched_google: boolean;
   matched_openlibrary: boolean;

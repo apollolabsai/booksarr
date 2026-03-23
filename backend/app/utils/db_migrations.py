@@ -12,6 +12,10 @@ def run_schema_migrations(conn: Connection) -> None:
         "literary_type_id": "INTEGER",
         "literary_type_name": "VARCHAR",
         "hardcover_state": "VARCHAR",
+        "hardcover_isbn_10": "VARCHAR",
+        "hardcover_isbn_13": "VARCHAR",
+        "google_isbn_10": "VARCHAR",
+        "google_isbn_13": "VARCHAR",
     }
 
     for column_name, column_type in column_defs.items():

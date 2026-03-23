@@ -1,4 +1,4 @@
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchApi } from "./client";
 import type { Book, HiddenBook } from "../types";
 
@@ -24,5 +24,18 @@ export function useHiddenBooks(search: string = "") {
       return fetchApi<HiddenBook[]>(`/books/hidden${params.toString() ? `?${params}` : ""}`);
     },
     placeholderData: keepPreviousData,
+  });
+}
+
+export function useRefreshBook() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (bookId: number) =>
+      fetchApi(`/books/${bookId}/refresh`, { method: "POST" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["books"] });
+      queryClient.invalidateQueries({ queryKey: ["hiddenBooks"] });
+      queryClient.invalidateQueries({ queryKey: ["authors"] });
+    },
   });
 }

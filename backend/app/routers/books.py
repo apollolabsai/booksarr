@@ -12,6 +12,7 @@ from backend.app.utils.book_visibility import (
     get_hidden_category,
     is_book_visible,
 )
+from backend.app.services.library_sync import refresh_single_book
 
 router = APIRouter(prefix="/api/books", tags=["books"])
 
@@ -30,7 +31,11 @@ def _book_summary(book: Book) -> BookSummary:
         literary_type_id=book.literary_type_id,
         literary_type_name=book.literary_type_name,
         hardcover_state=book.hardcover_state,
+        hardcover_isbn_10=book.hardcover_isbn_10,
+        hardcover_isbn_13=book.hardcover_isbn_13,
         isbn=book.isbn,
+        google_isbn_10=book.google_isbn_10,
+        google_isbn_13=book.google_isbn_13,
         has_valid_isbn=is_valid_isbn(book.isbn),
         matched_google=bool(book.google_id and book.google_id != "_none"),
         matched_openlibrary=bool(book.ol_edition_key and book.ol_edition_key != "_none"),
@@ -159,7 +164,11 @@ async def get_book(book_id: int, db: AsyncSession = Depends(get_db)):
         literary_type_id=book.literary_type_id,
         literary_type_name=book.literary_type_name,
         hardcover_state=book.hardcover_state,
+        hardcover_isbn_10=book.hardcover_isbn_10,
+        hardcover_isbn_13=book.hardcover_isbn_13,
         isbn=book.isbn,
+        google_isbn_10=book.google_isbn_10,
+        google_isbn_13=book.google_isbn_13,
         has_valid_isbn=is_valid_isbn(book.isbn),
         matched_google=bool(book.google_id and book.google_id != "_none"),
         matched_openlibrary=bool(book.ol_edition_key and book.ol_edition_key != "_none"),
@@ -175,3 +184,12 @@ async def get_book(book_id: int, db: AsyncSession = Depends(get_db)):
         is_owned=book.is_owned,
         series_info=series_info,
     )
+
+
+@router.post("/{book_id}/refresh")
+async def refresh_book(book_id: int):
+    try:
+        await refresh_single_book(book_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Book not found")
+    return {"status": "ok", "message": "Book metadata refreshed"}

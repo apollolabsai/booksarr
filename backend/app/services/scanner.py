@@ -14,6 +14,7 @@ logger = logging.getLogger("booksarr.scanner")
 EBOOK_EXTENSIONS = {".epub"}
 _TRAILING_PAREN_RE = re.compile(r"\s*\([^)]*\)\s*$")
 _SERIES_BRACKET_RE = re.compile(r"\s*-\s*\[[^\]]+\]\s*")
+_LEADING_SERIES_TOKEN_RE = re.compile(r"^\s*(?:\[[^\]]+\]|\([^)]*\))\s*-\s*")
 
 
 class ScanResult:
@@ -111,7 +112,7 @@ async def scan_library(db: AsyncSession, library_path: Path) -> ScanResult:
 
             ebook_file = library_path / rel_path
 
-            opf = _extract_best_metadata(ebook_file, author_name, book_dir.name)
+            opf = extract_best_metadata(ebook_file, author_name, book_dir.name)
 
             # Check for cover
             cover_path = book_dir / "cover.jpg"
@@ -195,7 +196,7 @@ async def _get_or_create_author(db: AsyncSession, name: str) -> Author:
     return author
 
 
-def _extract_best_metadata(ebook_file: Path, author_name: str, book_dir_name: str) -> OPFMetadata:
+def extract_best_metadata(ebook_file: Path, author_name: str, book_dir_name: str) -> OPFMetadata:
     opf_path = ebook_file.parent / "metadata.opf"
     sidecar_meta = parse_opf(opf_path) if opf_path.exists() else None
     epub_meta = parse_epub_opf(ebook_file) if ebook_file.suffix.lower() == ".epub" else None
@@ -211,7 +212,7 @@ def _has_useful_metadata(meta: OPFMetadata | None) -> bool:
 
 
 def _normalize_metadata(meta: OPFMetadata, author_name: str, book_dir_name: str, ebook_file: Path) -> OPFMetadata:
-    title = (meta.title or "").strip()
+    title = _clean_title_text(meta.title or "")
     author = (meta.author or "").strip() or author_name
     if not title or title.lower() == author_name.strip().lower():
         fallback = _filename_fallback_metadata(ebook_file, author_name, book_dir_name)
@@ -232,12 +233,7 @@ def _filename_fallback_metadata(ebook_file: Path, author_name: str, book_dir_nam
     elif parts:
         title = parts[0]
 
-    title = _TRAILING_PAREN_RE.sub("", title).strip()
-    while True:
-        stripped = _TRAILING_PAREN_RE.sub("", title).strip()
-        if stripped == title:
-            break
-        title = stripped
+    title = _clean_title_text(title)
 
     if not title or title.lower() == author_name.strip().lower():
         title = book_dir_name.strip()
@@ -245,3 +241,20 @@ def _filename_fallback_metadata(ebook_file: Path, author_name: str, book_dir_nam
         title = ebook_file.stem
 
     return OPFMetadata(title=title.strip(), author=author_name.strip())
+
+
+def _clean_title_text(title: str) -> str:
+    cleaned = title.strip()
+    while True:
+        stripped = _LEADING_SERIES_TOKEN_RE.sub("", cleaned).strip()
+        if stripped == cleaned:
+            break
+        cleaned = stripped
+
+    while True:
+        stripped = _TRAILING_PAREN_RE.sub("", cleaned).strip()
+        if stripped == cleaned:
+            break
+        cleaned = stripped
+
+    return cleaned

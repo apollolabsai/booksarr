@@ -52,6 +52,8 @@ class HCBook:
     book_category_id: int | None = None
     literary_type_id: int | None = None
     state: str = ""
+    isbn_10: str | None = None
+    isbn_13: str | None = None
     tags: list[str] = field(default_factory=list)
     series_refs: list[HCSeriesRef] = field(default_factory=list)
 
@@ -159,7 +161,11 @@ class HardcoverClient:
             id title slug description release_date canonical_id
             compilation book_category_id literary_type_id state
             image { url }
-            default_cover_edition { language { code2 } }
+            default_cover_edition {
+              language { code2 }
+              isbn_10
+              isbn_13
+            }
             cached_contributors
             cached_tags rating pages users_count
             book_series {
@@ -174,74 +180,104 @@ class HardcoverClient:
         books_data = data.get("books", [])
         logger.info("Retrieved %d books for author HC ID: %d", len(books_data), author_id)
 
-        books = []
-        for b in books_data:
-            image_url = ""
-            img = b.get("image")
-            if img and isinstance(img, dict):
-                image_url = img.get("url", "")
+        return [self._parse_hc_book(b) for b in books_data]
 
-            # Extract tags
-            tags = []
-            cached_tags = b.get("cached_tags")
-            if cached_tags and isinstance(cached_tags, dict):
-                for category_tags in cached_tags.values():
-                    if isinstance(category_tags, list):
-                        for t in category_tags[:3]:
-                            if isinstance(t, dict) and "tag" in t:
-                                tags.append(t["tag"])
+    async def get_book(self, book_id: int) -> HCBook | None:
+        query = """
+        query($book_id: Int!) {
+          books(where: {id: {_eq: $book_id}}, limit: 1) {
+            id title slug description release_date canonical_id
+            compilation book_category_id literary_type_id state
+            image { url }
+            default_cover_edition {
+              language { code2 }
+              isbn_10
+              isbn_13
+            }
+            cached_contributors
+            cached_tags rating pages users_count
+            book_series {
+              position
+              series { id name }
+            }
+          }
+        }
+        """
+        logger.info("Fetching Hardcover metadata for book HC ID: %d", book_id)
+        data = await self._query(query, {"book_id": book_id})
+        books_data = data.get("books", [])
+        if not books_data:
+            return None
+        return self._parse_hc_book(books_data[0])
 
-            # Extract series refs
-            series_refs = []
-            for bs in b.get("book_series", []):
-                s = bs.get("series", {})
-                if s and s.get("id"):
-                    series_refs.append(HCSeriesRef(
-                        id=s["id"],
-                        name=s.get("name", ""),
-                        position=bs.get("position"),
-                    ))
+    def _parse_hc_book(self, b: dict) -> HCBook:
+        image_url = ""
+        img = b.get("image")
+        if img and isinstance(img, dict):
+            image_url = img.get("url", "")
 
-            # Extract language from default cover edition
-            language = ""
-            dce = b.get("default_cover_edition")
-            if dce and isinstance(dce, dict):
-                lang_obj = dce.get("language")
-                if lang_obj and isinstance(lang_obj, dict):
-                    language = lang_obj.get("code2", "")
+        tags = []
+        cached_tags = b.get("cached_tags")
+        if cached_tags and isinstance(cached_tags, dict):
+            for category_tags in cached_tags.values():
+                if isinstance(category_tags, list):
+                    for t in category_tags[:3]:
+                        if isinstance(t, dict) and "tag" in t:
+                            tags.append(t["tag"])
 
-            # If no edition language, check for translator contributors
-            # Books with translators are almost certainly non-English editions
-            if not language:
-                contributors = b.get("cached_contributors") or []
-                for contrib in contributors:
-                    if isinstance(contrib, dict):
-                        role = (contrib.get("contribution") or "").lower()
-                        if "translat" in role:
-                            language = "translated"
-                            break
+        series_refs = []
+        for bs in b.get("book_series", []):
+            s = bs.get("series", {})
+            if s and s.get("id"):
+                series_refs.append(HCSeriesRef(
+                    id=s["id"],
+                    name=s.get("name", ""),
+                    position=bs.get("position"),
+                ))
 
-            books.append(HCBook(
-                id=b["id"],
-                title=b["title"],
-                slug=b.get("slug", ""),
-                description=b.get("description", "") or "",
-                release_date=b.get("release_date", "") or "",
-                image_url=image_url,
-                rating=b.get("rating", 0) or 0,
-                pages=b.get("pages", 0) or 0,
-                language=language,
-                is_canonical=b.get("canonical_id") is None,
-                users_count=b.get("users_count", 0) or 0,
-                compilation=b.get("compilation"),
-                book_category_id=b.get("book_category_id"),
-                literary_type_id=b.get("literary_type_id"),
-                state=b.get("state", "") or "",
-                tags=tags,
-                series_refs=series_refs,
-            ))
+        language = ""
+        dce = b.get("default_cover_edition")
+        isbn_10 = None
+        isbn_13 = None
+        if dce and isinstance(dce, dict):
+            lang_obj = dce.get("language")
+            if lang_obj and isinstance(lang_obj, dict):
+                language = lang_obj.get("code2", "")
+            raw_isbn_10 = dce.get("isbn_10")
+            raw_isbn_13 = dce.get("isbn_13")
+            isbn_10 = str(raw_isbn_10).strip() if raw_isbn_10 else None
+            isbn_13 = str(raw_isbn_13).strip() if raw_isbn_13 else None
 
-        return books
+        if not language:
+            contributors = b.get("cached_contributors") or []
+            for contrib in contributors:
+                if isinstance(contrib, dict):
+                    role = (contrib.get("contribution") or "").lower()
+                    if "translat" in role:
+                        language = "translated"
+                        break
+
+        return HCBook(
+            id=b["id"],
+            title=b["title"],
+            slug=b.get("slug", ""),
+            description=b.get("description", "") or "",
+            release_date=b.get("release_date", "") or "",
+            image_url=image_url,
+            rating=b.get("rating", 0) or 0,
+            pages=b.get("pages", 0) or 0,
+            language=language,
+            is_canonical=b.get("canonical_id") is None,
+            users_count=b.get("users_count", 0) or 0,
+            compilation=b.get("compilation"),
+            book_category_id=b.get("book_category_id"),
+            literary_type_id=b.get("literary_type_id"),
+            state=b.get("state", "") or "",
+            isbn_10=isbn_10,
+            isbn_13=isbn_13,
+            tags=tags,
+            series_refs=series_refs,
+        )
 
     async def search_book_by_isbn(self, isbn: str) -> int | None:
         """Search for a book by ISBN, return Hardcover book ID if found."""

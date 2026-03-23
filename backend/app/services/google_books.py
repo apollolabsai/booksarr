@@ -32,6 +32,8 @@ class GBook:
     published_date: str | None = None
     cover_url: str | None = None
     google_id: str | None = None
+    isbn_10: str | None = None
+    isbn_13: str | None = None
 
     @property
     def publish_year(self) -> int | None:
@@ -145,6 +147,22 @@ class GoogleBooksClient:
                 return 0.85
 
         return SequenceMatcher(None, expected_norm, candidate_norm).ratio()
+
+    def _extract_isbns(self, info: dict) -> tuple[str | None, str | None]:
+        isbn_10 = None
+        isbn_13 = None
+        for identifier in info.get("industryIdentifiers") or []:
+            if not isinstance(identifier, dict):
+                continue
+            id_type = str(identifier.get("type") or "").upper()
+            value = str(identifier.get("identifier") or "").strip()
+            if not value:
+                continue
+            if id_type == "ISBN_10" and not isbn_10:
+                isbn_10 = value
+            elif id_type == "ISBN_13" and not isbn_13:
+                isbn_13 = value
+        return isbn_10, isbn_13
 
     def _pick_cover_url(self, info: dict) -> str | None:
         image_links = info.get("imageLinks") or {}
@@ -365,6 +383,7 @@ class GoogleBooksClient:
 
         google_id = item.get("id")
         cover_url = self._pick_cover_url(info)
+        isbn_10, isbn_13 = self._extract_isbns(info)
         logger.info(
             "Google Books response: book='%s' author='%s' lookup=%s status=200 candidates=%d selected_id='%s' selected_title='%s' published='%s' result='matched'",
             (book_context or expected_title or query)[:80],
@@ -382,6 +401,8 @@ class GoogleBooksClient:
                 published_date=info.get("publishedDate"),
                 cover_url=cover_url,
                 google_id=google_id,
+                isbn_10=isbn_10,
+                isbn_13=isbn_13,
             ),
             reason="matched",
         )

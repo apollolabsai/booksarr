@@ -32,7 +32,11 @@ class BookInAuthor(BaseModel):
     literary_type_id: int | None
     literary_type_name: str | None
     hardcover_state: str | None
+    hardcover_isbn_10: str | None
+    hardcover_isbn_13: str | None
     isbn: str | None
+    google_isbn_10: str | None
+    google_isbn_13: str | None
     has_valid_isbn: bool
     matched_google: bool
     matched_openlibrary: bool
