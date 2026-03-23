@@ -9,7 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.config import BOOKS_DIR, CONFIG_DIR, HARDCOVER_API_KEY, GOOGLE_BOOKS_API_KEY
 from backend.app.database import get_db
 from backend.app.models import Setting
-from backend.app.schemas.setting import SettingsResponse, SettingsUpdate
+from backend.app.schemas.setting import SettingsResponse, SettingsUpdate, ApiUsageDay
+from backend.app.utils.api_usage import get_api_usage_rows
 
 logger = logging.getLogger("booksarr.settings")
 
@@ -77,20 +78,21 @@ async def _upsert_setting(db: AsyncSession, key: str, value: str):
 
 @router.post("/reset")
 async def reset_all_data(db: AsyncSession = Depends(get_db)):
-    """Delete all database data and cached images. Resets to fresh install."""
-    logger.warning("Factory reset triggered — deleting all data and cache")
+    """Delete library data and cached images while preserving settings and API usage history."""
+    logger.warning("Factory reset triggered — deleting library data and cache")
 
     # Stop the scheduler
     from backend.app.services.scheduler import update_scan_schedule
     await update_scan_schedule(0)
 
-    # Clear all data tables in dependency order (preserve settings like API key)
+    # Clear all library data tables in dependency order.
+    # Preserve settings and persistent API usage history.
     for table in ["book_files", "book_series", "books", "series", "authors"]:
         await db.execute(text(f"DELETE FROM {table}"))
     # Clear last_scan_at so it shows "Never" again
     await db.execute(text("DELETE FROM settings WHERE key = 'last_scan_at'"))
     await db.commit()
-    logger.info("All database tables cleared (settings preserved)")
+    logger.info("Library data cleared (settings and API usage preserved)")
 
     # Delete cached images
     cache_dir = CONFIG_DIR / "cache"
@@ -102,6 +104,11 @@ async def reset_all_data(db: AsyncSession = Depends(get_db)):
     logger.info("Image cache cleared")
 
     return {"status": "ok", "message": "All data has been reset"}
+
+
+@router.get("/api-usage", response_model=list[ApiUsageDay])
+async def get_api_usage(days: int = 7, db: AsyncSession = Depends(get_db)):
+    return await get_api_usage_rows(db, days=days)
 
 
 @router.get("/build-info")

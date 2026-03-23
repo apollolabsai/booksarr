@@ -2,6 +2,7 @@ import logging
 from dataclasses import dataclass, field
 
 import httpx
+from backend.app.utils.api_usage import record_api_call
 
 logger = logging.getLogger("booksarr.openlibrary")
 
@@ -51,6 +52,7 @@ class OpenLibraryClient:
         """Search Open Library for a book by title and author."""
         client = await self._get_client()
         try:
+            await record_api_call("openlibrary")
             resp = await client.get(
                 SEARCH_URL,
                 params={
@@ -84,6 +86,7 @@ class OpenLibraryClient:
         """Search Open Library by ISBN."""
         client = await self._get_client()
         try:
+            await record_api_call("openlibrary")
             resp = await client.get(
                 SEARCH_URL,
                 params={

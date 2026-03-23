@@ -26,6 +26,12 @@ class BookInAuthor(BaseModel):
     title: str
     hardcover_id: int | None
     hardcover_slug: str | None
+    compilation: bool | None
+    book_category_id: int | None
+    book_category_name: str | None
+    literary_type_id: int | None
+    literary_type_name: str | None
+    hardcover_state: str | None
     isbn: str | None
     description: str | None
     release_date: str | None

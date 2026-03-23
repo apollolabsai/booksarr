@@ -22,7 +22,13 @@ from backend.app.services.image_cache import (
     get_cached_cover_height,
 )
 from backend.app.services.openlibrary import OpenLibraryClient, OLBook
-from backend.app.services.google_books import GoogleBooksClient, GBook
+from backend.app.utils.hardcover_metadata import get_book_category_name, get_literary_type_name
+from backend.app.services.google_books import (
+    GoogleBooksClient,
+    GBook,
+    GoogleBooksLookupError,
+    GoogleBooksThrottledError,
+)
 from backend.app.utils.epub_cover import get_image_dimensions
 
 logger = logging.getLogger("booksarr.sync")
@@ -277,6 +283,24 @@ def _extract_ol_cover_id(cover_url: str | None) -> int | None:
         return None
 
 
+def _get_cached_cover_source(cached_path: str | None) -> str | None:
+    if not cached_path:
+        return None
+
+    filename = cached_path.rsplit("/", 1)[-1]
+    if filename.startswith("local_"):
+        return "local"
+    if filename.startswith("hc_") or filename.startswith("hardcover_"):
+        return "hardcover"
+    if filename.startswith("google_"):
+        return "google"
+    if filename.startswith("openlibrary_"):
+        return "openlibrary"
+    if filename.startswith("cover_"):
+        return "legacy_remote"
+    return "unknown"
+
+
 class ScanStatus:
     def __init__(self):
         self.status: str = "idle"
@@ -449,13 +473,15 @@ async def run_full_sync(force: bool = False):
                         tags_json = json.dumps(hc_book.tags) if hc_book.tags else None
 
                         if book:
-                            # If title changed, clear negative cache so
-                            # Google/OL are retried with the new title
+                            # If title changed, clear cached Google/OL matches so
+                            # title-based metadata and cover lookups are rebuilt.
                             if book.title != hc_book.title:
-                                if book.google_id == "_none":
-                                    book.google_id = None
-                                if book.ol_edition_key == "_none":
-                                    book.ol_edition_key = None
+                                book.google_id = None
+                                book.google_published_date = None
+                                book.google_cover_url = None
+                                book.ol_edition_key = None
+                                book.ol_first_publish_year = None
+                                book.ol_cover_url = None
                                 book.publish_date_checked_at = None
                             if book.release_date != hc_book.release_date:
                                 book.publish_date_checked_at = None
@@ -467,6 +493,12 @@ async def run_full_sync(force: bool = False):
                             book.rating = hc_book.rating
                             book.pages = hc_book.pages
                             book.hardcover_slug = hc_book.slug
+                            book.compilation = hc_book.compilation
+                            book.book_category_id = hc_book.book_category_id
+                            book.book_category_name = get_book_category_name(hc_book.book_category_id)
+                            book.literary_type_id = hc_book.literary_type_id
+                            book.literary_type_name = get_literary_type_name(hc_book.literary_type_id)
+                            book.hardcover_state = hc_book.state or None
                             book.language = hc_book.language or book.language
                         else:
                             book = Book(
@@ -474,6 +506,12 @@ async def run_full_sync(force: bool = False):
                                 author_id=author.id,
                                 hardcover_id=hc_book.id,
                                 hardcover_slug=hc_book.slug,
+                                compilation=hc_book.compilation,
+                                book_category_id=hc_book.book_category_id,
+                                book_category_name=get_book_category_name(hc_book.book_category_id),
+                                literary_type_id=hc_book.literary_type_id,
+                                literary_type_name=get_literary_type_name(hc_book.literary_type_id),
+                                hardcover_state=hc_book.state or None,
                                 description=hc_book.description,
                                 release_date=hc_book.release_date,
                                 cover_image_url=hc_book.image_url,
@@ -586,6 +624,7 @@ async def run_full_sync(force: bool = False):
                 synced_author_ids = [a.id for a in authors if a.hardcover_id]
                 google_data = {}  # book_id -> GBook (reused for cover URLs in Phase 6)
                 ol_data = {}      # book_id -> OLBook
+                google_retry_ids: set[int] = set()
 
                 if synced_author_ids:
                     books_result = await db.execute(
@@ -633,6 +672,7 @@ async def run_full_sync(force: bool = False):
                             google_client = GoogleBooksClient(google_api_key)
                             try:
                                 fetched = 0
+                                throttled = False
                                 for i, book in enumerate(books_need_google):
                                     try:
                                         gbook = None
@@ -653,17 +693,33 @@ async def run_full_sync(force: bool = False):
                                         else:
                                             # Mark as searched so we don't retry
                                             book.google_id = "_none"
-                                    except Exception as e:
+                                    except GoogleBooksThrottledError:
+                                        throttled = True
+                                        google_retry_ids.update(
+                                            pending_book.id for pending_book in books_need_google[i:]
+                                        )
+                                        logger.warning(
+                                            "Google Books throttled after %d/%d uncached lookup(s); "
+                                            "deferring the remaining %d book(s) for a later scan",
+                                            i,
+                                            len(books_need_google),
+                                            len(books_need_google) - i,
+                                        )
+                                        scan_status.message = (
+                                            "Google Books throttled; deferring remaining lookups"
+                                        )
+                                        break
+                                    except GoogleBooksLookupError as e:
+                                        google_retry_ids.add(book.id)
                                         logger.warning(
                                             "Google Books lookup failed for '%s': %s",
                                             book.title[:50], e,
                                         )
-                                    if (i + 1) % 10 == 0:
-                                        scan_status.message = (
-                                            f"Fetching dates from Google Books... "
-                                            f"{i + 1}/{len(books_need_google)}"
-                                        )
-                                        await asyncio.sleep(0.1)
+                                    scan_status.message = (
+                                        f"Fetching dates from Google Books... "
+                                        f"{i + 1}/{len(books_need_google)} "
+                                        f"({len(books_to_reconcile) - len(books_need_google)} cached)"
+                                    )
                                 await db.commit()
                                 logger.info(
                                     "Google Books: fetched %d new, %d cached, %d total of %d books",
@@ -672,6 +728,12 @@ async def run_full_sync(force: bool = False):
                                     len(google_data),
                                     len(books_to_reconcile),
                                 )
+                                if throttled or google_retry_ids:
+                                    logger.warning(
+                                        "Google Books: deferred finalization for %d book(s) due to "
+                                        "throttling/request failures",
+                                        len(google_retry_ids),
+                                    )
                             finally:
                                 await google_client.close()
                         else:
@@ -775,7 +837,10 @@ async def run_full_sync(force: bool = False):
 
                     # 5c: Apply reconciled dates
                     reconciled = 0
+                    finalized = 0
                     for book in books_to_reconcile:
+                        if book.id in google_retry_ids:
+                            continue
                         gbook = google_data.get(book.id)
                         g_year = gbook.publish_year if gbook else None
                         ol_book = ol_data.get(book.id)
@@ -790,6 +855,7 @@ async def run_full_sync(force: bool = False):
                             book.release_date = new_date
                             reconciled += 1
                         book.publish_date_checked_at = datetime.utcnow()
+                        finalized += 1
 
                     if books_to_reconcile:
                         await db.commit()
@@ -797,8 +863,13 @@ async def run_full_sync(force: bool = False):
                             logger.info("Reconciled %d publish date(s)", reconciled)
                         logger.info(
                             "Publish dates finalized for %d book(s); future scans will skip them",
-                            len(books_to_reconcile),
+                            finalized,
                         )
+                        if google_retry_ids:
+                            logger.warning(
+                                "Left %d book(s) unchecked so a later scan can retry Google Books",
+                                len(google_retry_ids),
+                            )
                     else:
                         logger.info("Publish dates already finalized for all books; skipping phase 5")
 
@@ -814,8 +885,12 @@ async def run_full_sync(force: bool = False):
 
                 # Track cover heights in memory to avoid re-reading cached files
                 cover_heights = {}
+                cover_sources = {}
                 for book in all_books:
                     cover_heights[book.id] = get_cached_cover_height(
+                        book.cover_image_cached_path
+                    )
+                    cover_sources[book.id] = _get_cached_cover_source(
                         book.cover_image_cached_path
                     )
 
@@ -841,20 +916,20 @@ async def run_full_sync(force: bool = False):
                     if cached:
                         book.cover_image_cached_path = cached
                         cover_heights[book.id] = get_cached_cover_height(cached)
+                        cover_sources[book.id] = _get_cached_cover_source(cached)
                         local_cached += 1
                 if local_cached:
                     logger.info("Cached/upgraded %d local cover(s)", local_cached)
                 await db.commit()
 
-                # 6b: Hardcover covers — concurrent download for books under threshold
-                # Skip books that already have an HC or cover_* cached file
+                # 6b: Hardcover covers — concurrent download for books under threshold.
+                # Hardcover should reclaim books from legacy/Google/OL remote covers.
                 scan_status.message = "Downloading covers from Hardcover..."
                 books_for_hc = [
                     b for b in all_books
                     if cover_heights.get(b.id, 0) < COVER_HEIGHT_THRESHOLD
                     and b.cover_image_url
-                    and not (b.cover_image_cached_path or "").startswith("cache/books/hc_")
-                    and not (b.cover_image_cached_path or "").startswith("cache/books/cover_")
+                    and cover_sources.get(b.id) != "hardcover"
                 ]
                 hc_covers = 0
                 if books_for_hc:
@@ -872,27 +947,32 @@ async def run_full_sync(force: bool = False):
                             continue
                         dims = get_image_dimensions(data)
                         new_height = dims[1] if dims else 0
-                        if new_height > cover_heights.get(book.id, 0):
+                        current_source = cover_sources.get(book.id)
+                        current_height = cover_heights.get(book.id, 0)
+                        should_replace = current_source in {None, "legacy_remote", "google", "openlibrary"}
+                        if should_replace or new_height > current_height:
                             path = cache_cover_data(data, book.id, "hardcover")
                             if path:
                                 book.cover_image_cached_path = path
                                 cover_heights[book.id] = new_height
+                                cover_sources[book.id] = "hardcover"
                                 hc_covers += 1
                     await db.commit()
                 if hc_covers:
                     logger.info("Cached %d cover(s) from Hardcover", hc_covers)
                 scan_status.progress = 90.0
 
-                # 6c: Google covers — for books still under threshold
+                # 6c: Google covers — only use fresh Google matches from this scan
+                # and only for books that still have no cover and no Hardcover art.
                 google_cover_books = [
                     b for b in all_books
-                    if b.google_cover_url
+                    if b.id in google_data and google_data[b.id].cover_url
                 ]
                 if google_cover_books:
                     scan_status.message = "Downloading covers from Google Books..."
                     books_for_google = [
                         b for b in google_cover_books
-                        if cover_heights.get(b.id, 0) < COVER_HEIGHT_THRESHOLD
+                        if not b.cover_image_cached_path and not b.cover_image_url
                     ]
                     google_covers = 0
                     if books_for_google:
@@ -900,7 +980,10 @@ async def run_full_sync(force: bool = False):
 
                         async def _dl_google(book):
                             async with sem:
-                                return await download_image_bytes(book.google_cover_url)
+                                gbook = google_data.get(book.id)
+                                if not gbook or not gbook.cover_url:
+                                    return None
+                                return await download_image_bytes(gbook.cover_url)
 
                         g_results = await asyncio.gather(
                             *[_dl_google(b) for b in books_for_google]
@@ -915,6 +998,7 @@ async def run_full_sync(force: bool = False):
                                 if path:
                                     book.cover_image_cached_path = path
                                     cover_heights[book.id] = new_height
+                                    cover_sources[book.id] = "google"
                                     google_covers += 1
                         await db.commit()
                     if google_covers:

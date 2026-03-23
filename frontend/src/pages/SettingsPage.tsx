@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
-import { useSettings, useUpdateSettings, useScanStatus, useTriggerScan, useResetData } from "../api/settings";
+import { useSettings, useUpdateSettings, useScanStatus, useTriggerScan, useResetData, useApiUsage } from "../api/settings";
 import { useQueryClient } from "@tanstack/react-query";
 
 export default function SettingsPage() {
@@ -21,12 +21,28 @@ export default function SettingsPage() {
 
   const { data: scanStatus } = useScanStatus(true);
   const isScanning = scanStatus?.status === "scanning";
+  const { data: apiUsage } = useApiUsage(7, true);
+  const wasScanningRef = useRef(false);
 
   useEffect(() => {
     if (settings?.scan_interval_hours !== undefined) {
       setScanInterval(String(settings.scan_interval_hours));
     }
   }, [settings?.scan_interval_hours]);
+
+  useEffect(() => {
+    if (isScanning) {
+      wasScanningRef.current = true;
+      return;
+    }
+
+    if (wasScanningRef.current && scanStatus?.status === "idle" && scanStatus.progress >= 100) {
+      wasScanningRef.current = false;
+      queryClient.invalidateQueries({ queryKey: ["authors"] });
+      queryClient.invalidateQueries({ queryKey: ["books"] });
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    }
+  }, [isScanning, queryClient, scanStatus]);
 
   const handleSaveKey = async () => {
     if (!apiKey.trim()) return;
@@ -52,18 +68,15 @@ export default function SettingsPage() {
 
   const handleScan = async (force?: boolean) => {
     await triggerScan.mutateAsync(force);
-    const pollUntilDone = setInterval(async () => {
-      const status = await fetch("/api/library/status").then((r) => r.json());
-      if (status.status === "idle" && status.progress >= 100) {
-        clearInterval(pollUntilDone);
-        queryClient.invalidateQueries({ queryKey: ["authors"] });
-        queryClient.invalidateQueries({ queryKey: ["books"] });
-      }
-    }, 3000);
+    queryClient.invalidateQueries({ queryKey: ["scanStatus"] });
   };
 
   const parsedInterval = parseInt(scanInterval, 10);
   const intervalChanged = !isNaN(parsedInterval) && parsedInterval >= 0 && parsedInterval !== (settings?.scan_interval_hours ?? 24);
+  const formatUsageDay = (day: string) => {
+    const [year, month, date] = day.split("-");
+    return `${parseInt(month, 10)}/${parseInt(date, 10)}/${year.slice(2)}`;
+  };
 
   return (
     <div className="max-w-2xl">
@@ -226,6 +239,10 @@ export default function SettingsPage() {
           Only new and removed files are processed — existing books are untouched.
         </p>
 
+        <p className="text-xs text-slate-500 mb-4">
+          Live scan status refreshes automatically every second while this page is open.
+        </p>
+
         {isScanning && scanStatus && (
           <div className="mb-4">
             <div className="flex justify-between text-sm mb-1">
@@ -291,6 +308,38 @@ export default function SettingsPage() {
             Active: scanning every {settings?.scan_interval_hours ?? 24} hour(s)
           </p>
         )}
+      </div>
+
+      {/* API Usage */}
+      <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
+        <h3 className="text-lg font-semibold mb-4">API Calls</h3>
+        <p className="text-sm text-slate-400 mb-4">
+          Daily outbound API call totals by source for the last 7 days.
+        </p>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm border-collapse">
+            <thead>
+              <tr className="bg-slate-700/60 text-slate-200">
+                <th className="border border-slate-600 px-3 py-2 text-left">API Calls</th>
+                <th className="border border-slate-600 px-3 py-2 text-right">Total</th>
+                <th className="border border-slate-600 px-3 py-2 text-right">Hard Cover</th>
+                <th className="border border-slate-600 px-3 py-2 text-right">Google</th>
+                <th className="border border-slate-600 px-3 py-2 text-right">Open Library</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(apiUsage ?? []).map((row) => (
+                <tr key={row.day} className="text-slate-300 odd:bg-slate-800 even:bg-slate-800/50">
+                  <td className="border border-slate-700 px-3 py-2">{formatUsageDay(row.day)}</td>
+                  <td className="border border-slate-700 px-3 py-2 text-right">{row.total}</td>
+                  <td className="border border-slate-700 px-3 py-2 text-right">{row.hardcover}</td>
+                  <td className="border border-slate-700 px-3 py-2 text-right">{row.google}</td>
+                  <td className="border border-slate-700 px-3 py-2 text-right">{row.openlibrary}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {/* Logs */}

@@ -187,11 +187,12 @@ async def download_image_bytes(url: str) -> bytes | None:
 
 
 def cache_cover_data(data: bytes, book_id: int, source: str = "remote") -> str | None:
-    """Save raw image bytes to cache as cover_{book_id}.ext. Overwrites if exists."""
+    """Save raw image bytes to cache as {source}_{book_id}.ext. Overwrites if exists."""
     if not data or len(data) < MIN_COVER_BYTES:
         return None
     ext = ".png" if data[:8] == b"\x89PNG\r\n\x1a\n" else ".jpg"
-    dest = CACHE_DIR / "books" / f"cover_{book_id}{ext}"
+    safe_source = source.lower().replace(" ", "_")
+    dest = CACHE_DIR / "books" / f"{safe_source}_{book_id}{ext}"
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(data)
@@ -201,7 +202,7 @@ def cache_cover_data(data: bytes, book_id: int, source: str = "remote") -> str |
             "Cached %s cover for book %d: %s (%d bytes)",
             source, book_id, dim_str, len(data),
         )
-        return f"cache/books/cover_{book_id}{ext}"
+        return f"cache/books/{safe_source}_{book_id}{ext}"
     except Exception as e:
         logger.warning("Failed to cache %s cover for book %d: %s", source, book_id, e)
         return None

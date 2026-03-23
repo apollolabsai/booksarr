@@ -21,6 +21,12 @@ export interface BookInAuthor {
   title: string;
   hardcover_id: number | null;
   hardcover_slug: string | null;
+  compilation: boolean | null;
+  book_category_id: number | null;
+  book_category_name: string | null;
+  literary_type_id: number | null;
+  literary_type_name: string | null;
+  hardcover_state: string | null;
   isbn: string | null;
   description: string | null;
   release_date: string | null;
@@ -59,6 +65,12 @@ export interface Book {
   author_name: string;
   hardcover_id: number | null;
   hardcover_slug: string | null;
+  compilation: boolean | null;
+  book_category_id: number | null;
+  book_category_name: string | null;
+  literary_type_id: number | null;
+  literary_type_name: string | null;
+  hardcover_state: string | null;
   isbn: string | null;
   release_date: string | null;
   cover_image_url: string | null;
@@ -89,6 +101,14 @@ export interface BuildInfo {
   branch: string;
   commit: string;
   date: string;
+}
+
+export interface ApiUsageDay {
+  day: string;
+  total: number;
+  hardcover: number;
+  google: number;
+  openlibrary: number;
 }
 
 export interface LogEntry {

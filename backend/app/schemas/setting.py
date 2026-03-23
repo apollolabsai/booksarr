@@ -15,3 +15,11 @@ class SettingsUpdate(BaseModel):
     hardcover_api_key: str | None = None
     google_books_api_key: str | None = None
     scan_interval_hours: int | None = None
+
+
+class ApiUsageDay(BaseModel):
+    day: str
+    total: int
+    hardcover: int
+    google: int
+    openlibrary: int

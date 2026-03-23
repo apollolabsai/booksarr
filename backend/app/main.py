@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from backend.app.config import CONFIG_DIR
 from backend.app.database import engine, Base
 from backend.app.models import *  # noqa: F401, F403
+from backend.app.utils.db_migrations import run_schema_migrations
 
 # --- Logging setup ---
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -34,6 +35,7 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Booksarr...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(run_schema_migrations)
     logger.info("Database initialized")
 
     from backend.app.services.scheduler import start_scheduler, stop_scheduler

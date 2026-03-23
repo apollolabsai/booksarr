@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 import httpx
 
 from backend.app.utils.rate_limiter import RateLimiter
+from backend.app.utils.api_usage import record_api_call
 
 logger = logging.getLogger("booksarr.hardcover")
 
@@ -41,6 +42,10 @@ class HCBook:
     language: str = ""
     is_canonical: bool = True
     users_count: int = 0
+    compilation: bool | None = None
+    book_category_id: int | None = None
+    literary_type_id: int | None = None
+    state: str = ""
     tags: list[str] = field(default_factory=list)
     series_refs: list[HCSeriesRef] = field(default_factory=list)
 
@@ -80,6 +85,7 @@ class HardcoverClient:
 
         logger.debug("GraphQL request: vars=%s", op_name)
         try:
+            await record_api_call("hardcover")
             resp = await client.post(API_URL, json=payload)
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
@@ -138,6 +144,7 @@ class HardcoverClient:
             order_by: {users_count: desc}
           ) {
             id title slug description release_date canonical_id
+            compilation book_category_id literary_type_id state
             image { url }
             default_cover_edition { language { code2 } }
             cached_contributors
@@ -213,6 +220,10 @@ class HardcoverClient:
                 language=language,
                 is_canonical=b.get("canonical_id") is None,
                 users_count=b.get("users_count", 0) or 0,
+                compilation=b.get("compilation"),
+                book_category_id=b.get("book_category_id"),
+                literary_type_id=b.get("literary_type_id"),
+                state=b.get("state", "") or "",
                 tags=tags,
                 series_refs=series_refs,
             ))

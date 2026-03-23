@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchApi } from "./client";
-import type { Settings, ScanStatus, BuildInfo } from "../types";
+import type { Settings, ScanStatus, BuildInfo, ApiUsageDay } from "../types";
 
 export function useSettings() {
   return useQuery({
@@ -22,7 +22,8 @@ export function useScanStatus(enabled: boolean) {
   return useQuery({
     queryKey: ["scanStatus"],
     queryFn: () => fetchApi<ScanStatus>("/library/status"),
-    refetchInterval: enabled ? 2000 : false,
+    refetchInterval: enabled ? 1000 : false,
+    refetchIntervalInBackground: true,
   });
 }
 
@@ -52,5 +53,14 @@ export function useBuildInfo() {
     queryKey: ["buildInfo"],
     queryFn: () => fetchApi<BuildInfo>("/settings/build-info"),
     staleTime: Infinity,
+  });
+}
+
+export function useApiUsage(days: number, enabled: boolean) {
+  return useQuery({
+    queryKey: ["apiUsage", days],
+    queryFn: () => fetchApi<ApiUsageDay[]>(`/settings/api-usage?days=${days}`),
+    refetchInterval: enabled ? 5000 : false,
+    refetchIntervalInBackground: true,
   });
 }
