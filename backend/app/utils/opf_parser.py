@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
+import zipfile
 
 from lxml import etree
 
@@ -37,7 +38,27 @@ def parse_opf(opf_path: Path) -> OPFMetadata | None:
     except Exception:
         return None
 
-    root = tree.getroot()
+    return _parse_opf_root(tree.getroot())
+
+
+def parse_epub_opf(epub_path: Path) -> OPFMetadata | None:
+    try:
+        with zipfile.ZipFile(str(epub_path), "r") as zf:
+            container = zf.read("META-INF/container.xml")
+            container_root = etree.fromstring(container)
+            rootfile = container_root.find(".//{urn:oasis:names:tc:opendocument:xmlns:container}rootfile")
+            opf_path = rootfile.get("full-path") if rootfile is not None else None
+            if not opf_path:
+                return None
+            opf_data = zf.read(opf_path)
+            opf_root = etree.fromstring(opf_data)
+    except Exception:
+        return None
+
+    return _parse_opf_root(opf_root)
+
+
+def _parse_opf_root(root) -> OPFMetadata:
     meta = OPFMetadata()
 
     # Title

@@ -28,6 +28,9 @@ export interface BookInAuthor {
   literary_type_name: string | null;
   hardcover_state: string | null;
   isbn: string | null;
+  has_valid_isbn: boolean;
+  matched_google: boolean;
+  matched_openlibrary: boolean;
   description: string | null;
   release_date: string | null;
   cover_image_url: string | null;
@@ -72,6 +75,9 @@ export interface Book {
   literary_type_name: string | null;
   hardcover_state: string | null;
   isbn: string | null;
+  has_valid_isbn: boolean;
+  matched_google: boolean;
+  matched_openlibrary: boolean;
   release_date: string | null;
   cover_image_url: string | null;
   cover_image_cached_path: string | null;
@@ -92,6 +98,41 @@ export interface ScanStatus {
   message: string;
 }
 
+export interface HiddenCategorySummary {
+  key: string;
+  label: string;
+  count: number;
+}
+
+export interface ScanSourceSummary {
+  lookups_attempted: number;
+  matched: number;
+  failed: number;
+  cached: number;
+  deferred: number;
+  failure_reasons: Record<string, number>;
+}
+
+export interface ScanSummary {
+  status: string;
+  mode: string;
+  message: string;
+  started_at: string | null;
+  completed_at: string | null;
+  files_total: number;
+  files_new: number;
+  files_deleted: number;
+  files_unchanged: number;
+  owned_books_found: number;
+  authors_added: number;
+  books_added: number;
+  books_hidden: number;
+  hidden_by_category: HiddenCategorySummary[];
+  hardcover: ScanSourceSummary;
+  google: ScanSourceSummary;
+  openlibrary: ScanSourceSummary;
+}
+
 export interface Settings {
   hardcover_api_key: string;
   hardcover_api_key_from_env: boolean;
@@ -99,6 +140,7 @@ export interface Settings {
   google_books_api_key_from_env: boolean;
   library_path: string;
   last_scan_at: string | null;
+  last_scan_summary: ScanSummary | null;
   scan_interval_hours: number;
   visibility_categories: VisibilityCategories;
 }

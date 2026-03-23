@@ -10,7 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.config import BOOKS_DIR, CONFIG_DIR, HARDCOVER_API_KEY, GOOGLE_BOOKS_API_KEY
 from backend.app.database import get_db
 from backend.app.models import Setting
-from backend.app.schemas.setting import SettingsResponse, SettingsUpdate, ApiUsageDay, VisibilityCategories
+from backend.app.schemas.setting import (
+    SettingsResponse,
+    SettingsUpdate,
+    ApiUsageDay,
+    VisibilityCategories,
+    ScanSummary,
+)
 from backend.app.utils.api_usage import get_api_usage_rows
 from backend.app.utils.book_visibility import normalize_visibility_settings
 
@@ -32,6 +38,13 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
     google_key = GOOGLE_BOOKS_API_KEY or settings.get("google_books_api_key", "")
 
     last_scan = settings.get("last_scan_at")
+    last_scan_summary = None
+    raw_summary = settings.get("last_scan_summary")
+    if raw_summary:
+        try:
+            last_scan_summary = ScanSummary.model_validate_json(raw_summary)
+        except ValueError:
+            logger.warning("Ignoring invalid last_scan_summary setting payload")
     scan_interval = int(settings.get("scan_interval_hours", "24"))
     visibility_categories = normalize_visibility_settings(settings.get("book_visibility_categories"))
 
@@ -48,6 +61,7 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
         google_books_api_key_from_env=google_from_env,
         library_path=str(BOOKS_DIR),
         last_scan_at=last_scan,
+        last_scan_summary=last_scan_summary,
         scan_interval_hours=scan_interval,
         visibility_categories=VisibilityCategories(**visibility_categories),
     )
@@ -100,8 +114,8 @@ async def reset_all_data(db: AsyncSession = Depends(get_db)):
     # Preserve settings and persistent API usage history.
     for table in ["book_files", "book_series", "books", "series", "authors"]:
         await db.execute(text(f"DELETE FROM {table}"))
-    # Clear last_scan_at so it shows "Never" again
-    await db.execute(text("DELETE FROM settings WHERE key = 'last_scan_at'"))
+    # Clear last scan markers so the UI resets cleanly
+    await db.execute(text("DELETE FROM settings WHERE key IN ('last_scan_at', 'last_scan_summary')"))
     await db.commit()
     logger.info("Library data cleared (settings and API usage preserved)")
 

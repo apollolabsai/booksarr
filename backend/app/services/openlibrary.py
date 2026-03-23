@@ -32,6 +32,12 @@ class OLBook:
         return ""
 
 
+@dataclass
+class OpenLibraryLookupResult:
+    book: OLBook | None
+    reason: str
+
+
 class OpenLibraryClient:
     def __init__(self):
         self._client: httpx.AsyncClient | None = None
@@ -49,6 +55,9 @@ class OpenLibraryClient:
             await self._client.aclose()
 
     async def search_book(self, title: str, author: str) -> OLBook | None:
+        return (await self.search_book_with_result(title, author)).book
+
+    async def search_book_with_result(self, title: str, author: str) -> OpenLibraryLookupResult:
         """Search Open Library for a book by title and author."""
         client = await self._get_client()
         try:
@@ -64,25 +73,37 @@ class OpenLibraryClient:
             )
             resp.raise_for_status()
             data = resp.json()
-        except Exception as e:
+        except httpx.HTTPStatusError as e:
             logger.debug("Open Library search failed for '%s': %s", title, e)
-            return None
+            return OpenLibraryLookupResult(book=None, reason="http_error")
+        except httpx.RequestError as e:
+            logger.debug("Open Library search failed for '%s': %s", title, e)
+            return OpenLibraryLookupResult(book=None, reason="request_error")
+        except ValueError as e:
+            logger.debug("Open Library search failed for '%s': %s", title, e)
+            return OpenLibraryLookupResult(book=None, reason="invalid_json")
 
         docs = data.get("docs", [])
         if not docs:
-            return None
+            return OpenLibraryLookupResult(book=None, reason="no_result")
 
         doc = docs[0]
-        return OLBook(
-            title=doc.get("title", ""),
-            first_publish_year=doc.get("first_publish_year"),
-            cover_id=doc.get("cover_i"),
-            cover_edition_key=doc.get("cover_edition_key", ""),
-            edition_count=doc.get("edition_count", 0),
-            isbn_list=doc.get("isbn", []),
+        return OpenLibraryLookupResult(
+            book=OLBook(
+                title=doc.get("title", ""),
+                first_publish_year=doc.get("first_publish_year"),
+                cover_id=doc.get("cover_i"),
+                cover_edition_key=doc.get("cover_edition_key", ""),
+                edition_count=doc.get("edition_count", 0),
+                isbn_list=doc.get("isbn", []),
+            ),
+            reason="matched",
         )
 
     async def search_book_by_isbn(self, isbn: str) -> OLBook | None:
+        return (await self.search_book_by_isbn_with_result(isbn)).book
+
+    async def search_book_by_isbn_with_result(self, isbn: str) -> OpenLibraryLookupResult:
         """Search Open Library by ISBN."""
         client = await self._get_client()
         try:
@@ -97,20 +118,29 @@ class OpenLibraryClient:
             )
             resp.raise_for_status()
             data = resp.json()
-        except Exception as e:
+        except httpx.HTTPStatusError as e:
             logger.debug("Open Library ISBN search failed for '%s': %s", isbn, e)
-            return None
+            return OpenLibraryLookupResult(book=None, reason="http_error")
+        except httpx.RequestError as e:
+            logger.debug("Open Library ISBN search failed for '%s': %s", isbn, e)
+            return OpenLibraryLookupResult(book=None, reason="request_error")
+        except ValueError as e:
+            logger.debug("Open Library ISBN search failed for '%s': %s", isbn, e)
+            return OpenLibraryLookupResult(book=None, reason="invalid_json")
 
         docs = data.get("docs", [])
         if not docs:
-            return None
+            return OpenLibraryLookupResult(book=None, reason="no_result")
 
         doc = docs[0]
-        return OLBook(
-            title=doc.get("title", ""),
-            first_publish_year=doc.get("first_publish_year"),
-            cover_id=doc.get("cover_i"),
-            cover_edition_key=doc.get("cover_edition_key", ""),
-            edition_count=doc.get("edition_count", 0),
-            isbn_list=doc.get("isbn", []),
+        return OpenLibraryLookupResult(
+            book=OLBook(
+                title=doc.get("title", ""),
+                first_publish_year=doc.get("first_publish_year"),
+                cover_id=doc.get("cover_i"),
+                cover_edition_key=doc.get("cover_edition_key", ""),
+                edition_count=doc.get("edition_count", 0),
+                isbn_list=doc.get("isbn", []),
+            ),
+            reason="matched",
         )

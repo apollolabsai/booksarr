@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -6,11 +7,13 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models import Author, Book, BookFile
-from backend.app.utils.opf_parser import parse_opf
+from backend.app.utils.opf_parser import OPFMetadata, parse_epub_opf, parse_opf
 
 logger = logging.getLogger("booksarr.scanner")
 
 EBOOK_EXTENSIONS = {".epub"}
+_TRAILING_PAREN_RE = re.compile(r"\s*\([^)]*\)\s*$")
+_SERIES_BRACKET_RE = re.compile(r"\s*-\s*\[[^\]]+\]\s*")
 
 
 class ScanResult:
@@ -108,9 +111,7 @@ async def scan_library(db: AsyncSession, library_path: Path) -> ScanResult:
 
             ebook_file = library_path / rel_path
 
-            # Parse OPF metadata if available
-            opf_path = book_dir / "metadata.opf"
-            opf = parse_opf(opf_path) if opf_path.exists() else None
+            opf = _extract_best_metadata(ebook_file, author_name, book_dir.name)
 
             # Check for cover
             cover_path = book_dir / "cover.jpg"
@@ -123,13 +124,13 @@ async def scan_library(db: AsyncSession, library_path: Path) -> ScanResult:
                 file_name=ebook_file.name,
                 file_size=file_size,
                 file_format=ebook_file.suffix.lstrip(".").lower(),
-                opf_title=opf.title if opf else ebook_file.stem.split(" - ")[0].strip(),
-                opf_author=opf.author if opf else author_name,
-                opf_isbn=opf.isbn if opf and opf.isbn else None,
-                opf_series=opf.series if opf else None,
-                opf_series_index=opf.series_index if opf else None,
-                opf_publisher=opf.publisher if opf else None,
-                opf_description=opf.description if opf else None,
+                opf_title=opf.title or None,
+                opf_author=opf.author or author_name,
+                opf_isbn=opf.isbn or None,
+                opf_series=opf.series or None,
+                opf_series_index=opf.series_index,
+                opf_publisher=opf.publisher or None,
+                opf_description=opf.description or None,
                 local_cover_path=local_cover,
                 last_scanned_at=datetime.utcnow(),
             )
@@ -192,3 +193,55 @@ async def _get_or_create_author(db: AsyncSession, name: str) -> Author:
         db.add(author)
         await db.flush()
     return author
+
+
+def _extract_best_metadata(ebook_file: Path, author_name: str, book_dir_name: str) -> OPFMetadata:
+    opf_path = ebook_file.parent / "metadata.opf"
+    sidecar_meta = parse_opf(opf_path) if opf_path.exists() else None
+    epub_meta = parse_epub_opf(ebook_file) if ebook_file.suffix.lower() == ".epub" else None
+    if _has_useful_metadata(sidecar_meta):
+        return _normalize_metadata(sidecar_meta, author_name, book_dir_name, ebook_file)
+    if _has_useful_metadata(epub_meta):
+        return _normalize_metadata(epub_meta, author_name, book_dir_name, ebook_file)
+    return _filename_fallback_metadata(ebook_file, author_name, book_dir_name)
+
+
+def _has_useful_metadata(meta: OPFMetadata | None) -> bool:
+    return bool(meta and (meta.title or meta.author or meta.isbn))
+
+
+def _normalize_metadata(meta: OPFMetadata, author_name: str, book_dir_name: str, ebook_file: Path) -> OPFMetadata:
+    title = (meta.title or "").strip()
+    author = (meta.author or "").strip() or author_name
+    if not title or title.lower() == author_name.strip().lower():
+        fallback = _filename_fallback_metadata(ebook_file, author_name, book_dir_name)
+        title = fallback.title
+    meta.title = title
+    meta.author = author
+    return meta
+
+
+def _filename_fallback_metadata(ebook_file: Path, author_name: str, book_dir_name: str) -> OPFMetadata:
+    stem = ebook_file.stem
+    stem = _SERIES_BRACKET_RE.sub(" - ", stem)
+    parts = [part.strip() for part in stem.split(" - ") if part.strip()]
+
+    title = ""
+    if len(parts) >= 2:
+        title = parts[-1]
+    elif parts:
+        title = parts[0]
+
+    title = _TRAILING_PAREN_RE.sub("", title).strip()
+    while True:
+        stripped = _TRAILING_PAREN_RE.sub("", title).strip()
+        if stripped == title:
+            break
+        title = stripped
+
+    if not title or title.lower() == author_name.strip().lower():
+        title = book_dir_name.strip()
+    if not title:
+        title = ebook_file.stem
+
+    return OPFMetadata(title=title.strip(), author=author_name.strip())

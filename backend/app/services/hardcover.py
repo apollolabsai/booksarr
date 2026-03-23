@@ -12,6 +12,12 @@ logger = logging.getLogger("booksarr.hardcover")
 API_URL = "https://api.hardcover.app/v1/graphql"
 
 
+class HardcoverLookupError(RuntimeError):
+    def __init__(self, reason: str, message: str):
+        self.reason = reason
+        super().__init__(message)
+
+
 @dataclass
 class HCAuthor:
     id: int
@@ -90,16 +96,23 @@ class HardcoverClient:
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
             logger.error("Hardcover API HTTP error %d for %s", e.response.status_code, op_name)
-            raise
+            raise HardcoverLookupError("http_error", f"HTTP {e.response.status_code}") from e
         except httpx.RequestError as e:
             logger.error("Hardcover API request failed for %s: %s", op_name, e)
-            raise
+            raise HardcoverLookupError("request_error", str(e)) from e
 
-        data = resp.json()
+        try:
+            data = resp.json()
+        except ValueError as e:
+            logger.error("Hardcover API invalid JSON for %s", op_name)
+            raise HardcoverLookupError("invalid_json", "invalid JSON") from e
 
         if "errors" in data:
             logger.error("GraphQL errors for %s: %s", op_name, data["errors"])
-            raise Exception(f"GraphQL error: {data['errors'][0].get('message', 'Unknown')}")
+            raise HardcoverLookupError(
+                "graphql_error",
+                data["errors"][0].get("message", "Unknown"),
+            )
 
         logger.debug("GraphQL response OK for %s", op_name)
         return data.get("data", {})

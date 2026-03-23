@@ -21,6 +21,9 @@ class BookSummary(BaseModel):
     literary_type_name: str | None
     hardcover_state: str | None
     isbn: str | None
+    has_valid_isbn: bool
+    matched_google: bool
+    matched_openlibrary: bool
     release_date: str | None
     cover_image_url: str | None
     cover_image_cached_path: str | None

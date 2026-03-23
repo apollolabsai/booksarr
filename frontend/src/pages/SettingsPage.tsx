@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useSettings, useUpdateSettings, useScanStatus, useTriggerScan, useResetData, useApiUsage } from "../api/settings";
 import { useQueryClient } from "@tanstack/react-query";
-import type { VisibilityCategories } from "../types";
+import type { ScanSummary, VisibilityCategories } from "../types";
 
 const VISIBILITY_OPTIONS: Array<{
   key: keyof VisibilityCategories;
@@ -81,6 +81,16 @@ export default function SettingsPage() {
   const [googleSaved, setGoogleSaved] = useState(false);
   const [scanInterval, setScanInterval] = useState("24");
   const [intervalSaved, setIntervalSaved] = useState(false);
+  const [persistedScanSummary, setPersistedScanSummary] = useState<ScanSummary | null>(() => {
+    if (typeof window === "undefined") return null;
+    const raw = window.localStorage.getItem("booksarr:lastScanSummary");
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as ScanSummary;
+    } catch {
+      return null;
+    }
+  });
   const [visibilityCategories, setVisibilityCategories] = useState<VisibilityCategories | null>(null);
   const [visibilitySaved, setVisibilitySaved] = useState(false);
   const queryClient = useQueryClient();
@@ -103,6 +113,22 @@ export default function SettingsPage() {
   }, [settings?.visibility_categories]);
 
   useEffect(() => {
+    if (!settings?.last_scan_summary || typeof window === "undefined") return;
+    setPersistedScanSummary(settings.last_scan_summary);
+    window.localStorage.setItem(
+      "booksarr:lastScanSummary",
+      JSON.stringify(settings.last_scan_summary),
+    );
+  }, [settings?.last_scan_summary]);
+
+  useEffect(() => {
+    if (!settings || typeof window === "undefined") return;
+    if (settings.last_scan_summary || settings.last_scan_at) return;
+    setPersistedScanSummary(null);
+    window.localStorage.removeItem("booksarr:lastScanSummary");
+  }, [settings]);
+
+  useEffect(() => {
     if (!location.hash) return;
     const id = location.hash.slice(1);
     const el = document.getElementById(id);
@@ -118,7 +144,7 @@ export default function SettingsPage() {
       return;
     }
 
-    if (wasScanningRef.current && scanStatus?.status === "idle" && scanStatus.progress >= 100) {
+    if (wasScanningRef.current && scanStatus?.status === "idle") {
       wasScanningRef.current = false;
       queryClient.invalidateQueries({ queryKey: ["authors"] });
       queryClient.invalidateQueries({ queryKey: ["books"] });
@@ -163,10 +189,24 @@ export default function SettingsPage() {
   const parsedInterval = parseInt(scanInterval, 10);
   const intervalChanged = !isNaN(parsedInterval) && parsedInterval >= 0 && parsedInterval !== (settings?.scan_interval_hours ?? 24);
   const visibilityChanged = JSON.stringify(visibilityCategories) !== JSON.stringify(settings?.visibility_categories ?? null);
+  const lastScanSummary = settings?.last_scan_summary ?? persistedScanSummary;
   const formatUsageDay = (day: string) => {
     const [year, month, date] = day.split("-");
     return `${parseInt(month, 10)}/${parseInt(date, 10)}/${year.slice(2)}`;
   };
+  const parseApiDate = (value: string | null | undefined) => {
+    if (!value) return null;
+    const normalized = /(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? value : `${value}Z`;
+    const date = new Date(normalized);
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
+  const formatApiDateTime = (value: string | null | undefined, fallback: string) =>
+    parseApiDate(value)?.toLocaleString() ?? fallback;
+  const formatSummaryReason = (value: string) =>
+    value
+      .split("_")
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ");
 
   return (
     <div className="max-w-2xl">
@@ -416,7 +456,7 @@ export default function SettingsPage() {
             <span className="text-slate-400">Last Scan</span>
             <span className="text-slate-300">
               {settings?.last_scan_at
-                ? new Date(settings.last_scan_at).toLocaleString()
+                ? formatApiDateTime(settings.last_scan_at, "Never")
                 : "Never"}
             </span>
           </div>
@@ -476,6 +516,116 @@ export default function SettingsPage() {
         <p className="text-xs text-slate-500">
           Scan Library detects new/removed files and only fetches metadata for changes. Full Refresh re-fetches all data from Hardcover.
         </p>
+
+        {lastScanSummary && (
+          <div className="mt-6 border-t border-slate-700 pt-6">
+            <div className="flex flex-col gap-1 mb-4">
+              <h4 className="text-base font-semibold text-slate-100">Last Run Summary</h4>
+              <p className="text-sm text-slate-400">
+                {lastScanSummary.completed_at
+                  ? `Completed ${formatApiDateTime(lastScanSummary.completed_at, "recently")}`
+                  : "Most recent completed scan"}
+                {" · "}
+                {lastScanSummary.mode === "full_refresh" ? "Full Refresh" : "Scan Library"}
+                {" · "}
+                <span className={lastScanSummary.status === "error" ? "text-red-400" : "text-emerald-400"}>
+                  {lastScanSummary.status === "error" ? "Failed" : "Completed"}
+                </span>
+              </p>
+              {lastScanSummary.message && (
+                <p className="text-xs text-slate-500">{lastScanSummary.message}</p>
+              )}
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 mb-4">
+              <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-4">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Owned Books Found Locally</div>
+                <div className="mt-1 text-2xl font-semibold text-slate-100">{lastScanSummary.owned_books_found}</div>
+              </div>
+              <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-4">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Authors Added</div>
+                <div className="mt-1 text-2xl font-semibold text-slate-100">{lastScanSummary.authors_added}</div>
+              </div>
+              <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-4">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Books Added</div>
+                <div className="mt-1 text-2xl font-semibold text-slate-100">{lastScanSummary.books_added}</div>
+              </div>
+              <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-4">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Books Hidden</div>
+                <div className="mt-1 text-2xl font-semibold text-slate-100">{lastScanSummary.books_hidden}</div>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-slate-700 bg-slate-900/30 px-4 py-3 mb-4 text-sm text-slate-300">
+              Files processed: {lastScanSummary.files_total} total, {lastScanSummary.files_new} new, {lastScanSummary.files_deleted} deleted, {lastScanSummary.files_unchanged} unchanged.
+            </div>
+
+            {lastScanSummary.hidden_by_category.length > 0 && (
+              <div className="mb-4">
+                <div className="text-sm font-medium text-slate-200 mb-2">Hidden By Category</div>
+                <div className="flex flex-wrap gap-2">
+                  {lastScanSummary.hidden_by_category.map((item) => (
+                    <span
+                      key={item.key}
+                      className="rounded-full border border-slate-700 bg-slate-900/40 px-3 py-1 text-xs text-slate-300"
+                    >
+                      {item.label}: {item.count}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="grid gap-4 lg:grid-cols-3">
+              {[
+                { key: "hardcover", label: "Hardcover", summary: lastScanSummary.hardcover },
+                { key: "google", label: "Google Books", summary: lastScanSummary.google },
+                { key: "openlibrary", label: "Open Library", summary: lastScanSummary.openlibrary },
+              ].map((source) => (
+                <div key={source.key} className="rounded-lg border border-slate-700 bg-slate-900/30 p-4">
+                  <div className="text-sm font-semibold text-slate-100 mb-3">{source.label}</div>
+                  <div className="grid grid-cols-2 gap-3 text-sm mb-3">
+                    <div>
+                      <div className="text-slate-500">Lookups</div>
+                      <div className="text-slate-200">{source.summary.lookups_attempted}</div>
+                    </div>
+                    <div>
+                      <div className="text-slate-500">Matched</div>
+                      <div className="text-slate-200">{source.summary.matched}</div>
+                    </div>
+                    <div>
+                      <div className="text-slate-500">Failed</div>
+                      <div className="text-slate-200">{source.summary.failed}</div>
+                    </div>
+                    <div>
+                      <div className="text-slate-500">Cached</div>
+                      <div className="text-slate-200">{source.summary.cached}</div>
+                    </div>
+                    <div>
+                      <div className="text-slate-500">Deferred</div>
+                      <div className="text-slate-200">{source.summary.deferred}</div>
+                    </div>
+                  </div>
+                  {Object.keys(source.summary.failure_reasons).length > 0 ? (
+                    <div className="border-t border-slate-700 pt-3">
+                      <div className="text-xs uppercase tracking-wide text-slate-500 mb-2">Failure Reasons</div>
+                      <div className="space-y-1 text-sm">
+                        {Object.entries(source.summary.failure_reasons).map(([reason, count]) => (
+                          <div key={reason} className="flex justify-between gap-3 text-slate-300">
+                            <span>{formatSummaryReason(reason)}</span>
+                            <span>{count}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="border-t border-slate-700 pt-3 text-sm text-slate-500">No failures recorded in this run.</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Scheduled Scan */}

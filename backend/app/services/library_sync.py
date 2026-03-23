@@ -3,7 +3,8 @@ import json
 import logging
 import re
 import unicodedata
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +13,7 @@ from backend.app.config import BOOKS_DIR
 from backend.app.database import async_session
 from backend.app.models import Author, Book, BookFile, BookSeries, Series, Setting
 from backend.app.services.scanner import scan_library, ScanResult
-from backend.app.services.hardcover import HardcoverClient
+from backend.app.services.hardcover import HardcoverClient, HardcoverLookupError
 from backend.app.services.matcher import titles_match
 from backend.app.services.image_cache import (
     cache_author_image,
@@ -23,7 +24,11 @@ from backend.app.services.image_cache import (
 )
 from backend.app.services.openlibrary import OpenLibraryClient, OLBook
 from backend.app.utils.hardcover_metadata import get_book_category_name, get_literary_type_name
-from backend.app.utils.book_visibility import get_book_visibility_settings, is_book_visible
+from backend.app.utils.book_visibility import (
+    get_book_visibility_settings,
+    get_hidden_category,
+    is_book_visible,
+)
 from backend.app.services.google_books import (
     GoogleBooksClient,
     GBook,
@@ -315,6 +320,85 @@ class ScanStatus:
 scan_status = ScanStatus()
 
 
+@dataclass
+class SourceRunSummary:
+    lookups_attempted: int = 0
+    matched: int = 0
+    failed: int = 0
+    cached: int = 0
+    deferred: int = 0
+    failure_reasons: dict[str, int] = field(default_factory=dict)
+
+    def record_match(self, count: int = 1):
+        self.lookups_attempted += count
+        self.matched += count
+
+    def record_failure(self, reason: str, count: int = 1, attempted: bool = True):
+        if attempted:
+            self.lookups_attempted += count
+        self.failed += count
+        self.failure_reasons[reason] = self.failure_reasons.get(reason, 0) + count
+
+    def record_cached(self, count: int = 1):
+        self.cached += count
+
+    def record_deferred(self, reason: str, count: int = 1):
+        self.deferred += count
+        self.failure_reasons[reason] = self.failure_reasons.get(reason, 0) + count
+
+    def to_dict(self) -> dict:
+        return {
+            "lookups_attempted": self.lookups_attempted,
+            "matched": self.matched,
+            "failed": self.failed,
+            "cached": self.cached,
+            "deferred": self.deferred,
+            "failure_reasons": dict(sorted(self.failure_reasons.items())),
+        }
+
+
+@dataclass
+class ScanRunSummary:
+    mode: str
+    started_at: str
+    status: str = "completed"
+    message: str = ""
+    completed_at: str | None = None
+    files_total: int = 0
+    files_new: int = 0
+    files_deleted: int = 0
+    files_unchanged: int = 0
+    owned_books_found: int = 0
+    authors_added: int = 0
+    books_added: int = 0
+    books_hidden: int = 0
+    hidden_by_category: list[dict[str, str | int]] = field(default_factory=list)
+    hardcover: SourceRunSummary = field(default_factory=SourceRunSummary)
+    google: SourceRunSummary = field(default_factory=SourceRunSummary)
+    openlibrary: SourceRunSummary = field(default_factory=SourceRunSummary)
+
+    def to_dict(self) -> dict:
+        return {
+            "status": self.status,
+            "mode": self.mode,
+            "message": self.message,
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+            "files_total": self.files_total,
+            "files_new": self.files_new,
+            "files_deleted": self.files_deleted,
+            "files_unchanged": self.files_unchanged,
+            "owned_books_found": self.owned_books_found,
+            "authors_added": self.authors_added,
+            "books_added": self.books_added,
+            "books_hidden": self.books_hidden,
+            "hidden_by_category": self.hidden_by_category,
+            "hardcover": self.hardcover.to_dict(),
+            "google": self.google.to_dict(),
+            "openlibrary": self.openlibrary.to_dict(),
+        }
+
+
 async def get_api_key(db: AsyncSession) -> str:
     """Get Hardcover API key from env var (via config) or database settings."""
     from backend.app.config import HARDCOVER_API_KEY
@@ -342,6 +426,10 @@ async def run_full_sync(force: bool = False):
     if scan_status.status == "scanning":
         return
 
+    summary = ScanRunSummary(
+        mode="full_refresh" if force else "scan_library",
+        started_at=_now_iso(),
+    )
     scan_status.status = "scanning"
     scan_status.progress = 0.0
     scan_status.message = "Starting scan..."
@@ -352,6 +440,11 @@ async def run_full_sync(force: bool = False):
             scan_status.message = "Scanning filesystem..."
             scan_status.progress = 5.0
             scan_result = await scan_library(db, BOOKS_DIR)
+            summary.files_total = scan_result.total_files
+            summary.files_new = len(scan_result.new_files)
+            summary.files_deleted = len(scan_result.deleted_files)
+            summary.files_unchanged = scan_result.unchanged_files
+            summary.authors_added = len(scan_result.new_author_names)
             logger.info(
                 "Scan result: %d new, %d deleted, %d unchanged, new authors: %s",
                 len(scan_result.new_files), len(scan_result.deleted_files),
@@ -368,6 +461,11 @@ async def run_full_sync(force: bool = False):
                 scan_status.progress = 100.0
                 scan_status.status = "idle"
                 await _update_last_scan(db)
+                await _finalize_scan_summary(
+                    db,
+                    summary,
+                    message="No changes detected.",
+                )
                 return
 
             # Get API key
@@ -377,6 +475,9 @@ async def run_full_sync(force: bool = False):
                 scan_status.progress = 100.0
                 scan_status.status = "idle"
                 await _update_last_scan(db)
+                summary.message = "No Hardcover API key configured. Scan complete (local only)."
+                summary.owned_books_found = await _count_owned_books(db)
+                await _finalize_scan_summary(db, summary)
                 return
 
             client = HardcoverClient(api_key)
@@ -388,12 +489,18 @@ async def run_full_sync(force: bool = False):
                 total_authors = len(authors)
 
                 new_author_count = 0
+                books_added = 0
                 for i, author in enumerate(authors):
                     if not author.hardcover_id:
                         new_author_count += 1
                         scan_status.message = f"Looking up author: {author.name}"
-                        hc_author = await client.search_author(author.name)
+                        try:
+                            hc_author = await client.search_author(author.name)
+                        except HardcoverLookupError as e:
+                            summary.hardcover.record_failure(e.reason)
+                            raise
                         if hc_author:
+                            summary.hardcover.record_match()
                             author.hardcover_id = hc_author.id
                             author.hardcover_slug = hc_author.slug
                             author.bio = hc_author.bio
@@ -403,6 +510,8 @@ async def run_full_sync(force: bool = False):
                                 cached = await cache_author_image(hc_author.id, hc_author.image_url)
                                 if cached:
                                     author.image_cached_path = cached
+                        else:
+                            summary.hardcover.record_failure("no_result")
 
                     progress = 20.0 + (30.0 * (i + 1) / max(total_authors, 1))
                     scan_status.progress = progress
@@ -449,7 +558,12 @@ async def run_full_sync(force: bool = False):
                         continue
 
                     scan_status.message = f"Fetching books for: {author.name}"
-                    hc_books = await client.get_author_books(author.hardcover_id)
+                    try:
+                        hc_books = await client.get_author_books(author.hardcover_id)
+                    except HardcoverLookupError as e:
+                        summary.hardcover.record_failure(e.reason)
+                        raise
+                    summary.hardcover.record_match()
 
                     # Filter to canonical, Latin-titled books and deduplicate
                     canonical_books = [b for b in hc_books if b.is_canonical]
@@ -524,6 +638,7 @@ async def run_full_sync(force: bool = False):
                             )
                             db.add(book)
                             await db.flush()
+                            books_added += 1
 
                         for sr in hc_book.series_refs:
                             series = await _get_or_create_series(db, sr.id, sr.name)
@@ -611,8 +726,10 @@ async def run_full_sync(force: bool = False):
                         db.add(local_book)
                         await db.flush()
                         bf.book_id = local_book.id
+                        books_added += 1
 
                 await db.commit()
+                summary.books_added = books_added
                 if unmatched_files:
                     logger.info("Matched %d/%d unmatched file(s)", matched_count, len(unmatched_files))
                 scan_status.progress = 80.0
@@ -654,7 +771,7 @@ async def run_full_sync(force: bool = False):
                         books_need_google = []
                         for book in books_to_reconcile:
                             if book.google_id == "_none" and not force:
-                                pass  # Negative cache — skip unless forced
+                                summary.google.record_cached()
                             elif book.google_id and book.google_id != "_none":
                                 # Positive cache — reconstruct GBook from DB
                                 google_data[book.id] = GBook(
@@ -663,6 +780,7 @@ async def run_full_sync(force: bool = False):
                                     cover_url=book.google_cover_url,
                                     google_id=book.google_id,
                                 )
+                                summary.google.record_cached()
                             else:
                                 books_need_google.append(book)
 
@@ -679,14 +797,20 @@ async def run_full_sync(force: bool = False):
                                 for i, book in enumerate(books_need_google):
                                     try:
                                         gbook = None
+                                        final_reason = "no_result"
                                         if book.isbn:
-                                            gbook = await google_client.search_by_isbn(book.isbn)
+                                            isbn_result = await google_client.search_by_isbn_result(book.isbn)
+                                            gbook = isbn_result.book
+                                            final_reason = isbn_result.reason
                                         if not gbook:
                                             author_name = author_map.get(book.author_id, "")
-                                            gbook = await google_client.search_by_title_author(
+                                            title_result = await google_client.search_by_title_author_result(
                                                 book.title, author_name
                                             )
+                                            gbook = title_result.book
+                                            final_reason = title_result.reason
                                         if gbook:
+                                            summary.google.record_match()
                                             google_data[book.id] = gbook
                                             # Persist Google data to DB
                                             book.google_id = gbook.google_id
@@ -694,13 +818,18 @@ async def run_full_sync(force: bool = False):
                                             book.google_cover_url = gbook.cover_url
                                             fetched += 1
                                         else:
+                                            summary.google.record_failure(final_reason)
                                             # Mark as searched so we don't retry
                                             book.google_id = "_none"
-                                    except GoogleBooksThrottledError:
+                                    except GoogleBooksThrottledError as e:
+                                        summary.google.record_failure(e.reason)
                                         throttled = True
                                         google_retry_ids.update(
                                             pending_book.id for pending_book in books_need_google[i:]
                                         )
+                                        remaining = len(books_need_google) - (i + 1)
+                                        if remaining > 0:
+                                            summary.google.record_deferred("throttled", remaining)
                                         logger.warning(
                                             "Google Books throttled after %d/%d uncached lookup(s); "
                                             "deferring the remaining %d book(s) for a later scan",
@@ -713,6 +842,7 @@ async def run_full_sync(force: bool = False):
                                         )
                                         break
                                     except GoogleBooksLookupError as e:
+                                        summary.google.record_failure(e.reason)
                                         google_retry_ids.add(book.id)
                                         logger.warning(
                                             "Google Books lookup failed for '%s': %s",
@@ -771,7 +901,7 @@ async def run_full_sync(force: bool = False):
                     books_need_ol_fetch = []
                     for book in ol_candidates:
                         if book.ol_edition_key == "_none" and not force:
-                            pass  # Negative cache — skip unless forced
+                            summary.openlibrary.record_cached()
                         elif book.ol_edition_key and book.ol_edition_key != "_none":
                             # Positive cache — reconstruct OLBook from persisted data
                             ol_data[book.id] = OLBook(
@@ -779,6 +909,7 @@ async def run_full_sync(force: bool = False):
                                 first_publish_year=book.ol_first_publish_year,
                                 cover_id=_extract_ol_cover_id(book.ol_cover_url),
                             )
+                            summary.openlibrary.record_cached()
                         else:
                             books_need_ol_fetch.append(book)
 
@@ -794,34 +925,31 @@ async def run_full_sync(force: bool = False):
 
                             async def _fetch_ol_year(book):
                                 async with sem:
-                                    try:
-                                        if book.isbn:
-                                            result = await ol_client.search_book_by_isbn(book.isbn)
-                                            if result:
-                                                return result
-                                        author_name = author_map.get(book.author_id, "")
-                                        return await ol_client.search_book(book.title, author_name)
-                                    except Exception as e:
-                                        logger.warning(
-                                            "Open Library lookup failed for '%s': %s",
-                                            book.title[:50], e,
-                                        )
-                                        return None
+                                    if book.isbn:
+                                        isbn_lookup = await ol_client.search_book_by_isbn_with_result(book.isbn)
+                                        if isbn_lookup.book:
+                                            return isbn_lookup
+                                        if isbn_lookup.reason not in {"no_result"}:
+                                            return isbn_lookup
+                                    author_name = author_map.get(book.author_id, "")
+                                    return await ol_client.search_book_with_result(book.title, author_name)
 
                             results = await asyncio.gather(
                                 *[_fetch_ol_year(b) for b in books_need_ol_fetch]
                             )
                             fetched_ol = 0
-                            for book, ol_book in zip(books_need_ol_fetch, results):
-                                if ol_book:
-                                    ol_data[book.id] = ol_book
+                            for book, ol_lookup in zip(books_need_ol_fetch, results):
+                                if ol_lookup.book:
+                                    summary.openlibrary.record_match()
+                                    ol_data[book.id] = ol_lookup.book
                                     # Persist OL data to DB
-                                    book.ol_edition_key = ol_book.cover_edition_key or "_found"
-                                    book.ol_first_publish_year = ol_book.first_publish_year
-                                    if ol_book.cover_id:
-                                        book.ol_cover_url = ol_book.cover_url_large
+                                    book.ol_edition_key = ol_lookup.book.cover_edition_key or "_found"
+                                    book.ol_first_publish_year = ol_lookup.book.first_publish_year
+                                    if ol_lookup.book.cover_id:
+                                        book.ol_cover_url = ol_lookup.book.cover_url_large
                                     fetched_ol += 1
                                 else:
+                                    summary.openlibrary.record_failure(ol_lookup.reason)
                                     book.ol_edition_key = "_none"
                             await db.commit()
                             logger.info(
@@ -889,6 +1017,22 @@ async def run_full_sync(force: bool = False):
                     book for book in all_books
                     if is_book_visible(book, visibility_settings)
                 ]
+                hidden_counts: dict[str, dict[str, str | int]] = {}
+                for book in all_books:
+                    hidden = get_hidden_category(book, visibility_settings)
+                    if not hidden:
+                        continue
+                    key, label = hidden
+                    entry = hidden_counts.setdefault(
+                        key,
+                        {"key": key, "label": label, "count": 0},
+                    )
+                    entry["count"] = int(entry["count"]) + 1
+                summary.books_hidden = sum(int(item["count"]) for item in hidden_counts.values())
+                summary.hidden_by_category = sorted(
+                    hidden_counts.values(),
+                    key=lambda item: (-int(item["count"]), str(item["label"])),
+                )
 
                 # Track cover heights in memory to avoid re-reading cached files
                 cover_heights = {}
@@ -1026,9 +1170,9 @@ async def run_full_sync(force: bool = False):
                     books_need_ol_search = []
                     for book in books_no_cover:
                         if book.id in ol_data:
-                            pass  # Already in memory from Phase 5
+                            pass  # Already looked up earlier in this scan
                         elif book.ol_edition_key == "_none" and not force:
-                            pass  # Negative cache — skip unless forced
+                            summary.openlibrary.record_cached()
                         elif book.ol_edition_key and book.ol_edition_key != "_none":
                             # Positive cache — reconstruct from DB
                             ol_data[book.id] = OLBook(
@@ -1036,6 +1180,7 @@ async def run_full_sync(force: bool = False):
                                 first_publish_year=book.ol_first_publish_year,
                                 cover_id=_extract_ol_cover_id(book.ol_cover_url),
                             )
+                            summary.openlibrary.record_cached()
                         else:
                             books_need_ol_search.append(book)
 
@@ -1047,36 +1192,33 @@ async def run_full_sync(force: bool = False):
 
                             async def _fetch_ol_cover(book):
                                 async with sem:
-                                    try:
-                                        if book.isbn:
-                                            result = await ol_client2.search_book_by_isbn(
-                                                book.isbn
-                                            )
-                                            if result:
-                                                return result
-                                        author_name = ol_cover_map.get(book.author_id, "")
-                                        return await ol_client2.search_book(
-                                            book.title, author_name
+                                    if book.isbn:
+                                        isbn_lookup = await ol_client2.search_book_by_isbn_with_result(
+                                            book.isbn
                                         )
-                                    except Exception as e:
-                                        logger.warning(
-                                            "OL cover lookup failed for '%s': %s",
-                                            book.title[:50], e,
-                                        )
-                                        return None
+                                        if isbn_lookup.book:
+                                            return isbn_lookup
+                                        if isbn_lookup.reason not in {"no_result"}:
+                                            return isbn_lookup
+                                    author_name = ol_cover_map.get(book.author_id, "")
+                                    return await ol_client2.search_book_with_result(
+                                        book.title, author_name
+                                    )
 
                             results = await asyncio.gather(
                                 *[_fetch_ol_cover(b) for b in books_need_ol_search]
                             )
-                            for book, ol_book in zip(books_need_ol_search, results):
-                                if ol_book:
-                                    ol_data[book.id] = ol_book
+                            for book, ol_lookup in zip(books_need_ol_search, results):
+                                if ol_lookup.book:
+                                    summary.openlibrary.record_match()
+                                    ol_data[book.id] = ol_lookup.book
                                     # Persist OL data to DB
-                                    book.ol_edition_key = ol_book.cover_edition_key or "_found"
-                                    book.ol_first_publish_year = ol_book.first_publish_year
-                                    if ol_book.cover_id:
-                                        book.ol_cover_url = ol_book.cover_url_large
+                                    book.ol_edition_key = ol_lookup.book.cover_edition_key or "_found"
+                                    book.ol_first_publish_year = ol_lookup.book.first_publish_year
+                                    if ol_lookup.book.cover_id:
+                                        book.ol_cover_url = ol_lookup.book.cover_url_large
                                 else:
+                                    summary.openlibrary.record_failure(ol_lookup.reason)
                                     book.ol_edition_key = "_none"
                         finally:
                             await ol_client2.close()
@@ -1124,11 +1266,13 @@ async def run_full_sync(force: bool = False):
                     author.book_count_local = count_result.scalar() or 0
 
                 await db.commit()
+                summary.owned_books_found = await _count_owned_books(db)
 
             finally:
                 await client.close()
 
             await _update_last_scan(db)
+            await _finalize_scan_summary(db, summary, message="Scan complete!")
 
         scan_status.progress = 100.0
         scan_status.message = "Scan complete!"
@@ -1139,6 +1283,16 @@ async def run_full_sync(force: bool = False):
         scan_status.message = f"Error: {str(e)}"
         scan_status.status = "idle"
         scan_status.progress = 0.0
+        summary.status = "error"
+        summary.message = f"Error: {str(e)}"
+        summary.completed_at = _now_iso()
+        try:
+            async with async_session() as db:
+                summary.owned_books_found = await _count_owned_books(db)
+                await _populate_hidden_summary(db, summary)
+                await _persist_scan_summary(db, summary)
+        except Exception:
+            logger.exception("Failed to persist scan summary after sync error")
 
 
 async def _get_or_create_series(db: AsyncSession, hardcover_id: int, name: str) -> Series:
@@ -1154,9 +1308,62 @@ async def _get_or_create_series(db: AsyncSession, hardcover_id: int, name: str) 
 async def _update_last_scan(db: AsyncSession):
     result = await db.execute(select(Setting).where(Setting.key == "last_scan_at"))
     setting = result.scalar_one_or_none()
-    now = datetime.utcnow().isoformat()
+    now = _now_iso()
     if setting:
         setting.value = now
     else:
         db.add(Setting(key="last_scan_at", value=now))
     await db.commit()
+
+
+async def _count_owned_books(db: AsyncSession) -> int:
+    result = await db.execute(
+        select(func.count(Book.id)).where(Book.is_owned == True)
+    )
+    return result.scalar() or 0
+
+
+async def _populate_hidden_summary(db: AsyncSession, summary: ScanRunSummary):
+    visibility_settings = await get_book_visibility_settings(db)
+    result = await db.execute(select(Book))
+    all_books = result.scalars().all()
+    hidden_counts: dict[str, dict[str, str | int]] = {}
+    for book in all_books:
+        hidden = get_hidden_category(book, visibility_settings)
+        if not hidden:
+            continue
+        key, label = hidden
+        entry = hidden_counts.setdefault(
+            key,
+            {"key": key, "label": label, "count": 0},
+        )
+        entry["count"] = int(entry["count"]) + 1
+    summary.books_hidden = sum(int(item["count"]) for item in hidden_counts.values())
+    summary.hidden_by_category = sorted(
+        hidden_counts.values(),
+        key=lambda item: (-int(item["count"]), str(item["label"])),
+    )
+
+
+async def _persist_scan_summary(db: AsyncSession, summary: ScanRunSummary):
+    payload = json.dumps(summary.to_dict(), sort_keys=True)
+    result = await db.execute(select(Setting).where(Setting.key == "last_scan_summary"))
+    setting = result.scalar_one_or_none()
+    if setting:
+        setting.value = payload
+    else:
+        db.add(Setting(key="last_scan_summary", value=payload))
+    await db.commit()
+
+
+async def _finalize_scan_summary(db: AsyncSession, summary: ScanRunSummary, message: str | None = None):
+    summary.status = "completed"
+    summary.message = message or summary.message
+    summary.completed_at = _now_iso()
+    summary.owned_books_found = await _count_owned_books(db)
+    await _populate_hidden_summary(db, summary)
+    await _persist_scan_summary(db, summary)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()

@@ -43,8 +43,18 @@ class GBook:
         return None
 
 
+@dataclass
+class GoogleLookupResult:
+    book: GBook | None
+    reason: str
+
+
 class GoogleBooksLookupError(RuntimeError):
     """Raised when a Google Books lookup fails and should be retried later."""
+
+    def __init__(self, reason: str, message: str | None = None):
+        self.reason = reason
+        super().__init__(message or reason)
 
 
 class GoogleBooksThrottledError(GoogleBooksLookupError):
@@ -73,6 +83,9 @@ class GoogleBooksClient:
             await self._client.aclose()
 
     async def search_by_isbn(self, isbn: str) -> GBook | None:
+        return (await self.search_by_isbn_result(isbn)).book
+
+    async def search_by_isbn_result(self, isbn: str) -> GoogleLookupResult:
         """Search by ISBN — most precise lookup."""
         clean = isbn.replace("-", "").replace(" ", "")
         return await self._search(
@@ -83,6 +96,9 @@ class GoogleBooksClient:
         )
 
     async def search_by_title_author(self, title: str, author: str) -> GBook | None:
+        return (await self.search_by_title_author_result(title, author)).book
+
+    async def search_by_title_author_result(self, title: str, author: str) -> GoogleLookupResult:
         """Search by title and author name."""
         query = f"intitle:{title}"
         if author:
@@ -187,9 +203,12 @@ class GoogleBooksClient:
         max_results: int = 1,
         lookup_type: str = "unknown",
         book_context: str | None = None,
-    ) -> GBook | None:
+    ) -> GoogleLookupResult:
         if self._throttled:
-            raise GoogleBooksThrottledError("Google Books lookups paused after a throttle response")
+            raise GoogleBooksThrottledError(
+                "throttled",
+                "Google Books lookups paused after a throttle response",
+            )
 
         client = await self._get_client()
         for attempt in range(3):
@@ -220,6 +239,7 @@ class GoogleBooksClient:
                         int((monotonic() - started_at) * 1000),
                     )
                     raise GoogleBooksThrottledError(
+                        "throttled",
                         f"Google Books throttled with HTTP {resp.status_code}"
                     )
                 resp.raise_for_status()
@@ -248,7 +268,7 @@ class GoogleBooksClient:
                     lookup_type,
                     status_code,
                 )
-                raise GoogleBooksLookupError(f"HTTP {status_code}") from e
+                raise GoogleBooksLookupError("http_error", f"HTTP {status_code}") from e
             except httpx.RequestError as e:
                 if attempt < 2:
                     await self._sleep_before_retry(attempt)
@@ -259,14 +279,14 @@ class GoogleBooksClient:
                     lookup_type,
                     str(e)[:160],
                 )
-                raise GoogleBooksLookupError(str(e)) from e
+                raise GoogleBooksLookupError("request_error", str(e)) from e
             except ValueError as e:
                 logger.warning(
                     "Google Books response: book='%s' lookup=%s result='invalid_json'",
                     (book_context or expected_title or query)[:80],
                     lookup_type,
                 )
-                raise GoogleBooksLookupError("invalid JSON") from e
+                raise GoogleBooksLookupError("invalid_json", "invalid JSON") from e
 
         items = data.get("items", [])
         if not items:
@@ -276,7 +296,7 @@ class GoogleBooksClient:
                 (expected_author or "")[:80],
                 lookup_type,
             )
-            return None
+            return GoogleLookupResult(book=None, reason="no_result")
 
         best_match: tuple[dict, dict, str, list[str], float] | None = None
         best_author_mismatch: tuple[str, list[str], float] | None = None
@@ -325,7 +345,10 @@ class GoogleBooksClient:
                     lookup_type,
                     len(items),
                 )
-            return None
+            return GoogleLookupResult(
+                book=None,
+                reason="author_mismatch" if best_author_mismatch and expected_author else "no_result",
+            )
 
         item, info, info_title, _info_authors, title_score = best_match
         if expected_title and title_score < TITLE_MATCH_THRESHOLD:
@@ -338,7 +361,7 @@ class GoogleBooksClient:
                 info_title[:80],
                 title_score,
             )
-            return None
+            return GoogleLookupResult(book=None, reason="title_mismatch")
 
         google_id = item.get("id")
         cover_url = self._pick_cover_url(info)
@@ -353,9 +376,12 @@ class GoogleBooksClient:
             str(info.get("publishedDate") or "")[:40],
         )
 
-        return GBook(
-            title=info_title,
-            published_date=info.get("publishedDate"),
-            cover_url=cover_url,
-            google_id=google_id,
+        return GoogleLookupResult(
+            book=GBook(
+                title=info_title,
+                published_date=info.get("publishedDate"),
+                cover_url=cover_url,
+                google_id=google_id,
+            ),
+            reason="matched",
         )

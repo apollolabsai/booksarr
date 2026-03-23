@@ -140,6 +140,27 @@ export default function HiddenBooksPage() {
                       ) : (
                         <span className="font-medium text-slate-200">{book.title}</span>
                       )}
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        <span
+                          className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                            book.has_valid_isbn
+                              ? "bg-emerald-500/15 text-emerald-300"
+                              : "bg-slate-700 text-slate-400"
+                          }`}
+                        >
+                          ISBN {book.has_valid_isbn ? "✓" : "—"}
+                        </span>
+                        {book.matched_google && (
+                          <span className="inline-flex items-center rounded-full bg-blue-500/15 px-2 py-0.5 text-[10px] font-medium text-blue-300">
+                            Google
+                          </span>
+                        )}
+                        {book.matched_openlibrary && (
+                          <span className="inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-300">
+                            OL
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-2 text-slate-400">
                       <Link
