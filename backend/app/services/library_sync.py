@@ -36,6 +36,7 @@ from backend.app.services.google_books import (
     GoogleBooksThrottledError,
 )
 from backend.app.utils.epub_cover import get_image_dimensions
+from backend.app.utils.api_usage import begin_api_usage_batch, clear_api_usage_batch, flush_api_usage_batch
 
 logger = logging.getLogger("booksarr.sync")
 
@@ -426,6 +427,7 @@ async def run_full_sync(force: bool = False):
     if scan_status.status == "scanning":
         return
 
+    usage_batch_token = begin_api_usage_batch()
     summary = ScanRunSummary(
         mode="full_refresh" if force else "scan_library",
         started_at=_now_iso(),
@@ -460,6 +462,7 @@ async def run_full_sync(force: bool = False):
                 scan_status.message = "No changes detected."
                 scan_status.progress = 100.0
                 scan_status.status = "idle"
+                await flush_api_usage_batch(db)
                 await _update_last_scan(db)
                 await _finalize_scan_summary(
                     db,
@@ -474,6 +477,7 @@ async def run_full_sync(force: bool = False):
                 scan_status.message = "No Hardcover API key configured. Scan complete (local only)."
                 scan_status.progress = 100.0
                 scan_status.status = "idle"
+                await flush_api_usage_batch(db)
                 await _update_last_scan(db)
                 summary.message = "No Hardcover API key configured. Scan complete (local only)."
                 summary.owned_books_found = await _count_owned_books(db)
@@ -1271,6 +1275,7 @@ async def run_full_sync(force: bool = False):
             finally:
                 await client.close()
 
+            await flush_api_usage_batch(db)
             await _update_last_scan(db)
             await _finalize_scan_summary(db, summary, message="Scan complete!")
 
@@ -1288,11 +1293,14 @@ async def run_full_sync(force: bool = False):
         summary.completed_at = _now_iso()
         try:
             async with async_session() as db:
+                await flush_api_usage_batch(db)
                 summary.owned_books_found = await _count_owned_books(db)
                 await _populate_hidden_summary(db, summary)
                 await _persist_scan_summary(db, summary)
         except Exception:
             logger.exception("Failed to persist scan summary after sync error")
+    finally:
+        clear_api_usage_batch(usage_batch_token)
 
 
 async def _get_or_create_series(db: AsyncSession, hardcover_id: int, name: str) -> Series:
