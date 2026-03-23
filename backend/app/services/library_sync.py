@@ -21,8 +21,8 @@ from backend.app.services.image_cache import (
     cache_cover_data,
     get_cached_cover_height,
 )
-from backend.app.services.openlibrary import OpenLibraryClient
-from backend.app.services.google_books import GoogleBooksClient
+from backend.app.services.openlibrary import OpenLibraryClient, OLBook
+from backend.app.services.google_books import GoogleBooksClient, GBook
 from backend.app.utils.epub_cover import get_image_dimensions
 
 logger = logging.getLogger("booksarr.sync")
@@ -265,6 +265,18 @@ def _reconcile_year_3way(
     return hc_date
 
 
+def _extract_ol_cover_id(cover_url: str | None) -> int | None:
+    """Extract the OL cover ID from a URL like .../id/12345-L.jpg."""
+    if not cover_url:
+        return None
+    # URL format: https://covers.openlibrary.org/b/id/12345-L.jpg
+    try:
+        part = cover_url.rsplit("/", 1)[-1]  # "12345-L.jpg"
+        return int(part.split("-")[0])
+    except (ValueError, IndexError):
+        return None
+
+
 class ScanStatus:
     def __init__(self):
         self.status: str = "idle"
@@ -437,6 +449,16 @@ async def run_full_sync(force: bool = False):
                         tags_json = json.dumps(hc_book.tags) if hc_book.tags else None
 
                         if book:
+                            # If title changed, clear negative cache so
+                            # Google/OL are retried with the new title
+                            if book.title != hc_book.title:
+                                if book.google_id == "_none":
+                                    book.google_id = None
+                                if book.ol_edition_key == "_none":
+                                    book.ol_edition_key = None
+                                book.publish_date_checked_at = None
+                            if book.release_date != hc_book.release_date:
+                                book.publish_date_checked_at = None
                             book.title = hc_book.title
                             book.description = hc_book.description
                             book.release_date = hc_book.release_date
@@ -530,6 +552,13 @@ async def run_full_sync(force: bool = False):
                         matched_book.is_owned = True
                         if bf.opf_isbn and not matched_book.isbn:
                             matched_book.isbn = bf.opf_isbn
+                            # ISBN gained — clear negative cache for retry
+                            # (ISBN lookups are far more precise)
+                            if matched_book.google_id == "_none":
+                                matched_book.google_id = None
+                            if matched_book.ol_edition_key == "_none":
+                                matched_book.ol_edition_key = None
+                            matched_book.publish_date_checked_at = None
                         matched_count += 1
                     else:
                         local_book = Book(
@@ -566,68 +595,133 @@ async def run_full_sync(force: bool = False):
                         )
                     )
                     all_hc_books = books_result.scalars().all()
+                    books_to_reconcile = [
+                        book for book in all_hc_books
+                        if book.publish_date_checked_at is None
+                    ]
                     author_map = {a.id: a.name for a in authors}
 
-                    # 5a: Fetch Google data concurrently (if API key available)
-                    if google_api_key:
-                        scan_status.message = "Fetching dates from Google Books..."
-                        google_client = GoogleBooksClient(google_api_key)
-                        try:
-                            sem = asyncio.Semaphore(5)
+                    # 5a: Fetch Google data for books that have not had their
+                    # publish date checked yet. Once a book's date has been
+                    # reconciled, we do not revisit it unless its core metadata
+                    # changes and clears publish_date_checked_at.
+                    if google_api_key and books_to_reconcile:
+                        # Load cached Google data for books already searched.
+                        # google_id="_none" means "searched, no result" — skip
+                        # unless force=True (user wants full re-fetch).
+                        books_need_google = []
+                        for book in books_to_reconcile:
+                            if book.google_id == "_none" and not force:
+                                pass  # Negative cache — skip unless forced
+                            elif book.google_id and book.google_id != "_none":
+                                # Positive cache — reconstruct GBook from DB
+                                google_data[book.id] = GBook(
+                                    title=book.title,
+                                    published_date=book.google_published_date,
+                                    cover_url=book.google_cover_url,
+                                    google_id=book.google_id,
+                                )
+                            else:
+                                books_need_google.append(book)
 
-                            async def _fetch_google(book):
-                                async with sem:
+                        if books_need_google:
+                            scan_status.message = (
+                                f"Fetching dates from Google Books... "
+                                f"0/{len(books_need_google)} "
+                                f"({len(books_to_reconcile) - len(books_need_google)} cached)"
+                            )
+                            google_client = GoogleBooksClient(google_api_key)
+                            try:
+                                fetched = 0
+                                for i, book in enumerate(books_need_google):
                                     try:
+                                        gbook = None
                                         if book.isbn:
-                                            result = await google_client.search_by_isbn(book.isbn)
-                                            if result:
-                                                return result
-                                        author_name = author_map.get(book.author_id, "")
-                                        return await google_client.search_by_title_author(
-                                            book.title, author_name
-                                        )
+                                            gbook = await google_client.search_by_isbn(book.isbn)
+                                        if not gbook:
+                                            author_name = author_map.get(book.author_id, "")
+                                            gbook = await google_client.search_by_title_author(
+                                                book.title, author_name
+                                            )
+                                        if gbook:
+                                            google_data[book.id] = gbook
+                                            # Persist Google data to DB
+                                            book.google_id = gbook.google_id
+                                            book.google_published_date = gbook.published_date
+                                            book.google_cover_url = gbook.cover_url
+                                            fetched += 1
+                                        else:
+                                            # Mark as searched so we don't retry
+                                            book.google_id = "_none"
                                     except Exception as e:
                                         logger.warning(
                                             "Google Books lookup failed for '%s': %s",
                                             book.title[:50], e,
                                         )
-                                        return None
-
-                            results = await asyncio.gather(
-                                *[_fetch_google(b) for b in all_hc_books]
-                            )
-                            for book, gbook in zip(all_hc_books, results):
-                                if gbook:
-                                    google_data[book.id] = gbook
+                                    if (i + 1) % 10 == 0:
+                                        scan_status.message = (
+                                            f"Fetching dates from Google Books... "
+                                            f"{i + 1}/{len(books_need_google)}"
+                                        )
+                                        await asyncio.sleep(0.1)
+                                await db.commit()
+                                logger.info(
+                                    "Google Books: fetched %d new, %d cached, %d total of %d books",
+                                    fetched,
+                                    len(books_to_reconcile) - len(books_need_google),
+                                    len(google_data),
+                                    len(books_to_reconcile),
+                                )
+                            finally:
+                                await google_client.close()
+                        else:
                             logger.info(
-                                "Google Books: fetched data for %d/%d books",
-                                len(google_data), len(all_hc_books),
+                                "Google Books: all %d books already cached, 0 API calls",
+                                len(google_data),
                             )
-                        finally:
-                            await google_client.close()
 
                     # 5b: Identify books needing OL tiebreaker
-                    books_needing_ol = []
-                    if google_api_key:
-                        # With Google: only fetch OL for HC/Google year disagreements
-                        for book in all_hc_books:
+                    # Determine which books need OL data for year reconciliation
+                    ol_candidates = []
+                    if google_api_key and books_to_reconcile:
+                        # With Google: only need OL for HC/Google year disagreements
+                        for book in books_to_reconcile:
                             hc_year = _extract_year(book.release_date)
                             gbook = google_data.get(book.id)
                             g_year = gbook.publish_year if gbook else None
                             if hc_year and g_year and abs(hc_year - g_year) > 1:
-                                books_needing_ol.append(book)
-                        if books_needing_ol:
+                                ol_candidates.append(book)
+                        if ol_candidates:
                             logger.info(
                                 "Year disagreements: %d book(s) need OL tiebreaker",
-                                len(books_needing_ol),
+                                len(ol_candidates),
                             )
                     else:
-                        # No Google key: fall back to HC vs OL for all books
-                        books_needing_ol = list(all_hc_books)
+                        # No Google key: fall back to HC vs OL for unchecked books
+                        ol_candidates = list(books_to_reconcile)
 
-                    if books_needing_ol:
+                    # Load cached OL data; only fetch books not yet searched.
+                    # ol_edition_key="_none" means "searched, no result" — skip
+                    # unless force=True.
+                    books_need_ol_fetch = []
+                    for book in ol_candidates:
+                        if book.ol_edition_key == "_none" and not force:
+                            pass  # Negative cache — skip unless forced
+                        elif book.ol_edition_key and book.ol_edition_key != "_none":
+                            # Positive cache — reconstruct OLBook from persisted data
+                            ol_data[book.id] = OLBook(
+                                title=book.title,
+                                first_publish_year=book.ol_first_publish_year,
+                                cover_id=_extract_ol_cover_id(book.ol_cover_url),
+                            )
+                        else:
+                            books_need_ol_fetch.append(book)
+
+                    if books_need_ol_fetch:
+                        ol_cached = len(ol_candidates) - len(books_need_ol_fetch)
                         scan_status.message = (
-                            f"Verifying {len(books_needing_ol)} date(s) with Open Library..."
+                            f"Verifying {len(books_need_ol_fetch)} date(s) with Open Library... "
+                            f"({ol_cached} cached)"
                         )
                         ol_client = OpenLibraryClient()
                         try:
@@ -650,17 +744,38 @@ async def run_full_sync(force: bool = False):
                                         return None
 
                             results = await asyncio.gather(
-                                *[_fetch_ol_year(b) for b in books_needing_ol]
+                                *[_fetch_ol_year(b) for b in books_need_ol_fetch]
                             )
-                            for book, ol_book in zip(books_needing_ol, results):
+                            fetched_ol = 0
+                            for book, ol_book in zip(books_need_ol_fetch, results):
                                 if ol_book:
                                     ol_data[book.id] = ol_book
+                                    # Persist OL data to DB
+                                    book.ol_edition_key = ol_book.cover_edition_key or "_found"
+                                    book.ol_first_publish_year = ol_book.first_publish_year
+                                    if ol_book.cover_id:
+                                        book.ol_cover_url = ol_book.cover_url_large
+                                    fetched_ol += 1
+                                else:
+                                    book.ol_edition_key = "_none"
+                            await db.commit()
+                            logger.info(
+                                "Open Library: fetched %d new, %d cached, %d no result",
+                                fetched_ol,
+                                len(ol_candidates) - len(books_need_ol_fetch),
+                                len(books_need_ol_fetch) - fetched_ol,
+                            )
                         finally:
                             await ol_client.close()
+                    elif ol_candidates:
+                        logger.info(
+                            "Open Library: all %d books already cached, 0 API calls",
+                            len(ol_data),
+                        )
 
                     # 5c: Apply reconciled dates
                     reconciled = 0
-                    for book in all_hc_books:
+                    for book in books_to_reconcile:
                         gbook = google_data.get(book.id)
                         g_year = gbook.publish_year if gbook else None
                         ol_book = ol_data.get(book.id)
@@ -674,10 +789,18 @@ async def run_full_sync(force: bool = False):
                             )
                             book.release_date = new_date
                             reconciled += 1
+                        book.publish_date_checked_at = datetime.utcnow()
 
-                    await db.commit()
-                    if reconciled:
-                        logger.info("Reconciled %d publish date(s)", reconciled)
+                    if books_to_reconcile:
+                        await db.commit()
+                        if reconciled:
+                            logger.info("Reconciled %d publish date(s)", reconciled)
+                        logger.info(
+                            "Publish dates finalized for %d book(s); future scans will skip them",
+                            len(books_to_reconcile),
+                        )
+                    else:
+                        logger.info("Publish dates already finalized for all books; skipping phase 5")
 
                 scan_status.progress = 87.0
 
@@ -761,13 +884,15 @@ async def run_full_sync(force: bool = False):
                 scan_status.progress = 90.0
 
                 # 6c: Google covers — for books still under threshold
-                if google_data:
+                google_cover_books = [
+                    b for b in all_books
+                    if b.google_cover_url
+                ]
+                if google_cover_books:
                     scan_status.message = "Downloading covers from Google Books..."
                     books_for_google = [
-                        b for b in all_books
+                        b for b in google_cover_books
                         if cover_heights.get(b.id, 0) < COVER_HEIGHT_THRESHOLD
-                        and google_data.get(b.id)
-                        and google_data[b.id].cover_url
                     ]
                     google_covers = 0
                     if books_for_google:
@@ -775,9 +900,7 @@ async def run_full_sync(force: bool = False):
 
                         async def _dl_google(book):
                             async with sem:
-                                return await download_image_bytes(
-                                    google_data[book.id].cover_url
-                                )
+                                return await download_image_bytes(book.google_cover_url)
 
                         g_results = await asyncio.gather(
                             *[_dl_google(b) for b in books_for_google]
@@ -807,10 +930,24 @@ async def run_full_sync(force: bool = False):
                     scan_status.message = "Fetching missing covers from Open Library..."
                     ol_covers = 0
 
-                    # Search OL for books not already in ol_data (from Phase 5)
-                    books_need_ol_search = [
-                        b for b in books_no_cover if b.id not in ol_data
-                    ]
+                    # Load cached OL data for books that have it;
+                    # only search OL for books never searched before.
+                    books_need_ol_search = []
+                    for book in books_no_cover:
+                        if book.id in ol_data:
+                            pass  # Already in memory from Phase 5
+                        elif book.ol_edition_key == "_none" and not force:
+                            pass  # Negative cache — skip unless forced
+                        elif book.ol_edition_key and book.ol_edition_key != "_none":
+                            # Positive cache — reconstruct from DB
+                            ol_data[book.id] = OLBook(
+                                title=book.title,
+                                first_publish_year=book.ol_first_publish_year,
+                                cover_id=_extract_ol_cover_id(book.ol_cover_url),
+                            )
+                        else:
+                            books_need_ol_search.append(book)
+
                     if books_need_ol_search:
                         ol_cover_map = {a.id: a.name for a in authors}
                         ol_client2 = OpenLibraryClient()
@@ -843,6 +980,13 @@ async def run_full_sync(force: bool = False):
                             for book, ol_book in zip(books_need_ol_search, results):
                                 if ol_book:
                                     ol_data[book.id] = ol_book
+                                    # Persist OL data to DB
+                                    book.ol_edition_key = ol_book.cover_edition_key or "_found"
+                                    book.ol_first_publish_year = ol_book.first_publish_year
+                                    if ol_book.cover_id:
+                                        book.ol_cover_url = ol_book.cover_url_large
+                                else:
+                                    book.ol_edition_key = "_none"
                         finally:
                             await ol_client2.close()
 

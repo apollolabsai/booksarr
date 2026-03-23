@@ -31,9 +31,6 @@ async def get_series(series_id: int, db: AsyncSession = Depends(get_db)):
         id=series.id,
         hardcover_id=series.hardcover_id,
         name=series.name,
-        description=series.description,
-        is_completed=series.is_completed,
-        book_count=len(books),
         books=[
             SeriesBookEntry(
                 book_id=bs.book.id,

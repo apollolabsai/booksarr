@@ -82,7 +82,7 @@ async def serve_image(category: str, filename: str):
     return FileResponse(
         str(file_path),
         media_type="image/jpeg",
-        headers={"Cache-Control": "public, max-age=86400"},
+        headers={"Cache-Control": "no-store"},
     )
 
 

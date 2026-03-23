@@ -5,9 +5,6 @@ class SeriesDetail(BaseModel):
     id: int
     hardcover_id: int | None
     name: str
-    description: str | None
-    is_completed: bool
-    book_count: int
     books: list["SeriesBookEntry"]
 
     class Config:
