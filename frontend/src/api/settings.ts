@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchApi } from "./client";
-import type { Settings, ScanStatus, BuildInfo, ApiUsageDay } from "../types";
+import type { Settings, ScanStatus, BuildInfo, ApiUsageDay, VisibilityCategories } from "../types";
 
 export function useSettings() {
   return useQuery({
@@ -12,7 +12,12 @@ export function useSettings() {
 export function useUpdateSettings() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (body: { hardcover_api_key?: string; google_books_api_key?: string; scan_interval_hours?: number }) =>
+    mutationFn: (body: {
+      hardcover_api_key?: string;
+      google_books_api_key?: string;
+      scan_interval_hours?: number;
+      visibility_categories?: VisibilityCategories;
+    }) =>
       fetchApi("/settings", { method: "PUT", body: JSON.stringify(body) }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
   });

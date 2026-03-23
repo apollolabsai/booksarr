@@ -1,43 +1,14 @@
-from datetime import date
-
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, or_, and_
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from backend.app.database import get_db
 from backend.app.models import Author, Book, BookSeries
 from backend.app.schemas.book import BookSummary, BookDetail, SeriesPositionInfo
+from backend.app.utils.book_visibility import get_book_visibility_settings, is_book_visible
 
 router = APIRouter(prefix="/api/books", tags=["books"])
-
-# Allowed language prefixes — books with other languages are hidden unless owned
-ALLOWED_LANGUAGES = {"en", "english"}
-
-
-def _apply_visibility_filters(query):
-    """Exclude unreleased and non-English books unless they are owned."""
-    today = date.today().isoformat()
-    # Exclude future-release books that aren't owned
-    query = query.where(
-        or_(
-            Book.is_owned == True,
-            Book.release_date.is_(None),
-            Book.release_date == "",
-            Book.release_date <= today,
-        )
-    )
-    # Exclude non-English books that aren't owned
-    query = query.where(
-        or_(
-            Book.is_owned == True,
-            Book.language.is_(None),
-            Book.language == "",
-            Book.language.ilike("en%"),
-            Book.language.ilike("english%"),
-        )
-    )
-    return query
 
 
 @router.get("", response_model=list[BookSummary])
@@ -52,7 +23,6 @@ async def list_books(
         selectinload(Book.author),
         selectinload(Book.book_series).selectinload(BookSeries.series),
     )
-    query = _apply_visibility_filters(query)
 
     if search:
         query = query.where(Book.title.ilike(f"%{search}%"))
@@ -75,7 +45,11 @@ async def list_books(
         query = query.order_by(Book.release_date.desc())
 
     result = await db.execute(query)
-    books = result.scalars().all()
+    visibility_settings = await get_book_visibility_settings(db)
+    books = [
+        book for book in result.scalars().all()
+        if is_book_visible(book, visibility_settings)
+    ]
 
     return [
         BookSummary(

@@ -1,7 +1,5 @@
-from datetime import date
-
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, func, or_
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -11,23 +9,9 @@ from backend.app.schemas.author import (
     AuthorSummary, AuthorDetail, BookInAuthor, SeriesPositionInfo,
     SeriesInAuthor, SeriesBookEntry,
 )
+from backend.app.utils.book_visibility import get_book_visibility_settings, is_book_visible
 
 router = APIRouter(prefix="/api/authors", tags=["authors"])
-
-
-def _is_visible(book: Book) -> bool:
-    """Check if a book should be visible (not unreleased, not non-English, unless owned)."""
-    if book.is_owned:
-        return True
-    today = date.today().isoformat()
-    # Hide future releases
-    if book.release_date and book.release_date > today:
-        return False
-    # Hide non-English
-    lang = (book.language or "").lower()
-    if lang and not lang.startswith("en"):
-        return False
-    return True
 
 
 @router.get("", response_model=list[AuthorSummary])
@@ -36,25 +20,44 @@ async def list_authors(
     search: str = Query("", max_length=200),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(Author)
+    query = select(Author).options(selectinload(Author.books))
     if search:
         query = query.where(Author.name.ilike(f"%{search}%"))
+    result = await db.execute(query)
+    visibility_settings = await get_book_visibility_settings(db)
+    authors = result.scalars().all()
+
+    summaries = []
+    for author in authors:
+        visible_books = [book for book in author.books if is_book_visible(book, visibility_settings)]
+        if not visible_books:
+            continue
+        summaries.append(AuthorSummary(
+            id=author.id,
+            name=author.name,
+            hardcover_id=author.hardcover_id,
+            hardcover_slug=author.hardcover_slug,
+            bio=author.bio,
+            image_url=author.image_url,
+            image_cached_path=author.image_cached_path,
+            book_count_local=sum(1 for book in visible_books if book.is_owned),
+            book_count_total=len(visible_books),
+        ))
 
     if sort == "name":
-        query = query.order_by(Author.name.asc())
+        summaries.sort(key=lambda author: author.name.lower())
     elif sort == "-name":
-        query = query.order_by(Author.name.desc())
+        summaries.sort(key=lambda author: author.name.lower(), reverse=True)
     elif sort == "books":
-        query = query.order_by(Author.book_count_total.asc())
+        summaries.sort(key=lambda author: (author.book_count_total, author.name.lower()))
     elif sort == "-books":
-        query = query.order_by(Author.book_count_total.desc())
+        summaries.sort(key=lambda author: (author.book_count_total, author.name.lower()), reverse=True)
     elif sort == "owned":
-        query = query.order_by(Author.book_count_local.asc())
+        summaries.sort(key=lambda author: (author.book_count_local, author.name.lower()))
     elif sort == "-owned":
-        query = query.order_by(Author.book_count_local.desc())
+        summaries.sort(key=lambda author: (author.book_count_local, author.name.lower()), reverse=True)
 
-    result = await db.execute(query)
-    return result.scalars().all()
+    return summaries
 
 
 @router.get("/{author_id}", response_model=AuthorDetail)
@@ -73,7 +76,8 @@ async def get_author(author_id: int, db: AsyncSession = Depends(get_db)):
     all_books = books_result.scalars().all()
 
     # Filter to visible books only
-    books = [b for b in all_books if _is_visible(b)]
+    visibility_settings = await get_book_visibility_settings(db)
+    books = [b for b in all_books if is_book_visible(b, visibility_settings)]
 
     # Build series map
     series_map: dict[int, dict] = {}
@@ -139,7 +143,7 @@ async def get_author(author_id: int, db: AsyncSession = Depends(get_db)):
         bio=author.bio,
         image_url=author.image_url,
         image_cached_path=author.image_cached_path,
-        book_count_local=author.book_count_local,
+        book_count_local=sum(1 for book in books if book.is_owned),
         book_count_total=len(books),
         books=books_out,
         series=series_out,

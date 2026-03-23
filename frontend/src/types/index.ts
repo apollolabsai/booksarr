@@ -95,6 +95,21 @@ export interface Settings {
   library_path: string;
   last_scan_at: string | null;
   scan_interval_hours: number;
+  visibility_categories: VisibilityCategories;
+}
+
+export interface VisibilityCategories {
+  standard_books: boolean;
+  short_fiction: boolean;
+  collections_and_compilations: boolean;
+  likely_collections_by_title: boolean;
+  graphic_and_alternate_formats: boolean;
+  research_non_book_material: boolean;
+  fan_fiction: boolean;
+  non_english_books: boolean;
+  upcoming_unreleased: boolean;
+  pending_hardcover_records: boolean;
+  likely_excerpts: boolean;
 }
 
 export interface BuildInfo {

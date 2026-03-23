@@ -1,6 +1,7 @@
 import logging
 import os
 import shutil
+import json
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select, text
@@ -9,8 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.config import BOOKS_DIR, CONFIG_DIR, HARDCOVER_API_KEY, GOOGLE_BOOKS_API_KEY
 from backend.app.database import get_db
 from backend.app.models import Setting
-from backend.app.schemas.setting import SettingsResponse, SettingsUpdate, ApiUsageDay
+from backend.app.schemas.setting import SettingsResponse, SettingsUpdate, ApiUsageDay, VisibilityCategories
 from backend.app.utils.api_usage import get_api_usage_rows
+from backend.app.utils.book_visibility import normalize_visibility_settings
 
 logger = logging.getLogger("booksarr.settings")
 
@@ -31,6 +33,7 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
 
     last_scan = settings.get("last_scan_at")
     scan_interval = int(settings.get("scan_interval_hours", "24"))
+    visibility_categories = normalize_visibility_settings(settings.get("book_visibility_categories"))
 
     # Mask API keys for display
     def _mask(key: str) -> str:
@@ -46,6 +49,7 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
         library_path=str(BOOKS_DIR),
         last_scan_at=last_scan,
         scan_interval_hours=scan_interval,
+        visibility_categories=VisibilityCategories(**visibility_categories),
     )
 
 
@@ -62,6 +66,13 @@ async def update_settings(body: SettingsUpdate, db: AsyncSession = Depends(get_d
         # Update the running scheduler
         from backend.app.services.scheduler import update_scan_schedule
         await update_scan_schedule(body.scan_interval_hours)
+
+    if body.visibility_categories is not None:
+        await _upsert_setting(
+            db,
+            "book_visibility_categories",
+            json.dumps(body.visibility_categories.model_dump(), sort_keys=True),
+        )
 
     await db.commit()
     return {"status": "ok"}

@@ -23,6 +23,7 @@ from backend.app.services.image_cache import (
 )
 from backend.app.services.openlibrary import OpenLibraryClient, OLBook
 from backend.app.utils.hardcover_metadata import get_book_category_name, get_literary_type_name
+from backend.app.utils.book_visibility import get_book_visibility_settings, is_book_visible
 from backend.app.services.google_books import (
     GoogleBooksClient,
     GBook,
@@ -621,6 +622,7 @@ async def run_full_sync(force: bool = False):
                 # Google is secondary (if API key available), OL is tiebreaker only
                 scan_status.message = "Reconciling publish dates..."
                 google_api_key = await get_google_api_key(db)
+                visibility_settings = await get_book_visibility_settings(db)
                 synced_author_ids = [a.id for a in authors if a.hardcover_id]
                 google_data = {}  # book_id -> GBook (reused for cover URLs in Phase 6)
                 ol_data = {}      # book_id -> OLBook
@@ -637,6 +639,7 @@ async def run_full_sync(force: bool = False):
                     books_to_reconcile = [
                         book for book in all_hc_books
                         if book.publish_date_checked_at is None
+                        and is_book_visible(book, visibility_settings)
                     ]
                     author_map = {a.id: a.name for a in authors}
 
@@ -882,6 +885,10 @@ async def run_full_sync(force: bool = False):
 
                 result = await db.execute(select(Book))
                 all_books = result.scalars().all()
+                visible_books = [
+                    book for book in all_books
+                    if is_book_visible(book, visibility_settings)
+                ]
 
                 # Track cover heights in memory to avoid re-reading cached files
                 cover_heights = {}
@@ -965,7 +972,7 @@ async def run_full_sync(force: bool = False):
                 # 6c: Google covers — only use fresh Google matches from this scan
                 # and only for books that still have no cover and no Hardcover art.
                 google_cover_books = [
-                    b for b in all_books
+                    b for b in visible_books
                     if b.id in google_data and google_data[b.id].cover_url
                 ]
                 if google_cover_books:
@@ -1007,7 +1014,7 @@ async def run_full_sync(force: bool = False):
 
                 # 6d: Open Library covers — last resort for books with NO cover
                 books_no_cover = [
-                    b for b in all_books
+                    b for b in visible_books
                     if not b.cover_image_cached_path and b.hardcover_id
                 ]
                 if books_no_cover:

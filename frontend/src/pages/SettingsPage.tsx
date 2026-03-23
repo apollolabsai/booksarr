@@ -1,9 +1,73 @@
 import { useState, useEffect, useRef } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { useSettings, useUpdateSettings, useScanStatus, useTriggerScan, useResetData, useApiUsage } from "../api/settings";
 import { useQueryClient } from "@tanstack/react-query";
+import type { VisibilityCategories } from "../types";
+
+const VISIBILITY_OPTIONS: Array<{
+  key: keyof VisibilityCategories;
+  label: string;
+  description: string;
+}> = [
+  {
+    key: "standard_books",
+    label: "Standard Books",
+    description: "Regular Hardcover books that are not classified into a more specific bucket.",
+  },
+  {
+    key: "short_fiction",
+    label: "Short Fiction",
+    description: "Novellas and short stories.",
+  },
+  {
+    key: "collections_and_compilations",
+    label: "Collections & Compilations",
+    description: "Hardcover-classified collections and books flagged with compilation=true.",
+  },
+  {
+    key: "likely_collections_by_title",
+    label: "Likely Collections by Title Heuristic",
+    description: "Collection-like bundles inferred from the title, such as Value Collection, boxed sets, omnibuses, and similar bundle naming.",
+  },
+  {
+    key: "graphic_and_alternate_formats",
+    label: "Graphic & Alternate Formats",
+    description: "Graphic novels, poetry, web novels, and light novels.",
+  },
+  {
+    key: "research_non_book_material",
+    label: "Research / Non-Book Material",
+    description: "Research papers and other non-standard book material.",
+  },
+  {
+    key: "fan_fiction",
+    label: "Fan Fiction",
+    description: "Hardcover items categorized as fan fiction.",
+  },
+  {
+    key: "non_english_books",
+    label: "Non-English Books",
+    description: "Books with a detected language outside English.",
+  },
+  {
+    key: "upcoming_unreleased",
+    label: "Upcoming / Unreleased",
+    description: "Books with a future release date.",
+  },
+  {
+    key: "pending_hardcover_records",
+    label: "Pending Hardcover Records",
+    description: "Books where Hardcover state is pending rather than normalized.",
+  },
+  {
+    key: "likely_excerpts",
+    label: "Likely Excerpts / Samples",
+    description: "Low-page pending Book records that look like excerpts or sampler entries.",
+  },
+];
 
 export default function SettingsPage() {
+  const location = useLocation();
   const { data: settings } = useSettings();
   const updateSettings = useUpdateSettings();
   const triggerScan = useTriggerScan();
@@ -17,6 +81,8 @@ export default function SettingsPage() {
   const [googleSaved, setGoogleSaved] = useState(false);
   const [scanInterval, setScanInterval] = useState("24");
   const [intervalSaved, setIntervalSaved] = useState(false);
+  const [visibilityCategories, setVisibilityCategories] = useState<VisibilityCategories | null>(null);
+  const [visibilitySaved, setVisibilitySaved] = useState(false);
   const queryClient = useQueryClient();
 
   const { data: scanStatus } = useScanStatus(true);
@@ -29,6 +95,22 @@ export default function SettingsPage() {
       setScanInterval(String(settings.scan_interval_hours));
     }
   }, [settings?.scan_interval_hours]);
+
+  useEffect(() => {
+    if (settings?.visibility_categories) {
+      setVisibilityCategories(settings.visibility_categories);
+    }
+  }, [settings?.visibility_categories]);
+
+  useEffect(() => {
+    if (!location.hash) return;
+    const id = location.hash.slice(1);
+    const el = document.getElementById(id);
+    if (!el) return;
+    requestAnimationFrame(() => {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, [location.hash]);
 
   useEffect(() => {
     if (isScanning) {
@@ -66,6 +148,13 @@ export default function SettingsPage() {
     setTimeout(() => setIntervalSaved(false), 3000);
   };
 
+  const handleSaveVisibility = async () => {
+    if (!visibilityCategories) return;
+    await updateSettings.mutateAsync({ visibility_categories: visibilityCategories });
+    setVisibilitySaved(true);
+    setTimeout(() => setVisibilitySaved(false), 3000);
+  };
+
   const handleScan = async (force?: boolean) => {
     await triggerScan.mutateAsync(force);
     queryClient.invalidateQueries({ queryKey: ["scanStatus"] });
@@ -73,6 +162,7 @@ export default function SettingsPage() {
 
   const parsedInterval = parseInt(scanInterval, 10);
   const intervalChanged = !isNaN(parsedInterval) && parsedInterval >= 0 && parsedInterval !== (settings?.scan_interval_hours ?? 24);
+  const visibilityChanged = JSON.stringify(visibilityCategories) !== JSON.stringify(settings?.visibility_categories ?? null);
   const formatUsageDay = (day: string) => {
     const [year, month, date] = day.split("-");
     return `${parseInt(month, 10)}/${parseInt(date, 10)}/${year.slice(2)}`;
@@ -81,6 +171,12 @@ export default function SettingsPage() {
   return (
     <div className="max-w-2xl">
       <h2 className="text-2xl font-bold mb-6">Settings</h2>
+
+      <section id="api-keys" className="scroll-mt-6 mb-8">
+        <div className="mb-3">
+          <h3 className="text-lg font-semibold">API Keys</h3>
+          <p className="text-sm text-slate-400">Configure the external services used for metadata enrichment.</p>
+        </div>
 
       {/* Hardcover API Key */}
       <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
@@ -212,6 +308,91 @@ export default function SettingsPage() {
         )}
       </div>
 
+      {/* API Usage */}
+      <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
+        <h3 className="text-lg font-semibold mb-4">API Calls</h3>
+        <p className="text-sm text-slate-400 mb-4">
+          Daily outbound API call totals by source for the last 7 days.
+        </p>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm border-collapse">
+            <thead>
+              <tr className="bg-slate-700/60 text-slate-200">
+                <th className="border border-slate-600 px-3 py-2 text-left">API Calls</th>
+                <th className="border border-slate-600 px-3 py-2 text-right">Total</th>
+                <th className="border border-slate-600 px-3 py-2 text-right">Hard Cover</th>
+                <th className="border border-slate-600 px-3 py-2 text-right">Google</th>
+                <th className="border border-slate-600 px-3 py-2 text-right">Open Library</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(apiUsage ?? []).map((row) => (
+                <tr key={row.day} className="text-slate-300 odd:bg-slate-800 even:bg-slate-800/50">
+                  <td className="border border-slate-700 px-3 py-2">{formatUsageDay(row.day)}</td>
+                  <td className="border border-slate-700 px-3 py-2 text-right">{row.total}</td>
+                  <td className="border border-slate-700 px-3 py-2 text-right">{row.hardcover}</td>
+                  <td className="border border-slate-700 px-3 py-2 text-right">{row.google}</td>
+                  <td className="border border-slate-700 px-3 py-2 text-right">{row.openlibrary}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      </section>
+
+      <section id="profiles" className="scroll-mt-6 mb-8">
+        <div className="mb-3">
+          <h3 className="text-lg font-semibold">Profiles</h3>
+          <p className="text-sm text-slate-400">Control what kinds of books appear in the library and review the current library profile.</p>
+        </div>
+
+        {/* Visibility */}
+        <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
+          <h3 className="text-lg font-semibold mb-4">Book Visibility</h3>
+          <p className="text-sm text-slate-400 mb-2">
+            Choose which types of books should be included in the library by default.
+          </p>
+          <p className="text-xs text-slate-500 mb-4">
+            Owned books are always shown. Books hidden by these rules are skipped for Google Books and Open Library lookups to conserve external API usage.
+          </p>
+          <div className="space-y-3">
+            {VISIBILITY_OPTIONS.map((option) => (
+              <label
+                key={option.key}
+                className="flex items-start gap-3 rounded-lg border border-slate-700 bg-slate-900/30 px-4 py-3"
+              >
+                <input
+                  type="checkbox"
+                  checked={visibilityCategories?.[option.key] ?? false}
+                  onChange={(e) =>
+                    setVisibilityCategories((current) =>
+                      current
+                        ? { ...current, [option.key]: e.target.checked }
+                        : current
+                    )
+                  }
+                  className="mt-1 h-4 w-4 rounded border-slate-500 bg-slate-700 text-emerald-500 focus:ring-emerald-500"
+                />
+                <div>
+                  <div className="text-sm font-medium text-slate-200">{option.label}</div>
+                  <div className="text-xs text-slate-400 mt-1">{option.description}</div>
+                </div>
+              </label>
+            ))}
+          </div>
+          <div className="flex items-center gap-3 mt-4">
+            <button
+              onClick={handleSaveVisibility}
+              disabled={!visibilityChanged || !visibilityCategories}
+              className="bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-600 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+            >
+              Save
+            </button>
+            {visibilitySaved && <span className="text-emerald-400 text-sm">Visibility rules updated!</span>}
+          </div>
+        </div>
+
       {/* Library Info */}
       <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
         <h3 className="text-lg font-semibold mb-4">Library</h3>
@@ -230,9 +411,16 @@ export default function SettingsPage() {
           </div>
         </div>
       </div>
+      </section>
 
-      {/* Scan Controls */}
-      <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
+      <section id="metadata-refreshes" className="scroll-mt-6 mb-8">
+        <div className="mb-3">
+          <h3 className="text-lg font-semibold">Metadata Refreshes</h3>
+          <p className="text-sm text-slate-400">Run scans, manage refresh cadence, review API usage, and reset metadata state when needed.</p>
+        </div>
+
+        {/* Scan Controls */}
+        <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
         <h3 className="text-lg font-semibold mb-4">Library Scan</h3>
         <p className="text-sm text-slate-400 mb-4">
           Scan your library folder for new books, match to Hardcover, and download metadata and covers.
@@ -310,57 +498,6 @@ export default function SettingsPage() {
         )}
       </div>
 
-      {/* API Usage */}
-      <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
-        <h3 className="text-lg font-semibold mb-4">API Calls</h3>
-        <p className="text-sm text-slate-400 mb-4">
-          Daily outbound API call totals by source for the last 7 days.
-        </p>
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm border-collapse">
-            <thead>
-              <tr className="bg-slate-700/60 text-slate-200">
-                <th className="border border-slate-600 px-3 py-2 text-left">API Calls</th>
-                <th className="border border-slate-600 px-3 py-2 text-right">Total</th>
-                <th className="border border-slate-600 px-3 py-2 text-right">Hard Cover</th>
-                <th className="border border-slate-600 px-3 py-2 text-right">Google</th>
-                <th className="border border-slate-600 px-3 py-2 text-right">Open Library</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(apiUsage ?? []).map((row) => (
-                <tr key={row.day} className="text-slate-300 odd:bg-slate-800 even:bg-slate-800/50">
-                  <td className="border border-slate-700 px-3 py-2">{formatUsageDay(row.day)}</td>
-                  <td className="border border-slate-700 px-3 py-2 text-right">{row.total}</td>
-                  <td className="border border-slate-700 px-3 py-2 text-right">{row.hardcover}</td>
-                  <td className="border border-slate-700 px-3 py-2 text-right">{row.google}</td>
-                  <td className="border border-slate-700 px-3 py-2 text-right">{row.openlibrary}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Logs */}
-      <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-lg font-semibold">Logs</h3>
-            <p className="text-sm text-slate-400 mt-1">View application logs, filter by category, and download.</p>
-          </div>
-          <Link
-            to="/logs"
-            className="bg-slate-600 hover:bg-slate-500 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors flex items-center gap-2"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            View Logs
-          </Link>
-        </div>
-      </div>
-
       {/* Reset */}
       <div className="bg-slate-800 rounded-lg border border-red-900/50 p-6">
         <h3 className="text-lg font-semibold text-red-400 mb-2">Danger Zone</h3>
@@ -395,6 +532,32 @@ export default function SettingsPage() {
           </div>
         )}
       </div>
+      </section>
+
+      <section id="logs" className="scroll-mt-6 mb-8">
+        <div className="mb-3">
+          <h3 className="text-lg font-semibold">Logs</h3>
+          <p className="text-sm text-slate-400">Open the live application log viewer for filtering, scrolling, and download.</p>
+        </div>
+
+        <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-semibold">Logs</h3>
+              <p className="text-sm text-slate-400 mt-1">View application logs, filter by category, and download.</p>
+            </div>
+            <Link
+              to="/logs"
+              className="bg-slate-600 hover:bg-slate-500 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors flex items-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              View Logs
+            </Link>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }
