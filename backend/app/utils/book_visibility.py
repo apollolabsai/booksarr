@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models import Book, Setting
+from backend.app.utils.isbn import has_any_valid_isbn
 
 VISIBILITY_CATEGORY_DEFAULTS = {
     "standard_books": True,
@@ -16,6 +17,7 @@ VISIBILITY_CATEGORY_DEFAULTS = {
     "graphic_and_alternate_formats": False,
     "research_non_book_material": False,
     "fan_fiction": False,
+    "valid_isbn": False,
     "non_english_books": False,
     "upcoming_unreleased": False,
     "pending_hardcover_records": False,
@@ -31,6 +33,7 @@ VISIBILITY_CATEGORY_LABELS = {
     "graphic_and_alternate_formats": "Graphic & Alternate Formats",
     "research_non_book_material": "Research / Non-Book Material",
     "fan_fiction": "Fan Fiction",
+    "valid_isbn": "Valid ISBN",
     "non_english_books": "Non-English Books",
     "upcoming_unreleased": "Upcoming / Unreleased",
     "pending_hardcover_records": "Pending Hardcover Records",
@@ -129,6 +132,16 @@ def is_book_visible(book: Book, visibility_settings: dict[str, bool], today: str
         return False
     if book.manual_visibility == "visible":
         return True
+    if visibility_settings["valid_isbn"] and not has_any_valid_isbn(
+        book.isbn,
+        book.hardcover_isbn_10,
+        book.hardcover_isbn_13,
+        book.google_isbn_10,
+        book.google_isbn_13,
+        book.ol_isbn_10,
+        book.ol_isbn_13,
+    ):
+        return False
 
     if book.is_owned:
         return True
@@ -146,29 +159,51 @@ def is_book_visible(book: Book, visibility_settings: dict[str, bool], today: str
 
 
 def get_hidden_category(book: Book, visibility_settings: dict[str, bool], today: str | None = None) -> tuple[str, str] | None:
+    categories = get_hidden_categories(book, visibility_settings, today=today)
+    return categories[0] if categories else None
+
+
+def get_hidden_categories(
+    book: Book,
+    visibility_settings: dict[str, bool],
+    today: str | None = None,
+) -> list[tuple[str, str]]:
+    categories: list[tuple[str, str]] = []
+
     if book.manual_visibility == "hidden":
         key = "manual_hidden"
-        return key, VISIBILITY_CATEGORY_LABELS[key]
+        categories.append((key, VISIBILITY_CATEGORY_LABELS[key]))
     if book.manual_visibility == "visible":
-        return None
+        return []
+    if visibility_settings["valid_isbn"] and not has_any_valid_isbn(
+        book.isbn,
+        book.hardcover_isbn_10,
+        book.hardcover_isbn_13,
+        book.google_isbn_10,
+        book.google_isbn_13,
+        book.ol_isbn_10,
+        book.ol_isbn_13,
+    ):
+        key = "valid_isbn"
+        categories.append((key, VISIBILITY_CATEGORY_LABELS[key]))
 
     if book.is_owned:
-        return None
+        return categories
 
     if is_non_english(book) and not visibility_settings["non_english_books"]:
         key = "non_english_books"
-        return key, VISIBILITY_CATEGORY_LABELS[key]
+        categories.append((key, VISIBILITY_CATEGORY_LABELS[key]))
     if is_upcoming(book, today=today) and not visibility_settings["upcoming_unreleased"]:
         key = "upcoming_unreleased"
-        return key, VISIBILITY_CATEGORY_LABELS[key]
+        categories.append((key, VISIBILITY_CATEGORY_LABELS[key]))
     if is_likely_excerpt(book) and not visibility_settings["likely_excerpts"]:
         key = "likely_excerpts"
-        return key, VISIBILITY_CATEGORY_LABELS[key]
+        categories.append((key, VISIBILITY_CATEGORY_LABELS[key]))
     if (book.hardcover_state or "").lower() == "pending" and not visibility_settings["pending_hardcover_records"]:
         key = "pending_hardcover_records"
-        return key, VISIBILITY_CATEGORY_LABELS[key]
+        categories.append((key, VISIBILITY_CATEGORY_LABELS[key]))
 
     key = get_primary_visibility_category(book)
     if not visibility_settings.get(key, True):
-        return key, VISIBILITY_CATEGORY_LABELS[key]
-    return None
+        categories.append((key, VISIBILITY_CATEGORY_LABELS[key]))
+    return categories

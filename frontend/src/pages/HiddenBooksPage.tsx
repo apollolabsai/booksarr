@@ -180,9 +180,16 @@ export default function HiddenBooksPage() {
                       </Link>
                     </td>
                     <td className="px-4 py-2">
-                      <span className="inline-flex rounded-full bg-amber-500/15 px-2.5 py-1 text-xs font-medium text-amber-300">
-                        {book.hidden_category_label}
-                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {book.hidden_categories.map((category) => (
+                          <span
+                            key={category.key}
+                            className="inline-flex rounded-full bg-amber-500/15 px-2.5 py-1 text-xs font-medium text-amber-300"
+                          >
+                            {category.label}
+                          </span>
+                        ))}
+                      </div>
                     </td>
                     <td className="px-4 py-2 text-right text-slate-400 whitespace-nowrap">
                       {book.release_date ? book.release_date.substring(0, 4) : "-"}

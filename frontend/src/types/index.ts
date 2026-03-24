@@ -104,6 +104,10 @@ export interface Book {
 export interface HiddenBook extends Book {
   hidden_category_key: string;
   hidden_category_label: string;
+  hidden_categories: Array<{
+    key: string;
+    label: string;
+  }>;
 }
 
 export interface CoverOption {
@@ -188,6 +192,7 @@ export interface VisibilityCategories {
   graphic_and_alternate_formats: boolean;
   research_non_book_material: boolean;
   fan_fiction: boolean;
+  valid_isbn: boolean;
   non_english_books: boolean;
   upcoming_unreleased: boolean;
   pending_hardcover_records: boolean;

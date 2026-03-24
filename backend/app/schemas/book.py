@@ -53,9 +53,15 @@ class BookDetail(BookSummary):
         from_attributes = True
 
 
+class HiddenCategoryTag(BaseModel):
+    key: str
+    label: str
+
+
 class HiddenBookSummary(BookSummary):
     hidden_category_key: str
     hidden_category_label: str
+    hidden_categories: list[HiddenCategoryTag]
 
     class Config:
         from_attributes = True

@@ -9,6 +9,7 @@ from backend.app.schemas.book import (
     BookSummary,
     BookDetail,
     HiddenBookSummary,
+    HiddenCategoryTag,
     SeriesPositionInfo,
     BookCoverOptionsResponse,
     CoverOption,
@@ -19,6 +20,7 @@ from backend.app.utils.isbn import has_any_valid_isbn
 from backend.app.utils.book_visibility import (
     get_book_visibility_settings,
     get_hidden_category,
+    get_hidden_categories,
     is_book_visible,
 )
 from backend.app.services.library_sync import (
@@ -141,14 +143,19 @@ async def list_hidden_books(
     visibility_settings = await get_book_visibility_settings(db)
     hidden_books: list[HiddenBookSummary] = []
     for book in result.scalars().all():
-        hidden_category = get_hidden_category(book, visibility_settings)
-        if not hidden_category:
+        hidden_categories = get_hidden_categories(book, visibility_settings)
+        if not hidden_categories:
             continue
+        hidden_category = hidden_categories[0]
         summary = _book_summary(book)
         hidden_books.append(HiddenBookSummary(
             **summary.model_dump(),
             hidden_category_key=hidden_category[0],
             hidden_category_label=hidden_category[1],
+            hidden_categories=[
+                HiddenCategoryTag(key=key, label=label)
+                for key, label in hidden_categories
+            ],
         ))
     return hidden_books
 
