@@ -102,6 +102,27 @@ export interface HiddenBook extends Book {
   hidden_category_label: string;
 }
 
+export interface CoverOption {
+  key: string;
+  source: string;
+  label: string;
+  image_url: string | null;
+  cached_path: string | null;
+  width: number | null;
+  height: number | null;
+  aspect_ratio: number | null;
+  ratio_delta_percent: number | null;
+  is_current: boolean;
+  is_manual: boolean;
+}
+
+export interface BookCoverOptionsResponse {
+  book_id: number;
+  current_source: string | null;
+  manual_source: string | null;
+  options: CoverOption[];
+}
+
 export interface ScanStatus {
   status: "idle" | "scanning";
   progress: number;

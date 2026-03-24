@@ -57,3 +57,28 @@ class HiddenBookSummary(BookSummary):
 
     class Config:
         from_attributes = True
+
+
+class CoverOption(BaseModel):
+    key: str
+    source: str
+    label: str
+    image_url: str | None
+    cached_path: str | None
+    width: int | None
+    height: int | None
+    aspect_ratio: float | None
+    ratio_delta_percent: float | None
+    is_current: bool
+    is_manual: bool
+
+
+class BookCoverOptionsResponse(BaseModel):
+    book_id: int
+    current_source: str | None
+    manual_source: str | None
+    options: list[CoverOption]
+
+
+class BookCoverSelectionRequest(BaseModel):
+    source: str

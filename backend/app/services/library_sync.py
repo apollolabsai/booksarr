@@ -21,6 +21,7 @@ from backend.app.services.image_cache import (
     cache_best_local_cover,
     download_image_bytes,
     cache_cover_data,
+    get_cached_cover_dimensions,
     get_cached_cover_height,
     get_cached_cover_aspect_ratio,
 )
@@ -338,6 +339,153 @@ def _cover_source_rank(source: str | None) -> int:
         None: 0,
     }
     return ranks.get(source, 0)
+
+
+def _cover_source_label(source: str) -> str:
+    labels = {
+        "local": "Local",
+        "hardcover": "Hardcover",
+        "google": "Google Books",
+        "openlibrary": "Open Library",
+    }
+    return labels.get(source, source.title())
+
+
+def _cover_ratio_delta_percent(ratio: float | None) -> float | None:
+    if ratio is None or ratio <= 0:
+        return None
+    return round((abs(ratio - TARGET_COVER_RATIO) / TARGET_COVER_RATIO) * 100, 1)
+
+
+def _get_book_source_cover_url(book: Book, source: str) -> str | None:
+    if source == "hardcover":
+        return book.cover_image_url
+    if source == "google":
+        return book.google_cover_url
+    if source == "openlibrary":
+        return book.ol_cover_url
+    return None
+
+
+def _get_local_cached_cover_path(book: Book) -> str | None:
+    current_source = _get_cached_cover_source(book.cover_image_cached_path)
+    if current_source == "local" and get_cached_cover_dimensions(book.cover_image_cached_path):
+        return book.cover_image_cached_path
+
+    if not book.files:
+        return None
+
+    book_file = book.files[0]
+    epub_path = BOOKS_DIR / book_file.file_path if book_file.file_format == "epub" else None
+    return cache_best_local_cover(
+        book_file.local_cover_path,
+        epub_path,
+        book.id,
+        existing_cached_path=None,
+    )
+
+
+async def get_book_cover_options(book: Book) -> list[dict]:
+    options: list[dict] = []
+    current_source = _get_cached_cover_source(book.cover_image_cached_path)
+
+    local_cached_path = _get_local_cached_cover_path(book)
+    if local_cached_path:
+        dims = get_cached_cover_dimensions(local_cached_path)
+        ratio = get_cached_cover_aspect_ratio(local_cached_path)
+        options.append({
+            "key": "local",
+            "source": "local",
+            "label": _cover_source_label("local"),
+            "image_url": None,
+            "cached_path": local_cached_path,
+            "width": dims[0] if dims else None,
+            "height": dims[1] if dims else None,
+            "aspect_ratio": ratio,
+            "ratio_delta_percent": _cover_ratio_delta_percent(ratio),
+            "is_current": current_source == "local",
+            "is_manual": book.manual_cover_source == "local",
+        })
+
+    for source in ("hardcover", "google", "openlibrary"):
+        image_url = _get_book_source_cover_url(book, source)
+        if not image_url:
+            continue
+        data = await download_image_bytes(image_url)
+        if not data:
+            continue
+        dims = get_image_dimensions(data)
+        ratio = (dims[0] / dims[1]) if dims and dims[0] > 0 and dims[1] > 0 else None
+        options.append({
+            "key": source,
+            "source": source,
+            "label": _cover_source_label(source),
+            "image_url": image_url,
+            "cached_path": None,
+            "width": dims[0] if dims else None,
+            "height": dims[1] if dims else None,
+            "aspect_ratio": ratio,
+            "ratio_delta_percent": _cover_ratio_delta_percent(ratio),
+            "is_current": current_source == source,
+            "is_manual": book.manual_cover_source == source,
+        })
+
+    return options
+
+
+async def _apply_cover_source(book: Book, source: str, *, override_url: str | None = None) -> bool:
+    if source == "local":
+        local_cached_path = _get_local_cached_cover_path(book)
+        if not local_cached_path:
+            return False
+        book.cover_image_cached_path = local_cached_path
+        return True
+
+    image_url = override_url or _get_book_source_cover_url(book, source)
+    if not image_url:
+        return False
+
+    data = await download_image_bytes(image_url)
+    if not data:
+        return False
+
+    cached_path = cache_cover_data(data, book.id, source)
+    if not cached_path:
+        return False
+
+    book.cover_image_cached_path = cached_path
+    return True
+
+
+async def apply_manual_cover_selection(book: Book) -> bool:
+    source = (book.manual_cover_source or "").strip().lower()
+    if source not in {"local", "hardcover", "google", "openlibrary"}:
+        return False
+
+    current_source = _get_cached_cover_source(book.cover_image_cached_path)
+    if current_source == source and get_cached_cover_dimensions(book.cover_image_cached_path):
+        return True
+
+    override_url = book.manual_cover_url if source != "local" else None
+    return await _apply_cover_source(book, source, override_url=override_url)
+
+
+async def set_book_cover_selection(book: Book, source: str) -> bool:
+    normalized_source = source.strip().lower()
+    if normalized_source not in {"local", "hardcover", "google", "openlibrary"}:
+        return False
+
+    override_url = None if normalized_source == "local" else _get_book_source_cover_url(book, normalized_source)
+    if normalized_source != "local" and not override_url:
+        return False
+
+    applied = await _apply_cover_source(book, normalized_source, override_url=override_url)
+    if not applied:
+        return False
+
+    book.manual_cover_source = normalized_source
+    book.manual_cover_url = override_url
+    return True
 
 
 def _should_replace_cover(
@@ -1533,6 +1681,17 @@ async def run_full_sync(force: bool = False):
                     if ol_covers:
                         logger.info("Cached %d cover(s) from Open Library", ol_covers)
 
+                manual_overrides = 0
+                for book in books:
+                    if not book.manual_cover_source:
+                        continue
+                    if await apply_manual_cover_selection(book):
+                        manual_overrides += 1
+
+                if manual_overrides:
+                    await db.commit()
+                    logger.info("Reapplied %d manual cover override(s)", manual_overrides)
+
                 scan_status.progress = 96.0
 
                 # Update author local book counts
@@ -1798,6 +1957,9 @@ async def refresh_single_book(book_id: int):
                             cover_height = new_height
                             cover_source = "openlibrary"
                             cover_ratio = new_ratio
+
+            if book.manual_cover_source:
+                await apply_manual_cover_selection(book)
 
             await flush_api_usage_batch(db)
             await db.commit()

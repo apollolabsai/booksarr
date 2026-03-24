@@ -38,6 +38,8 @@ class Book(Base):
     language: Mapped[str | None] = mapped_column(String, nullable=True)
     cover_image_url: Mapped[str | None] = mapped_column(String, nullable=True)
     cover_image_cached_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    manual_cover_source: Mapped[str | None] = mapped_column(String, nullable=True)
+    manual_cover_url: Mapped[str | None] = mapped_column(String, nullable=True)
     tags: Mapped[str | None] = mapped_column(Text, nullable=True)
     rating: Mapped[float | None] = mapped_column(Float, nullable=True)
     pages: Mapped[int | None] = mapped_column(Integer, nullable=True)

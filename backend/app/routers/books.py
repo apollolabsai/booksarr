@@ -5,14 +5,26 @@ from sqlalchemy.orm import selectinload
 
 from backend.app.database import get_db
 from backend.app.models import Author, Book, BookSeries
-from backend.app.schemas.book import BookSummary, BookDetail, HiddenBookSummary, SeriesPositionInfo
+from backend.app.schemas.book import (
+    BookSummary,
+    BookDetail,
+    HiddenBookSummary,
+    SeriesPositionInfo,
+    BookCoverOptionsResponse,
+    CoverOption,
+    BookCoverSelectionRequest,
+)
 from backend.app.utils.isbn import has_any_valid_isbn
 from backend.app.utils.book_visibility import (
     get_book_visibility_settings,
     get_hidden_category,
     is_book_visible,
 )
-from backend.app.services.library_sync import refresh_single_book
+from backend.app.services.library_sync import (
+    refresh_single_book,
+    get_book_cover_options,
+    set_book_cover_selection,
+)
 from backend.app.services.image_cache import get_cached_cover_aspect_ratio
 
 router = APIRouter(prefix="/api/books", tags=["books"])
@@ -199,6 +211,49 @@ async def get_book(book_id: int, db: AsyncSession = Depends(get_db)):
         is_owned=book.is_owned,
         series_info=series_info,
     )
+
+
+@router.get("/{book_id}/cover-options", response_model=BookCoverOptionsResponse)
+async def get_book_cover_options_route(book_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Book)
+        .where(Book.id == book_id)
+        .options(selectinload(Book.files))
+    )
+    book = result.scalar_one_or_none()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    options = await get_book_cover_options(book)
+    current_source = next((option["source"] for option in options if option["is_current"]), None)
+    return BookCoverOptionsResponse(
+        book_id=book.id,
+        current_source=current_source,
+        manual_source=book.manual_cover_source,
+        options=[CoverOption(**option) for option in options],
+    )
+
+
+@router.post("/{book_id}/cover-selection")
+async def set_book_cover_selection_route(
+    book_id: int,
+    body: BookCoverSelectionRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Book)
+        .where(Book.id == book_id)
+        .options(selectinload(Book.files))
+    )
+    book = result.scalar_one_or_none()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    if not await set_book_cover_selection(book, body.source):
+        raise HTTPException(status_code=400, detail="Cover source is not available for this book")
+
+    await db.commit()
+    return {"status": "ok", "message": "Cover updated"}
 
 
 @router.post("/{book_id}/refresh")
