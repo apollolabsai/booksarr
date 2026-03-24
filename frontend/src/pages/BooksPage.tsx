@@ -65,7 +65,7 @@ export default function BooksPage() {
       ) : view === "table" ? (
         <BookTable books={books} showAuthor={true} />
       ) : (
-        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-4">
+        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-4">
           {books.map((book) => (
             <BookCard key={book.id} book={book} showAuthor={true} />
           ))}

@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import type { BookInAuthor, Book } from "../types";
 import { getBookCoverPresentation, getImageUrl } from "../types";
 import CoverPickerDialog from "./CoverPickerDialog";
+import { useRefreshBook, useSetBookVisibility } from "../api/books";
 
 type BookLike = BookInAuthor | Book;
 
@@ -19,7 +20,11 @@ export default function BookCard({
   onClick?: () => void;
   showAuthor?: boolean;
 }) {
+  const refreshBook = useRefreshBook();
+  const setBookVisibility = useSetBookVisibility();
   const [coverPickerOpen, setCoverPickerOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const imgUrl = getImageUrl(
     book.cover_image_cached_path,
     "cover_image_url" in book ? book.cover_image_url : null
@@ -37,6 +42,19 @@ export default function BookCard({
       onClick();
     }
   };
+
+  useEffect(() => {
+    if (!menuOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [menuOpen]);
 
   return (
     <>
@@ -71,21 +89,62 @@ export default function BookCard({
               {book.title}
             </div>
           )}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setCoverPickerOpen(true);
-            }}
-            className="absolute bottom-2 left-2 rounded-md border border-slate-500/60 bg-slate-900/70 px-1.5 py-1 text-slate-100 opacity-0 transition-opacity hover:bg-slate-800/90 group-hover:opacity-100"
-            title="Choose poster"
-          >
-            <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
-              <circle cx="5" cy="12" r="1.75" />
-              <circle cx="12" cy="12" r="1.75" />
-              <circle cx="19" cy="12" r="1.75" />
-            </svg>
-          </button>
+          <div ref={menuRef} className="absolute bottom-2 left-2 right-2">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setMenuOpen((current) => !current);
+              }}
+              className="rounded-md border border-slate-500/60 bg-slate-900/70 px-1.5 py-1 text-slate-100 opacity-0 transition-opacity hover:bg-slate-800/90 group-hover:opacity-100"
+              title="Book actions"
+            >
+              <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
+                <circle cx="5" cy="12" r="1.75" />
+                <circle cx="12" cy="12" r="1.75" />
+                <circle cx="19" cy="12" r="1.75" />
+              </svg>
+            </button>
+            {menuOpen && (
+              <div
+                className="absolute bottom-9 left-0 right-0 z-20 rounded-lg border border-slate-600 bg-slate-900/95 p-1 shadow-xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setCoverPickerOpen(true);
+                  }}
+                  className="flex w-full items-center rounded-md px-2.5 py-1.5 text-xs text-slate-200 transition-colors hover:bg-slate-800"
+                >
+                  Choose Poster
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    refreshBook.mutate(book.id);
+                  }}
+                  disabled={refreshBook.isPending}
+                  className="flex w-full items-center rounded-md px-2.5 py-1.5 text-xs text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Refresh
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setBookVisibility.mutate({ bookId: book.id, action: "hide" });
+                  }}
+                  disabled={setBookVisibility.isPending}
+                  className="flex w-full items-center rounded-md px-2.5 py-1.5 text-xs text-rose-300 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Hide Book
+                </button>
+              </div>
+            )}
+          </div>
           {book.is_owned && (
             <div className="absolute top-2 right-2 bg-emerald-500 rounded-full p-1">
               <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">

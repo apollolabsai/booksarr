@@ -9,6 +9,7 @@ class VisibilityCategories(BaseModel):
     graphic_and_alternate_formats: bool = False
     research_non_book_material: bool = False
     fan_fiction: bool = False
+    valid_isbn: bool = False
     non_english_books: bool = False
     upcoming_unreleased: bool = False
     pending_hardcover_records: bool = False

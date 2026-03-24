@@ -45,6 +45,11 @@ const VISIBILITY_OPTIONS: Array<{
     description: "Hardcover items categorized as fan fiction.",
   },
   {
+    key: "valid_isbn",
+    label: "Valid ISBN",
+    description: "Only show books that have at least one valid ISBN from local metadata, Hardcover, Google, or Open Library.",
+  },
+  {
     key: "non_english_books",
     label: "Non-English Books",
     description: "Books with a detected language outside English.",
