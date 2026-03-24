@@ -1698,7 +1698,7 @@ async def run_full_sync(force: bool = False):
                         logger.info("Cached %d cover(s) from Open Library", ol_covers)
 
                 manual_overrides = 0
-                for book in books:
+                for book in all_books:
                     if not book.manual_cover_source:
                         continue
                     if await apply_manual_cover_selection(book):
