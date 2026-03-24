@@ -30,6 +30,22 @@ def has_any_valid_isbn(*values: str | None) -> bool:
     return any(is_valid_isbn(value) for value in values)
 
 
+def extract_isbn_variants(values: list[str] | None) -> tuple[str | None, str | None]:
+    isbn10 = None
+    isbn13 = None
+    for value in values or []:
+        normalized = normalized_valid_isbn(value)
+        if not normalized:
+            continue
+        if len(normalized) == 10 and isbn10 is None:
+            isbn10 = normalized
+        elif len(normalized) == 13 and isbn13 is None:
+            isbn13 = normalized
+        if isbn10 and isbn13:
+            break
+    return isbn10, isbn13
+
+
 def _is_valid_isbn10(isbn: str) -> bool:
     if not re.fullmatch(r"\d{9}[\dX]", isbn):
         return False

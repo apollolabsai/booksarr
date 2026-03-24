@@ -32,6 +32,8 @@ export interface BookInAuthor {
   isbn: string | null;
   google_isbn_10: string | null;
   google_isbn_13: string | null;
+  ol_isbn_10: string | null;
+  ol_isbn_13: string | null;
   has_valid_isbn: boolean;
   matched_google: boolean;
   matched_openlibrary: boolean;
@@ -84,6 +86,8 @@ export interface Book {
   isbn: string | null;
   google_isbn_10: string | null;
   google_isbn_13: string | null;
+  ol_isbn_10: string | null;
+  ol_isbn_13: string | null;
   has_valid_isbn: boolean;
   matched_google: boolean;
   matched_openlibrary: boolean;

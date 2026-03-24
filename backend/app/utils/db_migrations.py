@@ -16,6 +16,8 @@ def run_schema_migrations(conn: Connection) -> None:
         "hardcover_isbn_13": "VARCHAR",
         "google_isbn_10": "VARCHAR",
         "google_isbn_13": "VARCHAR",
+        "ol_isbn_10": "VARCHAR",
+        "ol_isbn_13": "VARCHAR",
         "manual_cover_source": "VARCHAR",
         "manual_cover_url": "VARCHAR",
         "manual_visibility": "VARCHAR",

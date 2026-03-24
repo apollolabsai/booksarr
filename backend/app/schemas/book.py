@@ -25,6 +25,8 @@ class BookSummary(BaseModel):
     isbn: str | None
     google_isbn_10: str | None
     google_isbn_13: str | None
+    ol_isbn_10: str | None
+    ol_isbn_13: str | None
     has_valid_isbn: bool
     matched_google: bool
     matched_openlibrary: bool

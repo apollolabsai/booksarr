@@ -30,6 +30,8 @@ class Book(Base):
     ol_edition_key: Mapped[str | None] = mapped_column(String, nullable=True)
     ol_first_publish_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ol_cover_url: Mapped[str | None] = mapped_column(String, nullable=True)
+    ol_isbn_10: Mapped[str | None] = mapped_column(String, nullable=True)
+    ol_isbn_13: Mapped[str | None] = mapped_column(String, nullable=True)
     isbn: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     publisher: Mapped[str | None] = mapped_column(String, nullable=True)

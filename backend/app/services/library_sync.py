@@ -40,7 +40,7 @@ from backend.app.services.google_books import (
 )
 from backend.app.utils.epub_cover import get_image_dimensions
 from backend.app.utils.api_usage import begin_api_usage_batch, clear_api_usage_batch, flush_api_usage_batch
-from backend.app.utils.isbn import normalize_isbn, normalized_valid_isbn
+from backend.app.utils.isbn import normalize_isbn, normalized_valid_isbn, extract_isbn_variants
 
 logger = logging.getLogger("booksarr.sync")
 
@@ -543,6 +543,8 @@ def _preferred_google_isbns(book: Book) -> list[str]:
         book.isbn,
         book.hardcover_isbn_13,
         book.hardcover_isbn_10,
+        book.ol_isbn_13,
+        book.ol_isbn_10,
     ]
     seen: set[str] = set()
     result: list[str] = []
@@ -1041,6 +1043,8 @@ async def run_full_sync(force: bool = False):
                                 book.ol_edition_key = None
                                 book.ol_first_publish_year = None
                                 book.ol_cover_url = None
+                                book.ol_isbn_10 = None
+                                book.ol_isbn_13 = None
                                 book.publish_date_checked_at = None
                             if book.release_date != hc_book.release_date:
                                 book.publish_date_checked_at = None
@@ -1302,6 +1306,7 @@ async def run_full_sync(force: bool = False):
                                 title=book.title,
                                 first_publish_year=book.ol_first_publish_year,
                                 cover_id=_extract_ol_cover_id(book.ol_cover_url),
+                                isbn_list=[isbn for isbn in [book.ol_isbn_10, book.ol_isbn_13] if isbn],
                             )
                             summary.openlibrary.record_cached()
                         else:
@@ -1335,10 +1340,15 @@ async def run_full_sync(force: bool = False):
                             for book, ol_lookup in zip(books_need_ol_fetch, results):
                                 if ol_lookup.book:
                                     summary.openlibrary.record_match()
+                                    ol_isbn_10, ol_isbn_13 = extract_isbn_variants(ol_lookup.book.isbn_list)
                                     ol_data[book.id] = ol_lookup.book
                                     # Persist OL data to DB
                                     book.ol_edition_key = ol_lookup.book.cover_edition_key or "_found"
                                     book.ol_first_publish_year = ol_lookup.book.first_publish_year
+                                    if not book.hardcover_isbn_10 and not book.google_isbn_10:
+                                        book.ol_isbn_10 = ol_isbn_10
+                                    if not book.hardcover_isbn_13 and not book.google_isbn_13:
+                                        book.ol_isbn_13 = ol_isbn_13
                                     if ol_lookup.book.cover_id:
                                         book.ol_cover_url = ol_lookup.book.cover_url_large
                                     fetched_ol += 1
@@ -1593,6 +1603,7 @@ async def run_full_sync(force: bool = False):
                                 title=book.title,
                                 first_publish_year=book.ol_first_publish_year,
                                 cover_id=_extract_ol_cover_id(book.ol_cover_url),
+                                isbn_list=[isbn for isbn in [book.ol_isbn_10, book.ol_isbn_13] if isbn],
                             )
                             summary.openlibrary.record_cached()
                         else:
@@ -1625,10 +1636,15 @@ async def run_full_sync(force: bool = False):
                             for book, ol_lookup in zip(books_need_ol_search, results):
                                 if ol_lookup.book:
                                     summary.openlibrary.record_match()
+                                    ol_isbn_10, ol_isbn_13 = extract_isbn_variants(ol_lookup.book.isbn_list)
                                     ol_data[book.id] = ol_lookup.book
                                     # Persist OL data to DB
                                     book.ol_edition_key = ol_lookup.book.cover_edition_key or "_found"
                                     book.ol_first_publish_year = ol_lookup.book.first_publish_year
+                                    if not book.hardcover_isbn_10 and not book.google_isbn_10:
+                                        book.ol_isbn_10 = ol_isbn_10
+                                    if not book.hardcover_isbn_13 and not book.google_isbn_13:
+                                        book.ol_isbn_13 = ol_isbn_13
                                     if ol_lookup.book.cover_id:
                                         book.ol_cover_url = ol_lookup.book.cover_url_large
                                 else:
@@ -1771,6 +1787,8 @@ async def refresh_single_book(book_id: int):
             book.ol_edition_key = None
             book.ol_first_publish_year = None
             book.ol_cover_url = None
+            book.ol_isbn_10 = None
+            book.ol_isbn_13 = None
             book.publish_date_checked_at = None
 
             api_key = await get_api_key(db)
@@ -1865,8 +1883,13 @@ async def refresh_single_book(book_id: int):
                         book.ol_edition_key = "_none"
 
                 if ol_book:
+                    ol_isbn_10, ol_isbn_13 = extract_isbn_variants(ol_book.isbn_list)
                     book.ol_edition_key = ol_book.cover_edition_key or "_found"
                     book.ol_first_publish_year = ol_book.first_publish_year
+                    if not book.hardcover_isbn_10 and not book.google_isbn_10:
+                        book.ol_isbn_10 = ol_isbn_10
+                    if not book.hardcover_isbn_13 and not book.google_isbn_13:
+                        book.ol_isbn_13 = ol_isbn_13
                     if ol_book.cover_id:
                         book.ol_cover_url = ol_book.cover_url_large
             finally:
