@@ -64,3 +64,19 @@ export function useSetBookCover() {
     },
   });
 }
+
+export function useSetBookVisibility() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ bookId, action }: { bookId: number; action: "hide" | "show" | "reset" }) =>
+      fetchApi(`/books/${bookId}/visibility`, {
+        method: "POST",
+        body: JSON.stringify({ action }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["books"] });
+      queryClient.invalidateQueries({ queryKey: ["hiddenBooks"] });
+      queryClient.invalidateQueries({ queryKey: ["authors"] });
+    },
+  });
+}

@@ -82,3 +82,7 @@ class BookCoverOptionsResponse(BaseModel):
 
 class BookCoverSelectionRequest(BaseModel):
     source: str
+
+
+class BookVisibilityRequest(BaseModel):
+    action: str

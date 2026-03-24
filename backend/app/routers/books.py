@@ -13,6 +13,7 @@ from backend.app.schemas.book import (
     BookCoverOptionsResponse,
     CoverOption,
     BookCoverSelectionRequest,
+    BookVisibilityRequest,
 )
 from backend.app.utils.isbn import has_any_valid_isbn
 from backend.app.utils.book_visibility import (
@@ -254,6 +255,34 @@ async def set_book_cover_selection_route(
 
     await db.commit()
     return {"status": "ok", "message": "Cover updated"}
+
+
+@router.post("/{book_id}/visibility")
+async def set_book_visibility_route(
+    book_id: int,
+    body: BookVisibilityRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Book).where(Book.id == book_id))
+    book = result.scalar_one_or_none()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    action = body.action.strip().lower()
+    if action == "hide":
+        book.manual_visibility = "hidden"
+        message = "Book hidden"
+    elif action == "show":
+        book.manual_visibility = "visible"
+        message = "Book unhidden"
+    elif action == "reset":
+        book.manual_visibility = None
+        message = "Book visibility reset"
+    else:
+        raise HTTPException(status_code=400, detail="Invalid visibility action")
+
+    await db.commit()
+    return {"status": "ok", "message": message}
 
 
 @router.post("/{book_id}/refresh")

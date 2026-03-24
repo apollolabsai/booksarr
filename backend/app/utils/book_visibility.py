@@ -23,6 +23,7 @@ VISIBILITY_CATEGORY_DEFAULTS = {
 }
 
 VISIBILITY_CATEGORY_LABELS = {
+    "manual_hidden": "Manually Hidden",
     "standard_books": "Standard Books",
     "short_fiction": "Short Fiction",
     "collections_and_compilations": "Collections & Compilations",
@@ -124,6 +125,11 @@ def get_primary_visibility_category(book: Book) -> str:
 
 
 def is_book_visible(book: Book, visibility_settings: dict[str, bool], today: str | None = None) -> bool:
+    if book.manual_visibility == "hidden":
+        return False
+    if book.manual_visibility == "visible":
+        return True
+
     if book.is_owned:
         return True
 
@@ -140,6 +146,12 @@ def is_book_visible(book: Book, visibility_settings: dict[str, bool], today: str
 
 
 def get_hidden_category(book: Book, visibility_settings: dict[str, bool], today: str | None = None) -> tuple[str, str] | None:
+    if book.manual_visibility == "hidden":
+        key = "manual_hidden"
+        return key, VISIBILITY_CATEGORY_LABELS[key]
+    if book.manual_visibility == "visible":
+        return None
+
     if book.is_owned:
         return None
 

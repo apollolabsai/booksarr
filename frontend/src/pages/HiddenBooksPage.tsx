@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { useHiddenBooks } from "../api/books";
+import { useHiddenBooks, useSetBookVisibility } from "../api/books";
 import SearchBar from "../components/SearchBar";
 import { getBookCoverPresentation, getImageUrl } from "../types";
 
@@ -11,6 +11,7 @@ export default function HiddenBooksPage() {
   const [sortKey, setSortKey] = useState<SortKey>("title");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const { data: books, isLoading } = useHiddenBooks(search);
+  const setBookVisibility = useSetBookVisibility();
 
   const handleSearch = useCallback((value: string) => setSearch(value), []);
   const handleSort = useCallback((nextKey: SortKey) => {
@@ -109,6 +110,7 @@ export default function HiddenBooksPage() {
                     Year{renderSortIndicator("year")}
                   </button>
                 </th>
+                <th className="px-4 py-3 text-right">Visibility</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-700">
@@ -184,6 +186,20 @@ export default function HiddenBooksPage() {
                     </td>
                     <td className="px-4 py-2 text-right text-slate-400 whitespace-nowrap">
                       {book.release_date ? book.release_date.substring(0, 4) : "-"}
+                    </td>
+                    <td className="px-4 py-2 text-right">
+                      <button
+                        type="button"
+                        onClick={() => setBookVisibility.mutate({ bookId: book.id, action: "show" })}
+                        disabled={setBookVisibility.isPending}
+                        className="inline-flex items-center justify-center rounded-md border border-slate-600 bg-slate-700 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+                        title="Unhide Book"
+                      >
+                        <svg className={`h-4 w-4 ${setBookVisibility.isPending && setBookVisibility.variables?.bookId === book.id ? "animate-pulse" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.522 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.478 0-8.268-2.943-9.542-7z" />
+                        </svg>
+                      </button>
                     </td>
                   </tr>
                 );
