@@ -170,6 +170,7 @@ export interface ScanSummary {
   hardcover: ScanSourceSummary;
   google: ScanSourceSummary;
   openlibrary: ScanSourceSummary;
+  wikimedia: ScanSourceSummary;
 }
 
 export interface Settings {
@@ -211,6 +212,7 @@ export interface ApiUsageDay {
   hardcover: number;
   google: number;
   openlibrary: number;
+  wikimedia: number;
 }
 
 export interface LogEntry {

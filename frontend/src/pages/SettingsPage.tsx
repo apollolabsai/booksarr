@@ -71,6 +71,15 @@ const VISIBILITY_OPTIONS: Array<{
   },
 ];
 
+const EMPTY_SCAN_SOURCE = {
+  lookups_attempted: 0,
+  matched: 0,
+  failed: 0,
+  cached: 0,
+  deferred: 0,
+  failure_reasons: {},
+};
+
 export default function SettingsPage() {
   const location = useLocation();
   const { data: settings } = useSettings();
@@ -368,6 +377,7 @@ export default function SettingsPage() {
                 <th className="border border-slate-600 px-3 py-2 text-right">Hard Cover</th>
                 <th className="border border-slate-600 px-3 py-2 text-right">Google</th>
                 <th className="border border-slate-600 px-3 py-2 text-right">Open Library</th>
+                <th className="border border-slate-600 px-3 py-2 text-right">Wikimedia</th>
               </tr>
             </thead>
             <tbody>
@@ -378,6 +388,7 @@ export default function SettingsPage() {
                   <td className="border border-slate-700 px-3 py-2 text-right">{row.hardcover}</td>
                   <td className="border border-slate-700 px-3 py-2 text-right">{row.google}</td>
                   <td className="border border-slate-700 px-3 py-2 text-right">{row.openlibrary}</td>
+                  <td className="border border-slate-700 px-3 py-2 text-right">{row.wikimedia}</td>
                 </tr>
               ))}
             </tbody>
@@ -581,11 +592,12 @@ export default function SettingsPage() {
               </div>
             )}
 
-            <div className="grid gap-4 lg:grid-cols-3">
-              {[
-                { key: "hardcover", label: "Hardcover", summary: lastScanSummary.hardcover },
-                { key: "google", label: "Google Books", summary: lastScanSummary.google },
-                { key: "openlibrary", label: "Open Library", summary: lastScanSummary.openlibrary },
+            <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
+                {[
+                { key: "hardcover", label: "Hardcover", summary: lastScanSummary.hardcover ?? EMPTY_SCAN_SOURCE },
+                { key: "google", label: "Google Books", summary: lastScanSummary.google ?? EMPTY_SCAN_SOURCE },
+                { key: "openlibrary", label: "Open Library", summary: lastScanSummary.openlibrary ?? EMPTY_SCAN_SOURCE },
+                { key: "wikimedia", label: "Wikimedia", summary: lastScanSummary.wikimedia ?? EMPTY_SCAN_SOURCE },
               ].map((source) => (
                 <div key={source.key} className="rounded-lg border border-slate-700 bg-slate-900/30 p-4">
                   <div className="text-sm font-semibold text-slate-100 mb-3">{source.label}</div>

@@ -49,6 +49,7 @@ class ScanSummary(BaseModel):
     hardcover: ScanSourceSummary = Field(default_factory=ScanSourceSummary)
     google: ScanSourceSummary = Field(default_factory=ScanSourceSummary)
     openlibrary: ScanSourceSummary = Field(default_factory=ScanSourceSummary)
+    wikimedia: ScanSourceSummary = Field(default_factory=ScanSourceSummary)
 
 
 class SettingsResponse(BaseModel):
@@ -76,3 +77,4 @@ class ApiUsageDay(BaseModel):
     hardcover: int
     google: int
     openlibrary: int
+    wikimedia: int

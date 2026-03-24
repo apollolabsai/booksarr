@@ -26,6 +26,7 @@ from backend.app.services.image_cache import (
     get_cached_cover_aspect_ratio,
 )
 from backend.app.services.openlibrary import OpenLibraryClient, OLBook
+from backend.app.services.wikimedia import WikimediaClient
 from backend.app.utils.hardcover_metadata import get_book_category_name, get_literary_type_name
 from backend.app.utils.book_visibility import (
     get_book_visibility_settings,
@@ -318,6 +319,15 @@ def _cover_ratio_distance(ratio: float | None) -> float:
     if ratio is None or ratio <= 0:
         return float("inf")
     return abs(ratio - TARGET_COVER_RATIO)
+
+
+def _get_author_image_source(url: str | None) -> str:
+    normalized = (url or "").lower()
+    if "openlibrary.org" in normalized:
+        return "ol"
+    if "wikimedia.org" in normalized or "wikipedia.org" in normalized:
+        return "wm"
+    return "hc"
 
 
 def _measure_cover_data(data: bytes) -> tuple[int, float | None]:
@@ -777,6 +787,7 @@ class ScanRunSummary:
     hardcover: SourceRunSummary = field(default_factory=SourceRunSummary)
     google: SourceRunSummary = field(default_factory=SourceRunSummary)
     openlibrary: SourceRunSummary = field(default_factory=SourceRunSummary)
+    wikimedia: SourceRunSummary = field(default_factory=SourceRunSummary)
 
     def to_dict(self) -> dict:
         return {
@@ -797,6 +808,7 @@ class ScanRunSummary:
             "hardcover": self.hardcover.to_dict(),
             "google": self.google.to_dict(),
             "openlibrary": self.openlibrary.to_dict(),
+            "wikimedia": self.wikimedia.to_dict(),
         }
 
 
@@ -903,6 +915,7 @@ async def run_full_sync(force: bool = False):
 
             client = HardcoverClient(api_key)
             ol_client = OpenLibraryClient()
+            wikimedia_client = WikimediaClient()
             try:
                 # Phase 2: Match new authors to Hardcover
                 scan_status.message = "Matching authors to Hardcover..."
@@ -944,18 +957,37 @@ async def run_full_sync(force: bool = False):
                                 author.hardcover_slug = hc_author.slug
 
                     if author.image_url and not author.image_cached_path:
-                        source = "ol" if "openlibrary.org" in author.image_url else "hc"
+                        source = _get_author_image_source(author.image_url)
                         cached = await cache_author_image(author.id, author.image_url, source=source)
                         if cached:
                             author.image_cached_path = cached
 
                     if not author.image_cached_path:
+                        summary.openlibrary.lookups_attempted += 1
                         ol_author = await ol_client.search_author(author.name)
                         if ol_author and ol_author.photo_url_large:
                             cached = await cache_author_image(author.id, ol_author.photo_url_large, source="ol")
                             if cached:
                                 author.image_url = ol_author.photo_url_large
                                 author.image_cached_path = cached
+                                summary.openlibrary.matched += 1
+                            else:
+                                summary.openlibrary.record_failure("cache_failed", attempted=False)
+                        else:
+                            summary.openlibrary.record_failure("no_result", attempted=False)
+
+                    if not author.image_cached_path:
+                        wikimedia_lookup = await wikimedia_client.search_author_with_result(author.name)
+                        if wikimedia_lookup.author and wikimedia_lookup.author.image_url:
+                            summary.wikimedia.record_match()
+                            cached = await cache_author_image(author.id, wikimedia_lookup.author.image_url, source="wm")
+                            if cached:
+                                author.image_url = wikimedia_lookup.author.image_url
+                                author.image_cached_path = cached
+                            else:
+                                summary.wikimedia.record_failure("cache_failed", attempted=False)
+                        else:
+                            summary.wikimedia.record_failure(wikimedia_lookup.reason)
 
                     progress = 20.0 + (30.0 * (i + 1) / max(total_authors, 1))
                     scan_status.progress = progress
@@ -1725,6 +1757,7 @@ async def run_full_sync(force: bool = False):
 
             finally:
                 await ol_client.close()
+                await wikimedia_client.close()
                 await client.close()
 
             await flush_api_usage_batch(db)

@@ -10,7 +10,7 @@ from backend.app.database import async_session
 
 logger = logging.getLogger("booksarr.api_usage")
 
-API_SOURCES = ("hardcover", "google", "openlibrary")
+API_SOURCES = ("hardcover", "google", "openlibrary", "wikimedia")
 _usage_batch: ContextVar[Counter[str] | None] = ContextVar("api_usage_batch", default=None)
 
 
@@ -93,12 +93,14 @@ async def get_api_usage_rows(db: AsyncSession, days: int = 7) -> list[dict]:
         hardcover = usage_map.get(day, {}).get("hardcover", 0)
         google = usage_map.get(day, {}).get("google", 0)
         openlibrary = usage_map.get(day, {}).get("openlibrary", 0)
+        wikimedia = usage_map.get(day, {}).get("wikimedia", 0)
         rows.append({
             "day": day,
-            "total": hardcover + google + openlibrary,
+            "total": hardcover + google + openlibrary + wikimedia,
             "hardcover": hardcover,
             "google": google,
             "openlibrary": openlibrary,
+            "wikimedia": wikimedia,
         })
 
     return rows
