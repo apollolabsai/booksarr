@@ -1,13 +1,14 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useAuthor } from "../api/authors";
 import { getImageUrl } from "../types";
-import type { BookInAuthor } from "../types";
+import type { BookInAuthor, SeriesInAuthor } from "../types";
 import BookCard from "../components/BookCard";
 import BookTable from "../components/BookTable";
 import SeriesGroup from "../components/SeriesGroup";
 import SortControls from "../components/SortControls";
 import ViewToggle from "../components/ViewToggle";
+import SearchBar from "../components/SearchBar";
 
 const SORT_OPTIONS = [
   { value: "series", label: "By Series" },
@@ -22,7 +23,9 @@ export default function AuthorDetailPage() {
   const { data: author, isLoading } = useAuthor(Number(id));
   const [sort, setSort] = useState("series");
   const [view, setView] = useState<"grid" | "table">("grid");
+  const [search, setSearch] = useState("");
   const [bioExpanded, setBioExpanded] = useState(false);
+  const handleSearch = useCallback((value: string) => setSearch(value), []);
 
   if (isLoading || !author) {
     return (
@@ -34,8 +37,13 @@ export default function AuthorDetailPage() {
 
   const imgUrl = getImageUrl(author.image_cached_path, author.image_url);
 
+  const searchNormalized = search.trim().toLowerCase();
+  const filteredBooks = searchNormalized
+    ? author.books.filter((book) => book.title.toLowerCase().includes(searchNormalized))
+    : author.books;
+
   // Sort books
-  const sortedBooks = [...author.books].sort((a, b) => {
+  const sortedBooks = [...filteredBooks].sort((a, b) => {
     switch (sort) {
       case "title":
         return a.title.localeCompare(b.title);
@@ -50,9 +58,17 @@ export default function AuthorDetailPage() {
     }
   });
 
-  // Determine standalone books (not in any series)
+  const filteredBookIds = new Set(sortedBooks.map((book) => book.id));
+  const filteredSeries: SeriesInAuthor[] = author.series
+    .map((series) => ({
+      ...series,
+      books: series.books.filter((book) => filteredBookIds.has(book.book_id)),
+    }))
+    .filter((series) => series.books.length > 0);
+
+  // Determine standalone books (not in any visible series)
   const booksInSeries = new Set<number>();
-  author.series.forEach((s) => s.books.forEach((b) => booksInSeries.add(b.book_id)));
+  filteredSeries.forEach((s) => s.books.forEach((b) => booksInSeries.add(b.book_id)));
   const standaloneBooks = sortedBooks.filter((b) => !booksInSeries.has(b.id));
 
   const bioTruncated = author.bio && author.bio.length > 400;
@@ -63,9 +79,9 @@ export default function AuthorDetailPage() {
       if (sort === "series") {
         return (
           <>
-            {author.series.map((s) => {
+            {filteredSeries.map((s) => {
               const seriesBookIds = new Set(s.books.map((b) => b.book_id));
-              const seriesFullBooks = author.books.filter((b) => seriesBookIds.has(b.id));
+              const seriesFullBooks = sortedBooks.filter((b) => seriesBookIds.has(b.id));
               // Sort by series position
               seriesFullBooks.sort((a, b) => {
                 const posA = s.books.find((sb) => sb.book_id === a.id)?.position ?? 9999;
@@ -101,8 +117,8 @@ export default function AuthorDetailPage() {
     if (sort === "series") {
       return (
         <>
-          {author.series.map((s) => (
-            <SeriesGroup key={s.id} series={s} allBooks={author.books} />
+          {filteredSeries.map((s) => (
+            <SeriesGroup key={s.id} series={s} allBooks={sortedBooks} />
           ))}
           {standaloneBooks.length > 0 && (
             <div className="mb-8">
@@ -174,12 +190,19 @@ export default function AuthorDetailPage() {
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-semibold">Books</h2>
         <div className="flex items-center gap-3">
+          <SearchBar value={search} onChange={handleSearch} placeholder="Search this author..." />
           <SortControls options={SORT_OPTIONS} value={sort} onChange={setSort} />
           <ViewToggle view={view} onChange={setView} />
         </div>
       </div>
 
-      {renderBooks()}
+      {sortedBooks.length === 0 ? (
+        <div className="text-center py-16">
+          <p className="text-slate-400 text-lg">No matching books found</p>
+        </div>
+      ) : (
+        renderBooks()
+      )}
     </div>
   );
 }
