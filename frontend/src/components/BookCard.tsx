@@ -1,5 +1,5 @@
 import type { BookInAuthor, Book } from "../types";
-import { getImageUrl } from "../types";
+import { getBookCoverPresentation, getImageUrl } from "../types";
 
 type BookLike = BookInAuthor | Book;
 
@@ -14,6 +14,7 @@ export default function BookCard({
     book.cover_image_cached_path,
     "cover_image_url" in book ? book.cover_image_url : null
   );
+  const coverPresentation = getBookCoverPresentation(book.cover_aspect_ratio);
 
   const hardcoverUrl = book.hardcover_slug
     ? `https://hardcover.app/books/${book.hardcover_slug}`
@@ -32,14 +33,28 @@ export default function BookCard({
       className={`group cursor-pointer ${!book.is_owned ? "opacity-60" : ""}`}
       onClick={handleClick}
     >
-      <div className="relative aspect-[2/3] bg-slate-700 rounded-lg overflow-hidden border border-slate-600 group-hover:border-emerald-500/50 transition-all">
+      <div
+        className={`relative rounded-lg overflow-hidden border border-slate-600 group-hover:border-emerald-500/50 transition-all ${coverPresentation.frameClassName}`}
+        style={coverPresentation.frameStyle}
+      >
         {imgUrl ? (
-          <img
-            src={imgUrl}
-            alt={book.title}
-            className="w-full h-full object-cover"
-            loading="lazy"
-          />
+          coverPresentation.innerClassName ? (
+            <div className={coverPresentation.innerClassName}>
+              <img
+                src={imgUrl}
+                alt={book.title}
+                className={coverPresentation.imageClassName}
+                loading="lazy"
+              />
+            </div>
+          ) : (
+            <img
+              src={imgUrl}
+              alt={book.title}
+              className={coverPresentation.imageClassName}
+              loading="lazy"
+            />
+          )
         ) : (
           <div className="w-full h-full flex items-center justify-center p-2 text-center text-sm text-slate-400">
             {book.title}

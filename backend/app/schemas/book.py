@@ -31,6 +31,7 @@ class BookSummary(BaseModel):
     release_date: str | None
     cover_image_url: str | None
     cover_image_cached_path: str | None
+    cover_aspect_ratio: float | None
     rating: float | None
     pages: int | None
     is_owned: bool

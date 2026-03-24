@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import type { Book, BookInAuthor } from "../types";
-import { getImageUrl } from "../types";
+import { getBookCoverPresentation, getImageUrl } from "../types";
 import { useRefreshBook } from "../api/books";
 
 type BookLike = Book | BookInAuthor;
@@ -81,6 +81,7 @@ export default function BookTable({
               book.cover_image_cached_path,
               "cover_image_url" in book ? book.cover_image_url : null
             );
+            const coverPresentation = getBookCoverPresentation(book.cover_aspect_ratio);
             const authorId = isFullBook(book) ? book.author_id : undefined;
             const authorName = isFullBook(book) ? book.author_name : undefined;
             const seriesStr = formatSeriesPosition(book);
@@ -108,9 +109,15 @@ export default function BookTable({
                   )}
                 </td>
                 <td className="px-4 py-2">
-                  <div className="w-8 h-12 rounded overflow-hidden bg-slate-700 flex-shrink-0">
+                  <div className={`w-8 h-12 rounded overflow-hidden flex-shrink-0 ${coverPresentation.frameClassName}`}>
                     {imgUrl ? (
-                      <img src={imgUrl} alt="" className="w-full h-full object-cover" />
+                      coverPresentation.innerClassName ? (
+                        <div className="flex h-full w-full items-center justify-center p-0.5">
+                          <img src={imgUrl} alt="" className={coverPresentation.imageClassName} />
+                        </div>
+                      ) : (
+                        <img src={imgUrl} alt="" className={coverPresentation.imageClassName} />
+                      )
                     ) : (
                       <div className="w-full h-full flex items-center justify-center text-[8px] text-slate-500 p-0.5 text-center leading-tight">
                         {book.title.substring(0, 20)}

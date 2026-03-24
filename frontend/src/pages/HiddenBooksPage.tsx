@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useHiddenBooks } from "../api/books";
 import SearchBar from "../components/SearchBar";
-import { getImageUrl } from "../types";
+import { getBookCoverPresentation, getImageUrl } from "../types";
 
 type SortKey = "title" | "author" | "hidden_by" | "year";
 
@@ -114,12 +114,19 @@ export default function HiddenBooksPage() {
             <tbody className="divide-y divide-slate-700">
               {sortedBooks.map((book) => {
                 const imgUrl = getImageUrl(book.cover_image_cached_path, book.cover_image_url);
+                const coverPresentation = getBookCoverPresentation(book.cover_aspect_ratio);
                 return (
                   <tr key={book.id} className="hover:bg-slate-700/40 transition-colors">
                     <td className="px-4 py-2">
-                      <div className="w-8 h-12 rounded overflow-hidden bg-slate-700 flex-shrink-0">
+                      <div className={`w-8 h-12 rounded overflow-hidden flex-shrink-0 ${coverPresentation.frameClassName}`}>
                         {imgUrl ? (
-                          <img src={imgUrl} alt="" className="w-full h-full object-cover" />
+                          coverPresentation.innerClassName ? (
+                            <div className="flex h-full w-full items-center justify-center p-0.5">
+                              <img src={imgUrl} alt="" className={coverPresentation.imageClassName} />
+                            </div>
+                          ) : (
+                            <img src={imgUrl} alt="" className={coverPresentation.imageClassName} />
+                          )
                         ) : (
                           <div className="w-full h-full flex items-center justify-center text-[8px] text-slate-500 p-0.5 text-center leading-tight">
                             {book.title.substring(0, 20)}

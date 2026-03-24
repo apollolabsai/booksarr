@@ -22,6 +22,7 @@ from backend.app.services.image_cache import (
     download_image_bytes,
     cache_cover_data,
     get_cached_cover_height,
+    get_cached_cover_aspect_ratio,
 )
 from backend.app.services.openlibrary import OpenLibraryClient, OLBook
 from backend.app.utils.hardcover_metadata import get_book_category_name, get_literary_type_name
@@ -47,6 +48,8 @@ _ARTICLE_RE = re.compile(r"^(a|an|the)\s+", re.IGNORECASE)
 
 # Cover height threshold — stop looking for better covers once met
 COVER_HEIGHT_THRESHOLD = 2000
+SUFFICIENT_COVER_HEIGHT = 500
+TARGET_COVER_RATIO = 2 / 3
 
 
 def _is_valid_title(title: str) -> bool:
@@ -308,6 +311,83 @@ def _get_cached_cover_source(cached_path: str | None) -> str | None:
     if filename.startswith("cover_"):
         return "legacy_remote"
     return "unknown"
+
+
+def _cover_ratio_distance(ratio: float | None) -> float:
+    if ratio is None or ratio <= 0:
+        return float("inf")
+    return abs(ratio - TARGET_COVER_RATIO)
+
+
+def _measure_cover_data(data: bytes) -> tuple[int, float | None]:
+    dims = get_image_dimensions(data)
+    if not dims or dims[0] <= 0 or dims[1] <= 0:
+        return 0, None
+    width, height = dims
+    return height, width / height
+
+
+def _cover_source_rank(source: str | None) -> int:
+    ranks = {
+        "local": 4,
+        "hardcover": 3,
+        "google": 2,
+        "openlibrary": 1,
+        "legacy_remote": 0,
+        "unknown": 0,
+        None: 0,
+    }
+    return ranks.get(source, 0)
+
+
+def _should_replace_cover(
+    *,
+    current_source: str | None,
+    current_height: int,
+    current_ratio: float | None,
+    new_source: str | None,
+    new_height: int,
+    new_ratio: float | None,
+) -> bool:
+    if new_height <= 0:
+        return False
+    if current_height <= 0:
+        return True
+
+    current_sufficient = current_height >= SUFFICIENT_COVER_HEIGHT
+    new_sufficient = new_height >= SUFFICIENT_COVER_HEIGHT
+
+    if new_sufficient and not current_sufficient:
+        return True
+    if current_sufficient and not new_sufficient:
+        return False
+
+    if new_sufficient and current_sufficient:
+        current_distance = _cover_ratio_distance(current_ratio)
+        new_distance = _cover_ratio_distance(new_ratio)
+        current_rank = _cover_source_rank(current_source)
+        new_rank = _cover_source_rank(new_source)
+
+        # Allow a meaningfully better source (for example Hardcover replacing
+        # Open Library) to win if the ratio penalty is modest and resolution is
+        # not worse.
+        if new_rank >= current_rank + 2:
+            if new_height >= current_height and new_distance <= current_distance + 0.08:
+                return True
+
+        # Do not let a lower-quality remote source replace a good current cover
+        # unless the ratio improvement is material and the resolution is not worse.
+        if current_rank > new_rank:
+            if new_distance + 0.06 < current_distance and new_height >= int(current_height * 0.95):
+                return True
+            return False
+
+        if new_distance + 0.01 < current_distance:
+            return True
+        if current_distance + 0.01 < new_distance:
+            return False
+
+    return new_height > current_height
 
 
 def _preferred_google_isbns(book: Book) -> list[str]:
@@ -1203,11 +1283,15 @@ async def run_full_sync(force: bool = False):
                 # Track cover heights in memory to avoid re-reading cached files
                 cover_heights = {}
                 cover_sources = {}
+                cover_ratios = {}
                 for book in all_books:
                     cover_heights[book.id] = get_cached_cover_height(
                         book.cover_image_cached_path
                     )
                     cover_sources[book.id] = _get_cached_cover_source(
+                        book.cover_image_cached_path
+                    )
+                    cover_ratios[book.id] = get_cached_cover_aspect_ratio(
                         book.cover_image_cached_path
                     )
 
@@ -1234,6 +1318,7 @@ async def run_full_sync(force: bool = False):
                         book.cover_image_cached_path = cached
                         cover_heights[book.id] = get_cached_cover_height(cached)
                         cover_sources[book.id] = _get_cached_cover_source(cached)
+                        cover_ratios[book.id] = get_cached_cover_aspect_ratio(cached)
                         local_cached += 1
                 if local_cached:
                     logger.info("Cached/upgraded %d local cover(s)", local_cached)
@@ -1262,17 +1347,23 @@ async def run_full_sync(force: bool = False):
                     for book, data in zip(books_for_hc, hc_results):
                         if not data:
                             continue
-                        dims = get_image_dimensions(data)
-                        new_height = dims[1] if dims else 0
-                        current_source = cover_sources.get(book.id)
                         current_height = cover_heights.get(book.id, 0)
-                        should_replace = current_source in {None, "legacy_remote", "google", "openlibrary"}
-                        if should_replace or new_height > current_height:
+                        current_ratio = cover_ratios.get(book.id)
+                        new_height, new_ratio = _measure_cover_data(data)
+                        if _should_replace_cover(
+                            current_source=cover_sources.get(book.id),
+                            current_height=current_height,
+                            current_ratio=current_ratio,
+                            new_source="hardcover",
+                            new_height=new_height,
+                            new_ratio=new_ratio,
+                        ):
                             path = cache_cover_data(data, book.id, "hardcover")
                             if path:
                                 book.cover_image_cached_path = path
                                 cover_heights[book.id] = new_height
                                 cover_sources[book.id] = "hardcover"
+                                cover_ratios[book.id] = new_ratio
                                 hc_covers += 1
                     await db.commit()
                 if hc_covers:
@@ -1308,14 +1399,23 @@ async def run_full_sync(force: bool = False):
                         for book, data in zip(books_for_google, g_results):
                             if not data:
                                 continue
-                            dims = get_image_dimensions(data)
-                            new_height = dims[1] if dims else 0
-                            if new_height > cover_heights.get(book.id, 0):
+                            current_height = cover_heights.get(book.id, 0)
+                            current_ratio = cover_ratios.get(book.id)
+                            new_height, new_ratio = _measure_cover_data(data)
+                            if _should_replace_cover(
+                                current_source=cover_sources.get(book.id),
+                                current_height=current_height,
+                                current_ratio=current_ratio,
+                                new_source="google",
+                                new_height=new_height,
+                                new_ratio=new_ratio,
+                            ):
                                 path = cache_cover_data(data, book.id, "google")
                                 if path:
                                     book.cover_image_cached_path = path
                                     cover_heights[book.id] = new_height
                                     cover_sources[book.id] = "google"
+                                    cover_ratios[book.id] = new_ratio
                                     google_covers += 1
                         await db.commit()
                     if google_covers:
@@ -1410,10 +1510,24 @@ async def run_full_sync(force: bool = False):
                         )
                         for book, data in zip(ol_download_books, ol_dl_results):
                             if data:
-                                path = cache_cover_data(data, book.id, "openlibrary")
-                                if path:
-                                    book.cover_image_cached_path = path
-                                    ol_covers += 1
+                                current_height = cover_heights.get(book.id, 0)
+                                current_ratio = cover_ratios.get(book.id)
+                                new_height, new_ratio = _measure_cover_data(data)
+                                if _should_replace_cover(
+                                    current_source=cover_sources.get(book.id),
+                                    current_height=current_height,
+                                    current_ratio=current_ratio,
+                                    new_source="openlibrary",
+                                    new_height=new_height,
+                                    new_ratio=new_ratio,
+                                ):
+                                    path = cache_cover_data(data, book.id, "openlibrary")
+                                    if path:
+                                        book.cover_image_cached_path = path
+                                        cover_heights[book.id] = new_height
+                                        cover_sources[book.id] = "openlibrary"
+                                        cover_ratios[book.id] = new_ratio
+                                        ol_covers += 1
 
                     await db.commit()
                     if ol_covers:
@@ -1467,192 +1581,228 @@ async def run_full_sync(force: bool = False):
 
 
 async def refresh_single_book(book_id: int):
-    async with async_session() as db:
-        result = await db.execute(
-            select(Book)
-            .where(Book.id == book_id)
-            .options(
-                selectinload(Book.author),
-                selectinload(Book.files),
-                selectinload(Book.book_series).selectinload(BookSeries.series),
+    usage_batch_token = begin_api_usage_batch()
+    try:
+        async with async_session() as db:
+            result = await db.execute(
+                select(Book)
+                .where(Book.id == book_id)
+                .options(
+                    selectinload(Book.author),
+                    selectinload(Book.files),
+                    selectinload(Book.book_series).selectinload(BookSeries.series),
+                )
             )
-        )
-        book = result.scalar_one_or_none()
-        if not book:
-            raise ValueError("Book not found")
+            book = result.scalar_one_or_none()
+            if not book:
+                raise ValueError("Book not found")
 
-        author_name = book.author.name if book.author else ""
-        tags_json = None
-        gbook: GBook | None = None
-        ol_book: OLBook | None = None
-        google_retry = False
+            author_name = book.author.name if book.author else ""
+            tags_json = None
+            gbook: GBook | None = None
+            ol_book: OLBook | None = None
+            google_retry = False
 
-        # Clear external metadata so this behaves like a targeted re-import.
-        book.google_id = None
-        book.google_published_date = None
-        book.google_cover_url = None
-        book.google_isbn_10 = None
-        book.google_isbn_13 = None
-        book.ol_edition_key = None
-        book.ol_first_publish_year = None
-        book.ol_cover_url = None
-        book.publish_date_checked_at = None
+            # Clear external metadata so this behaves like a targeted re-import.
+            book.google_id = None
+            book.google_published_date = None
+            book.google_cover_url = None
+            book.google_isbn_10 = None
+            book.google_isbn_13 = None
+            book.ol_edition_key = None
+            book.ol_first_publish_year = None
+            book.ol_cover_url = None
+            book.publish_date_checked_at = None
 
-        api_key = await get_api_key(db)
-        if book.hardcover_id and api_key:
-            client = HardcoverClient(api_key)
+            api_key = await get_api_key(db)
+            if book.hardcover_id and api_key:
+                client = HardcoverClient(api_key)
+                try:
+                    hc_book = await client.get_book(book.hardcover_id)
+                finally:
+                    await client.close()
+
+                if hc_book:
+                    tags_json = json.dumps(hc_book.tags) if hc_book.tags else None
+                    book.title = hc_book.title
+                    book.hardcover_slug = hc_book.slug
+                    book.description = hc_book.description
+                    book.release_date = hc_book.release_date
+                    book.cover_image_url = hc_book.image_url
+                    book.tags = tags_json
+                    book.rating = hc_book.rating
+                    book.pages = hc_book.pages
+                    book.compilation = hc_book.compilation
+                    book.book_category_id = hc_book.book_category_id
+                    book.book_category_name = get_book_category_name(hc_book.book_category_id)
+                    book.literary_type_id = hc_book.literary_type_id
+                    book.literary_type_name = get_literary_type_name(hc_book.literary_type_id)
+                    book.hardcover_state = hc_book.state or None
+                    book.hardcover_isbn_10 = normalized_valid_isbn(hc_book.isbn_10)
+                    book.hardcover_isbn_13 = normalized_valid_isbn(hc_book.isbn_13)
+                    book.language = hc_book.language or book.language
+
+                    for existing_bs in list(book.book_series):
+                        await db.delete(existing_bs)
+                    await db.flush()
+
+                    for sr in hc_book.series_refs:
+                        series = await _get_or_create_series(db, sr.id, sr.name)
+                        db.add(BookSeries(
+                            book_id=book.id,
+                            series_id=series.id,
+                            position=sr.position,
+                        ))
+
+            google_api_key = await get_google_api_key(db)
+            if google_api_key:
+                google_client = GoogleBooksClient(google_api_key)
+                try:
+                    final_reason = "no_result"
+                    for isbn in _preferred_google_isbns(book):
+                        isbn_result = await google_client.search_by_isbn_result(isbn)
+                        gbook = isbn_result.book
+                        final_reason = isbn_result.reason
+                        if gbook or final_reason not in {"no_result"}:
+                            break
+
+                    if not gbook:
+                        title_result = await google_client.search_by_title_author_result(
+                            book.title,
+                            author_name,
+                        )
+                        gbook = title_result.book
+                        final_reason = title_result.reason
+
+                    if gbook:
+                        book.google_id = gbook.google_id
+                        book.google_published_date = gbook.published_date
+                        book.google_cover_url = gbook.cover_url
+                        book.google_isbn_10 = normalized_valid_isbn(gbook.isbn_10)
+                        book.google_isbn_13 = normalized_valid_isbn(gbook.isbn_13)
+                    elif final_reason in {"no_result", "title_mismatch", "author_mismatch"}:
+                        book.google_id = "_none"
+                except (GoogleBooksThrottledError, GoogleBooksLookupError):
+                    google_retry = True
+                    logger.warning("Single-book Google refresh failed for '%s'", book.title)
+                finally:
+                    await google_client.close()
+
+            ol_client = OpenLibraryClient()
             try:
-                hc_book = await client.get_book(book.hardcover_id)
-            finally:
-                await client.close()
-
-            if hc_book:
-                tags_json = json.dumps(hc_book.tags) if hc_book.tags else None
-                book.title = hc_book.title
-                book.hardcover_slug = hc_book.slug
-                book.description = hc_book.description
-                book.release_date = hc_book.release_date
-                book.cover_image_url = hc_book.image_url
-                book.tags = tags_json
-                book.rating = hc_book.rating
-                book.pages = hc_book.pages
-                book.compilation = hc_book.compilation
-                book.book_category_id = hc_book.book_category_id
-                book.book_category_name = get_book_category_name(hc_book.book_category_id)
-                book.literary_type_id = hc_book.literary_type_id
-                book.literary_type_name = get_literary_type_name(hc_book.literary_type_id)
-                book.hardcover_state = hc_book.state or None
-                book.hardcover_isbn_10 = normalized_valid_isbn(hc_book.isbn_10)
-                book.hardcover_isbn_13 = normalized_valid_isbn(hc_book.isbn_13)
-                book.language = hc_book.language or book.language
-
-                for existing_bs in list(book.book_series):
-                    await db.delete(existing_bs)
-                await db.flush()
-
-                for sr in hc_book.series_refs:
-                    series = await _get_or_create_series(db, sr.id, sr.name)
-                    db.add(BookSeries(
-                        book_id=book.id,
-                        series_id=series.id,
-                        position=sr.position,
-                    ))
-
-        google_api_key = await get_google_api_key(db)
-        if google_api_key:
-            google_client = GoogleBooksClient(google_api_key)
-            try:
-                final_reason = "no_result"
                 for isbn in _preferred_google_isbns(book):
-                    isbn_result = await google_client.search_by_isbn_result(isbn)
-                    gbook = isbn_result.book
-                    final_reason = isbn_result.reason
-                    if gbook or final_reason not in {"no_result"}:
+                    lookup = await ol_client.search_book_by_isbn_with_result(isbn)
+                    if lookup.book:
+                        ol_book = lookup.book
+                        break
+                    if lookup.reason not in {"no_result"}:
                         break
 
-                if not gbook:
-                    title_result = await google_client.search_by_title_author_result(
-                        book.title,
-                        author_name,
-                    )
-                    gbook = title_result.book
-                    final_reason = title_result.reason
+                if not ol_book:
+                    lookup = await ol_client.search_book_with_result(book.title, author_name)
+                    if lookup.book:
+                        ol_book = lookup.book
+                    elif lookup.reason == "no_result":
+                        book.ol_edition_key = "_none"
 
-                if gbook:
-                    book.google_id = gbook.google_id
-                    book.google_published_date = gbook.published_date
-                    book.google_cover_url = gbook.cover_url
-                    book.google_isbn_10 = normalized_valid_isbn(gbook.isbn_10)
-                    book.google_isbn_13 = normalized_valid_isbn(gbook.isbn_13)
-                elif final_reason in {"no_result", "title_mismatch", "author_mismatch"}:
-                    book.google_id = "_none"
-            except (GoogleBooksThrottledError, GoogleBooksLookupError):
-                google_retry = True
-                logger.warning("Single-book Google refresh failed for '%s'", book.title)
+                if ol_book:
+                    book.ol_edition_key = ol_book.cover_edition_key or "_found"
+                    book.ol_first_publish_year = ol_book.first_publish_year
+                    if ol_book.cover_id:
+                        book.ol_cover_url = ol_book.cover_url_large
             finally:
-                await google_client.close()
+                await ol_client.close()
 
-        ol_client = OpenLibraryClient()
-        try:
-            for isbn in _preferred_google_isbns(book):
-                lookup = await ol_client.search_book_by_isbn_with_result(isbn)
-                if lookup.book:
-                    ol_book = lookup.book
-                    break
-                if lookup.reason not in {"no_result"}:
-                    break
-
-            if not ol_book:
-                lookup = await ol_client.search_book_with_result(book.title, author_name)
-                if lookup.book:
-                    ol_book = lookup.book
-                elif lookup.reason == "no_result":
-                    book.ol_edition_key = "_none"
-
-            if ol_book:
-                book.ol_edition_key = ol_book.cover_edition_key or "_found"
-                book.ol_first_publish_year = ol_book.first_publish_year
-                if ol_book.cover_id:
-                    book.ol_cover_url = ol_book.cover_url_large
-        finally:
-            await ol_client.close()
-
-        new_date = _reconcile_year_3way(
-            book.release_date,
-            gbook.publish_year if gbook else None,
-            ol_book.first_publish_year if ol_book else None,
-        )
-        if new_date:
-            book.release_date = new_date
-        if not google_retry:
-            book.publish_date_checked_at = datetime.utcnow()
-
-        cover_height = get_cached_cover_height(book.cover_image_cached_path)
-        cover_source = _get_cached_cover_source(book.cover_image_cached_path)
-
-        if book.is_owned and book.files:
-            bf = book.files[0]
-            epub_path = BOOKS_DIR / bf.file_path if bf.file_format == "epub" else None
-            cached = cache_best_local_cover(
-                bf.local_cover_path,
-                epub_path,
-                book.id,
-                existing_cached_path=book.cover_image_cached_path,
+            new_date = _reconcile_year_3way(
+                book.release_date,
+                gbook.publish_year if gbook else None,
+                ol_book.first_publish_year if ol_book else None,
             )
-            if cached:
-                book.cover_image_cached_path = cached
-                cover_height = get_cached_cover_height(cached)
-                cover_source = _get_cached_cover_source(cached)
+            if new_date:
+                book.release_date = new_date
+            if not google_retry:
+                book.publish_date_checked_at = datetime.utcnow()
 
-        if book.cover_image_url:
-            data = await download_image_bytes(book.cover_image_url)
-            if data:
-                dims = get_image_dimensions(data)
-                new_height = dims[1] if dims else 0
-                should_replace = cover_source in {None, "legacy_remote", "google", "openlibrary"}
-                if should_replace or new_height > cover_height:
-                    path = cache_cover_data(data, book.id, "hardcover")
-                    if path:
-                        book.cover_image_cached_path = path
-                        cover_height = new_height
-                        cover_source = "hardcover"
+            cover_height = get_cached_cover_height(book.cover_image_cached_path)
+            cover_source = _get_cached_cover_source(book.cover_image_cached_path)
+            cover_ratio = get_cached_cover_aspect_ratio(book.cover_image_cached_path)
 
-        if not book.cover_image_cached_path and not book.cover_image_url and gbook and gbook.cover_url:
-            data = await download_image_bytes(gbook.cover_url)
-            if data:
-                path = cache_cover_data(data, book.id, "google")
-                if path:
-                    book.cover_image_cached_path = path
-                    cover_source = "google"
+            if book.is_owned and book.files:
+                bf = book.files[0]
+                epub_path = BOOKS_DIR / bf.file_path if bf.file_format == "epub" else None
+                cached = cache_best_local_cover(
+                    bf.local_cover_path,
+                    epub_path,
+                    book.id,
+                    existing_cached_path=book.cover_image_cached_path,
+                )
+                if cached:
+                    book.cover_image_cached_path = cached
+                    cover_height = get_cached_cover_height(cached)
+                    cover_source = _get_cached_cover_source(cached)
+                    cover_ratio = get_cached_cover_aspect_ratio(cached)
 
-        if not book.cover_image_cached_path and ol_book and ol_book.cover_id:
-            data = await download_image_bytes(ol_book.cover_url_large)
-            if data:
-                path = cache_cover_data(data, book.id, "openlibrary")
-                if path:
-                    book.cover_image_cached_path = path
+            if book.cover_image_url:
+                data = await download_image_bytes(book.cover_image_url)
+                if data:
+                    new_height, new_ratio = _measure_cover_data(data)
+                    if _should_replace_cover(
+                        current_source=cover_source,
+                        current_height=cover_height,
+                        current_ratio=cover_ratio,
+                        new_source="hardcover",
+                        new_height=new_height,
+                        new_ratio=new_ratio,
+                    ):
+                        path = cache_cover_data(data, book.id, "hardcover")
+                        if path:
+                            book.cover_image_cached_path = path
+                            cover_height = new_height
+                            cover_source = "hardcover"
+                            cover_ratio = new_ratio
 
-        await db.commit()
+            if gbook and gbook.cover_url:
+                data = await download_image_bytes(gbook.cover_url)
+                if data:
+                    new_height, new_ratio = _measure_cover_data(data)
+                    if _should_replace_cover(
+                        current_source=cover_source,
+                        current_height=cover_height,
+                        current_ratio=cover_ratio,
+                        new_source="google",
+                        new_height=new_height,
+                        new_ratio=new_ratio,
+                    ):
+                        path = cache_cover_data(data, book.id, "google")
+                        if path:
+                            book.cover_image_cached_path = path
+                            cover_height = new_height
+                            cover_source = "google"
+                            cover_ratio = new_ratio
+
+            if ol_book and ol_book.cover_id:
+                data = await download_image_bytes(ol_book.cover_url_large)
+                if data:
+                    new_height, new_ratio = _measure_cover_data(data)
+                    if _should_replace_cover(
+                        current_source=cover_source,
+                        current_height=cover_height,
+                        current_ratio=cover_ratio,
+                        new_source="openlibrary",
+                        new_height=new_height,
+                        new_ratio=new_ratio,
+                    ):
+                        path = cache_cover_data(data, book.id, "openlibrary")
+                        if path:
+                            book.cover_image_cached_path = path
+                            cover_height = new_height
+                            cover_source = "openlibrary"
+                            cover_ratio = new_ratio
+
+            await flush_api_usage_batch(db)
+            await db.commit()
+    finally:
+        clear_api_usage_batch(usage_batch_token)
 
 
 async def _get_or_create_series(db: AsyncSession, hardcover_id: int, name: str) -> Series:

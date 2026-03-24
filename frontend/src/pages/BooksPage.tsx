@@ -1,6 +1,6 @@
 import { useState, useCallback } from "react";
 import { useBooks } from "../api/books";
-import { getImageUrl } from "../types";
+import { getBookCoverPresentation, getImageUrl } from "../types";
 import SortControls from "../components/SortControls";
 import SearchBar from "../components/SearchBar";
 import ViewToggle from "../components/ViewToggle";
@@ -69,13 +69,23 @@ export default function BooksPage() {
         <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-4">
           {books.map((book) => {
             const imgUrl = getImageUrl(book.cover_image_cached_path, book.cover_image_url);
+            const coverPresentation = getBookCoverPresentation(book.cover_aspect_ratio);
             return (
               <div key={book.id} className={`group cursor-pointer ${!book.is_owned ? "opacity-60" : ""}`}
                 onClick={() => book.hardcover_slug && window.open(`https://hardcover.app/books/${book.hardcover_slug}`, "_blank", "noopener,noreferrer")}
               >
-                <div className="relative aspect-[2/3] bg-slate-700 rounded-lg overflow-hidden border border-slate-600 group-hover:border-emerald-500/50 transition-all">
+                <div
+                  className={`relative rounded-lg overflow-hidden border border-slate-600 group-hover:border-emerald-500/50 transition-all ${coverPresentation.frameClassName}`}
+                  style={coverPresentation.frameStyle}
+                >
                   {imgUrl ? (
-                    <img src={imgUrl} alt={book.title} className="w-full h-full object-cover" loading="lazy" />
+                    coverPresentation.innerClassName ? (
+                      <div className={coverPresentation.innerClassName}>
+                        <img src={imgUrl} alt={book.title} className={coverPresentation.imageClassName} loading="lazy" />
+                      </div>
+                    ) : (
+                      <img src={imgUrl} alt={book.title} className={coverPresentation.imageClassName} loading="lazy" />
+                    )
                   ) : (
                     <div className="w-full h-full flex items-center justify-center p-2 text-center text-xs text-slate-400">
                       {book.title}

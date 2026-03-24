@@ -39,6 +39,7 @@ export interface BookInAuthor {
   release_date: string | null;
   cover_image_url: string | null;
   cover_image_cached_path: string | null;
+  cover_aspect_ratio: number | null;
   rating: number | null;
   pages: number | null;
   is_owned: boolean;
@@ -89,6 +90,7 @@ export interface Book {
   release_date: string | null;
   cover_image_url: string | null;
   cover_image_cached_path: string | null;
+  cover_aspect_ratio: number | null;
   rating: number | null;
   pages: number | null;
   is_owned: boolean;
@@ -197,4 +199,22 @@ export function getImageUrl(cachedPath: string | null, fallbackUrl: string | nul
   if (cachedPath) return `/api/images/${cachedPath.replace("cache/", "")}`;
   if (fallbackUrl) return fallbackUrl;
   return "";
+}
+
+export function getBookCoverPresentation(coverAspectRatio: number | null) {
+  if (coverAspectRatio != null && (coverAspectRatio < 0.62 || coverAspectRatio > 0.72)) {
+    return {
+      frameStyle: { aspectRatio: "2 / 3" as const },
+      frameClassName: "bg-black",
+      imageClassName: "w-full h-full object-contain",
+      innerClassName: "flex h-full w-full items-center justify-center p-2",
+    };
+  }
+
+  return {
+    frameStyle: { aspectRatio: "2 / 3" as const },
+    frameClassName: "bg-slate-700",
+    imageClassName: "w-full h-full object-cover",
+    innerClassName: "",
+  };
 }

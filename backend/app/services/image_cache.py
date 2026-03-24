@@ -224,6 +224,28 @@ def get_cached_cover_height(cached_path: str | None) -> int:
         return 0
 
 
+def get_cached_cover_dimensions(cached_path: str | None) -> tuple[int, int] | None:
+    """Read a cached cover and return (width, height). Returns None on error."""
+    if not cached_path:
+        return None
+    file_path = CACHE_DIR / cached_path.removeprefix("cache/")
+    if not file_path.exists():
+        return None
+    try:
+        data = file_path.read_bytes()
+        return get_image_dimensions(data)
+    except Exception:
+        return None
+
+
+def get_cached_cover_aspect_ratio(cached_path: str | None) -> float | None:
+    dims = get_cached_cover_dimensions(cached_path)
+    if not dims or dims[0] <= 0 or dims[1] <= 0:
+        return None
+    width, height = dims
+    return width / height
+
+
 def _get_ext(url: str) -> str:
     for ext in [".jpg", ".jpeg", ".png", ".webp"]:
         if ext in url.lower():

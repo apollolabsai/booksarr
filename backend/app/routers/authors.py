@@ -11,6 +11,7 @@ from backend.app.schemas.author import (
 )
 from backend.app.utils.book_visibility import get_book_visibility_settings, is_book_visible
 from backend.app.utils.isbn import has_any_valid_isbn
+from backend.app.services.image_cache import get_cached_cover_aspect_ratio
 
 router = APIRouter(prefix="/api/authors", tags=["authors"])
 
@@ -136,6 +137,7 @@ async def get_author(author_id: int, db: AsyncSession = Depends(get_db)):
             release_date=book.release_date,
             cover_image_url=book.cover_image_url,
             cover_image_cached_path=book.cover_image_cached_path,
+            cover_aspect_ratio=get_cached_cover_aspect_ratio(book.cover_image_cached_path),
             rating=book.rating,
             pages=book.pages,
             is_owned=book.is_owned,
