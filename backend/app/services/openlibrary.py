@@ -7,7 +7,9 @@ from backend.app.utils.api_usage import record_api_call
 logger = logging.getLogger("booksarr.openlibrary")
 
 SEARCH_URL = "https://openlibrary.org/search.json"
+AUTHOR_SEARCH_URL = "https://openlibrary.org/search/authors.json"
 COVER_URL = "https://covers.openlibrary.org/b/id"
+AUTHOR_COVER_URL = "https://covers.openlibrary.org/a/olid"
 
 
 @dataclass
@@ -29,6 +31,22 @@ class OLBook:
     def cover_url_medium(self) -> str:
         if self.cover_id:
             return f"{COVER_URL}/{self.cover_id}-M.jpg"
+        return ""
+
+
+@dataclass
+class OLAuthor:
+    key: str
+    name: str
+
+    @property
+    def olid(self) -> str:
+        return self.key.removeprefix("/authors/").strip()
+
+    @property
+    def photo_url_large(self) -> str:
+        if self.olid:
+            return f"{AUTHOR_COVER_URL}/{self.olid}-L.jpg?default=false"
         return ""
 
 
@@ -56,6 +74,41 @@ class OpenLibraryClient:
 
     async def search_book(self, title: str, author: str) -> OLBook | None:
         return (await self.search_book_with_result(title, author)).book
+
+    async def search_author(self, name: str) -> OLAuthor | None:
+        client = await self._get_client()
+        try:
+            await record_api_call("openlibrary")
+            resp = await client.get(
+                AUTHOR_SEARCH_URL,
+                params={"q": name, "limit": 5},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except (httpx.HTTPStatusError, httpx.RequestError, ValueError):
+            logger.debug("Open Library author search failed for '%s'", name)
+            return None
+
+        docs = data.get("docs", [])
+        if not docs:
+            return None
+
+        target = name.strip().lower()
+        chosen = None
+        for doc in docs:
+            doc_name = str(doc.get("name") or "").strip()
+            if doc_name.lower() == target:
+                chosen = doc
+                break
+        if chosen is None:
+            chosen = docs[0]
+
+        key = str(chosen.get("key") or "").strip()
+        doc_name = str(chosen.get("name") or "").strip()
+        if not key or not doc_name:
+            return None
+
+        return OLAuthor(key=key, name=doc_name)
 
     async def search_book_with_result(self, title: str, author: str) -> OpenLibraryLookupResult:
         """Search Open Library for a book by title and author."""

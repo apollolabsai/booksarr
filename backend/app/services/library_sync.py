@@ -38,7 +38,7 @@ from backend.app.services.google_books import (
 )
 from backend.app.utils.epub_cover import get_image_dimensions
 from backend.app.utils.api_usage import begin_api_usage_batch, clear_api_usage_batch, flush_api_usage_batch
-from backend.app.utils.isbn import normalize_isbn
+from backend.app.utils.isbn import normalize_isbn, normalized_valid_isbn
 
 logger = logging.getLogger("booksarr.sync")
 
@@ -338,6 +338,15 @@ async def _count_local_match_candidates(db: AsyncSession) -> int:
     return result.scalar() or 0
 
 
+async def _count_authors_needing_images(db: AsyncSession) -> int:
+    result = await db.execute(
+        select(func.count(Author.id)).where(
+            (Author.image_cached_path.is_(None)) | (Author.image_cached_path == "")
+        )
+    )
+    return result.scalar() or 0
+
+
 async def _repair_local_file_links(db: AsyncSession) -> tuple[int, int, int]:
     result = await db.execute(
         select(BookFile).options(selectinload(BookFile.book))
@@ -619,7 +628,8 @@ async def run_full_sync(force: bool = False):
             # If no changes and not forced, we can skip Hardcover phases
             has_changes = bool(scan_result.new_files or scan_result.deleted_files)
             repair_candidates = await _count_local_match_candidates(db)
-            if not has_changes and not force and repair_candidates == 0:
+            author_image_candidates = await _count_authors_needing_images(db)
+            if not has_changes and not force and repair_candidates == 0 and author_image_candidates == 0:
                 logger.info("No filesystem changes detected — skipping Hardcover sync")
                 scan_status.message = "No changes detected."
                 scan_status.progress = 100.0
@@ -632,10 +642,11 @@ async def run_full_sync(force: bool = False):
                     message="No changes detected.",
                 )
                 return
-            if not has_changes and not force and repair_candidates > 0:
+            if not has_changes and not force and (repair_candidates > 0 or author_image_candidates > 0):
                 logger.info(
-                    "No filesystem changes detected, but %d local file link(s) need repair",
+                    "No filesystem changes detected, but %d local file link(s) need repair and %d author image(s) need refresh",
                     repair_candidates,
+                    author_image_candidates,
                 )
 
             # Get API key
@@ -661,6 +672,7 @@ async def run_full_sync(force: bool = False):
                 return
 
             client = HardcoverClient(api_key)
+            ol_client = OpenLibraryClient()
             try:
                 # Phase 2: Match new authors to Hardcover
                 scan_status.message = "Matching authors to Hardcover..."
@@ -671,6 +683,7 @@ async def run_full_sync(force: bool = False):
                 new_author_count = 0
                 books_added = 0
                 for i, author in enumerate(authors):
+                    author_needs_cached_image = not author.image_cached_path
                     if not author.hardcover_id:
                         new_author_count += 1
                         scan_status.message = f"Looking up author: {author.name}"
@@ -685,13 +698,34 @@ async def run_full_sync(force: bool = False):
                             author.hardcover_slug = hc_author.slug
                             author.bio = hc_author.bio
                             author.image_url = hc_author.image_url
-
-                            if hc_author.image_url:
-                                cached = await cache_author_image(hc_author.id, hc_author.image_url)
-                                if cached:
-                                    author.image_cached_path = cached
                         else:
                             summary.hardcover.record_failure("no_result")
+                    elif author_needs_cached_image and not author.image_url:
+                        try:
+                            hc_author = await client.search_author(author.name)
+                        except HardcoverLookupError as e:
+                            summary.hardcover.record_failure(e.reason)
+                            raise
+                        if hc_author and hc_author.image_url:
+                            author.image_url = hc_author.image_url
+                            if not author.bio:
+                                author.bio = hc_author.bio
+                            if not author.hardcover_slug:
+                                author.hardcover_slug = hc_author.slug
+
+                    if author.image_url and not author.image_cached_path:
+                        source = "ol" if "openlibrary.org" in author.image_url else "hc"
+                        cached = await cache_author_image(author.id, author.image_url, source=source)
+                        if cached:
+                            author.image_cached_path = cached
+
+                    if not author.image_cached_path:
+                        ol_author = await ol_client.search_author(author.name)
+                        if ol_author and ol_author.photo_url_large:
+                            cached = await cache_author_image(author.id, ol_author.photo_url_large, source="ol")
+                            if cached:
+                                author.image_url = ol_author.photo_url_large
+                                author.image_cached_path = cached
 
                     progress = 20.0 + (30.0 * (i + 1) / max(total_authors, 1))
                     scan_status.progress = progress
@@ -796,8 +830,8 @@ async def run_full_sync(force: bool = False):
                             book.literary_type_id = hc_book.literary_type_id
                             book.literary_type_name = get_literary_type_name(hc_book.literary_type_id)
                             book.hardcover_state = hc_book.state or None
-                            book.hardcover_isbn_10 = hc_book.isbn_10
-                            book.hardcover_isbn_13 = hc_book.isbn_13
+                            book.hardcover_isbn_10 = normalized_valid_isbn(hc_book.isbn_10)
+                            book.hardcover_isbn_13 = normalized_valid_isbn(hc_book.isbn_13)
                             book.language = hc_book.language or book.language
                         else:
                             book = Book(
@@ -811,8 +845,8 @@ async def run_full_sync(force: bool = False):
                                 literary_type_id=hc_book.literary_type_id,
                                 literary_type_name=get_literary_type_name(hc_book.literary_type_id),
                                 hardcover_state=hc_book.state or None,
-                                hardcover_isbn_10=hc_book.isbn_10,
-                                hardcover_isbn_13=hc_book.isbn_13,
+                                hardcover_isbn_10=normalized_valid_isbn(hc_book.isbn_10),
+                                hardcover_isbn_13=normalized_valid_isbn(hc_book.isbn_13),
                                 description=hc_book.description,
                                 release_date=hc_book.release_date,
                                 cover_image_url=hc_book.image_url,
@@ -946,8 +980,8 @@ async def run_full_sync(force: bool = False):
                                             book.google_id = gbook.google_id
                                             book.google_published_date = gbook.published_date
                                             book.google_cover_url = gbook.cover_url
-                                            book.google_isbn_10 = gbook.isbn_10
-                                            book.google_isbn_13 = gbook.isbn_13
+                                            book.google_isbn_10 = normalized_valid_isbn(gbook.isbn_10)
+                                            book.google_isbn_13 = normalized_valid_isbn(gbook.isbn_13)
                                             fetched += 1
                                         else:
                                             summary.google.record_failure(final_reason)
@@ -1401,6 +1435,7 @@ async def run_full_sync(force: bool = False):
                 summary.owned_books_found = await _count_owned_books(db)
 
             finally:
+                await ol_client.close()
                 await client.close()
 
             await flush_api_usage_batch(db)
@@ -1487,8 +1522,8 @@ async def refresh_single_book(book_id: int):
                 book.literary_type_id = hc_book.literary_type_id
                 book.literary_type_name = get_literary_type_name(hc_book.literary_type_id)
                 book.hardcover_state = hc_book.state or None
-                book.hardcover_isbn_10 = hc_book.isbn_10
-                book.hardcover_isbn_13 = hc_book.isbn_13
+                book.hardcover_isbn_10 = normalized_valid_isbn(hc_book.isbn_10)
+                book.hardcover_isbn_13 = normalized_valid_isbn(hc_book.isbn_13)
                 book.language = hc_book.language or book.language
 
                 for existing_bs in list(book.book_series):
@@ -1527,8 +1562,8 @@ async def refresh_single_book(book_id: int):
                     book.google_id = gbook.google_id
                     book.google_published_date = gbook.published_date
                     book.google_cover_url = gbook.cover_url
-                    book.google_isbn_10 = gbook.isbn_10
-                    book.google_isbn_13 = gbook.isbn_13
+                    book.google_isbn_10 = normalized_valid_isbn(gbook.isbn_10)
+                    book.google_isbn_13 = normalized_valid_isbn(gbook.isbn_13)
                 elif final_reason in {"no_result", "title_mismatch", "author_mismatch"}:
                     book.google_id = "_none"
             except (GoogleBooksThrottledError, GoogleBooksLookupError):

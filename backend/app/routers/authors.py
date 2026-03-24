@@ -10,7 +10,7 @@ from backend.app.schemas.author import (
     SeriesInAuthor, SeriesBookEntry,
 )
 from backend.app.utils.book_visibility import get_book_visibility_settings, is_book_visible
-from backend.app.utils.isbn import is_valid_isbn
+from backend.app.utils.isbn import has_any_valid_isbn
 
 router = APIRouter(prefix="/api/authors", tags=["authors"])
 
@@ -123,7 +123,13 @@ async def get_author(author_id: int, db: AsyncSession = Depends(get_db)):
             isbn=book.isbn,
             google_isbn_10=book.google_isbn_10,
             google_isbn_13=book.google_isbn_13,
-            has_valid_isbn=is_valid_isbn(book.isbn),
+            has_valid_isbn=has_any_valid_isbn(
+                book.isbn,
+                book.hardcover_isbn_10,
+                book.hardcover_isbn_13,
+                book.google_isbn_10,
+                book.google_isbn_13,
+            ),
             matched_google=bool(book.google_id and book.google_id != "_none"),
             matched_openlibrary=bool(book.ol_edition_key and book.ol_edition_key != "_none"),
             description=book.description,

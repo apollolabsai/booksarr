@@ -42,9 +42,10 @@ async def download_image(url: str, category: str, filename: str) -> str | None:
         return None
 
 
-async def cache_author_image(hardcover_id: int, url: str) -> str | None:
+async def cache_author_image(author_key: int | str, url: str, source: str = "hc") -> str | None:
     ext = _get_ext(url)
-    return await download_image(url, "authors", f"hc_{hardcover_id}{ext}")
+    safe_source = source.lower().replace(" ", "_")
+    return await download_image(url, "authors", f"{safe_source}_{author_key}{ext}")
 
 
 async def cache_book_image(hardcover_id: int, url: str) -> str | None:

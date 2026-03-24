@@ -6,7 +6,7 @@ from sqlalchemy.orm import selectinload
 from backend.app.database import get_db
 from backend.app.models import Author, Book, BookSeries
 from backend.app.schemas.book import BookSummary, BookDetail, HiddenBookSummary, SeriesPositionInfo
-from backend.app.utils.isbn import is_valid_isbn
+from backend.app.utils.isbn import has_any_valid_isbn
 from backend.app.utils.book_visibility import (
     get_book_visibility_settings,
     get_hidden_category,
@@ -36,7 +36,13 @@ def _book_summary(book: Book) -> BookSummary:
         isbn=book.isbn,
         google_isbn_10=book.google_isbn_10,
         google_isbn_13=book.google_isbn_13,
-        has_valid_isbn=is_valid_isbn(book.isbn),
+        has_valid_isbn=has_any_valid_isbn(
+            book.isbn,
+            book.hardcover_isbn_10,
+            book.hardcover_isbn_13,
+            book.google_isbn_10,
+            book.google_isbn_13,
+        ),
         matched_google=bool(book.google_id and book.google_id != "_none"),
         matched_openlibrary=bool(book.ol_edition_key and book.ol_edition_key != "_none"),
         release_date=book.release_date,
@@ -169,7 +175,13 @@ async def get_book(book_id: int, db: AsyncSession = Depends(get_db)):
         isbn=book.isbn,
         google_isbn_10=book.google_isbn_10,
         google_isbn_13=book.google_isbn_13,
-        has_valid_isbn=is_valid_isbn(book.isbn),
+        has_valid_isbn=has_any_valid_isbn(
+            book.isbn,
+            book.hardcover_isbn_10,
+            book.hardcover_isbn_13,
+            book.google_isbn_10,
+            book.google_isbn_13,
+        ),
         matched_google=bool(book.google_id and book.google_id != "_none"),
         matched_openlibrary=bool(book.ol_edition_key and book.ol_edition_key != "_none"),
         description=book.description,

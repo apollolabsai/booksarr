@@ -10,6 +10,13 @@ def normalize_isbn(value: str | None) -> str:
     return _NON_ALNUM_RE.sub("", value).upper()
 
 
+def normalized_valid_isbn(value: str | None) -> str | None:
+    isbn = normalize_isbn(value)
+    if not isbn or not is_valid_isbn(isbn):
+        return None
+    return isbn
+
+
 def is_valid_isbn(value: str | None) -> bool:
     isbn = normalize_isbn(value)
     if len(isbn) == 10:
@@ -17,6 +24,10 @@ def is_valid_isbn(value: str | None) -> bool:
     if len(isbn) == 13:
         return _is_valid_isbn13(isbn)
     return False
+
+
+def has_any_valid_isbn(*values: str | None) -> bool:
+    return any(is_valid_isbn(value) for value in values)
 
 
 def _is_valid_isbn10(isbn: str) -> bool:
