@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useAuthor } from "../api/authors";
 import { getImageUrl } from "../types";
@@ -9,6 +9,7 @@ import SeriesGroup from "../components/SeriesGroup";
 import SortControls from "../components/SortControls";
 import ViewToggle from "../components/ViewToggle";
 import SearchBar from "../components/SearchBar";
+import AuthorPortraitPickerDialog from "../components/AuthorPortraitPickerDialog";
 
 const SORT_OPTIONS = [
   { value: "series", label: "By Series" },
@@ -25,7 +26,23 @@ export default function AuthorDetailPage() {
   const [view, setView] = useState<"grid" | "table">("grid");
   const [search, setSearch] = useState("");
   const [bioExpanded, setBioExpanded] = useState(false);
+  const [portraitPickerOpen, setPortraitPickerOpen] = useState(false);
+  const [portraitMenuOpen, setPortraitMenuOpen] = useState(false);
+  const portraitMenuRef = useRef<HTMLDivElement | null>(null);
   const handleSearch = useCallback((value: string) => setSearch(value), []);
+
+  useEffect(() => {
+    if (!portraitMenuOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (portraitMenuRef.current && !portraitMenuRef.current.contains(event.target as Node)) {
+        setPortraitMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [portraitMenuOpen]);
 
   if (isLoading || !author) {
     return (
@@ -154,7 +171,10 @@ export default function AuthorDetailPage() {
 
       {/* Hero Section */}
       <div className="flex gap-6 mb-8 mt-4">
-        <div className="w-40 h-52 flex-shrink-0 rounded-lg overflow-hidden bg-slate-700">
+        <div
+          ref={portraitMenuRef}
+          className="group relative w-40 h-52 flex-shrink-0 rounded-lg overflow-hidden bg-slate-700"
+        >
           {imgUrl ? (
             <img src={imgUrl} alt={author.name} className="w-full h-full object-cover" />
           ) : (
@@ -162,9 +182,45 @@ export default function AuthorDetailPage() {
               {author.name.charAt(0)}
             </div>
           )}
+          <div className="absolute bottom-2 left-2 right-2">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setPortraitMenuOpen((current) => !current);
+              }}
+              className="rounded-md border border-slate-500/60 bg-slate-900/70 px-1.5 py-1 text-slate-100 opacity-0 transition-opacity hover:bg-slate-800/90 group-hover:opacity-100"
+              title="Author actions"
+            >
+              <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
+                <circle cx="5" cy="12" r="1.75" />
+                <circle cx="12" cy="12" r="1.75" />
+                <circle cx="19" cy="12" r="1.75" />
+              </svg>
+            </button>
+            {portraitMenuOpen && (
+              <div
+                className="absolute bottom-9 left-0 right-0 z-20 rounded-lg border border-slate-600 bg-slate-900/95 p-1 shadow-xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPortraitMenuOpen(false);
+                    setPortraitPickerOpen(true);
+                  }}
+                  className="flex w-full items-center rounded-md px-2.5 py-1.5 text-xs text-slate-200 transition-colors hover:bg-slate-800"
+                >
+                  Choose Portrait
+                </button>
+              </div>
+            )}
+          </div>
         </div>
         <div className="flex-1 min-w-0">
-          <h1 className="text-3xl font-bold mb-2">{author.name}</h1>
+          <div className="mb-2">
+            <h1 className="text-3xl font-bold">{author.name}</h1>
+          </div>
           <div className="flex gap-4 text-sm text-slate-400 mb-4">
             <span><span className="text-emerald-400 font-semibold">{author.book_count_local}</span> owned</span>
             <span><span className="text-slate-200 font-semibold">{author.book_count_total}</span> total books</span>
@@ -203,6 +259,12 @@ export default function AuthorDetailPage() {
       ) : (
         renderBooks()
       )}
+      <AuthorPortraitPickerDialog
+        authorId={author.id}
+        authorName={author.name}
+        open={portraitPickerOpen}
+        onClose={() => setPortraitPickerOpen(false)}
+      />
     </div>
   );
 }

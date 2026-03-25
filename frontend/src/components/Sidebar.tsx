@@ -7,17 +7,17 @@ const links = [
 ];
 
 const settingsLinks = [
-  { to: "/settings#api-keys", label: "API Keys" },
-  { to: "/settings#profiles", label: "Profiles" },
-  { to: "/settings#metadata-refreshes", label: "Metadata Refreshes" },
-  { to: "/settings#logs", label: "Logs" },
+  { to: "/settings/api-keys", label: "API Keys" },
+  { to: "/settings/profiles", label: "Profiles" },
+  { to: "/settings/metadata-refreshes", label: "Metadata Refreshes" },
+  { to: "/settings/logs", label: "Logs" },
 ];
 
 export default function Sidebar() {
   const location = useLocation();
   const { data: scanStatus } = useScanStatus(true);
   const isScanning = scanStatus?.status === "scanning";
-  const settingsActive = location.pathname === "/settings" || location.pathname === "/logs";
+  const settingsActive = location.pathname.startsWith("/settings");
 
   return (
     <aside className="w-56 bg-slate-800 border-r border-slate-700 flex flex-col">
@@ -47,7 +47,7 @@ export default function Sidebar() {
 
         <div className="pt-2">
           <NavLink
-            to="/settings"
+            to="/settings/api-keys"
             className={() =>
               `flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
                 settingsActive
@@ -63,7 +63,7 @@ export default function Sidebar() {
           </NavLink>
           <div className="mt-1 ml-5 space-y-1 border-l border-slate-700 pl-3">
             {settingsLinks.map((link) => {
-              const active = location.pathname === "/settings" && location.hash === link.to.substring("/settings".length);
+              const active = location.pathname === link.to;
               return (
                 <NavLink
                   key={link.to}

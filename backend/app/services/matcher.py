@@ -2,6 +2,9 @@ import re
 import unicodedata
 
 
+_SUBTITLE_DESCRIPTOR_RE = re.compile(r"^(a|an|the|book|volume|vol\.?)\b", re.IGNORECASE)
+
+
 def normalize_title(title: str) -> str:
     """Normalize a book title for fuzzy matching."""
     t = title.lower().strip()
@@ -29,7 +32,13 @@ def _title_variants(title: str) -> set[str]:
     if ":" in raw:
         left, right = raw.split(":", 1)
         variants.add(normalize_title(left))
-        variants.add(normalize_title(right))
+        if not _SUBTITLE_DESCRIPTOR_RE.match(right.strip()):
+            variants.add(normalize_title(right))
+
+    if " - " in raw:
+        parts = [part.strip() for part in raw.split(" - ") if part.strip()]
+        if len(parts) >= 2:
+            variants.add(normalize_title(parts[-1]))
 
     return {variant for variant in variants if variant}
 

@@ -11,6 +11,31 @@ function isFullBook(book: BookLike): book is Book {
   return "author_name" in book;
 }
 
+function OwnedIndicator({ count }: { count: number }) {
+  if (count > 1) {
+    return (
+      <div
+        className="inline-flex min-w-5 items-center justify-center rounded-full bg-emerald-500 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+        title={`${count} owned copies`}
+      >
+        {count}
+      </div>
+    );
+  }
+
+  return (
+    <div className="inline-flex bg-emerald-500 rounded-full p-0.5" title="Owned">
+      <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+        <path
+          fillRule="evenodd"
+          d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+          clipRule="evenodd"
+        />
+      </svg>
+    </div>
+  );
+}
+
 function formatSeriesPosition(book: BookLike): string {
   if (!("series_info" in book) || !book.series_info || book.series_info.length === 0) return "";
   const si = book.series_info[0];
@@ -96,21 +121,11 @@ export default function BookTable({
               return (
                 <tr
                   key={book.id}
-                  className={`hover:bg-slate-700/50 transition-colors ${
-                    !book.is_owned ? "opacity-60" : ""
-                  }`}
+                  className="hover:bg-slate-700/50 transition-colors"
                 >
                   <td className="px-4 py-2 text-center">
                     {book.is_owned ? (
-                      <div className="inline-flex bg-emerald-500 rounded-full p-0.5">
-                        <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
-                          <path
-                            fillRule="evenodd"
-                            d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                            clipRule="evenodd"
-                          />
-                        </svg>
-                      </div>
+                      <OwnedIndicator count={book.owned_copy_count} />
                     ) : (
                       <div className="w-4 h-4 rounded-full border border-dashed border-slate-500 mx-auto" />
                     )}

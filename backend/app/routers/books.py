@@ -34,6 +34,7 @@ router = APIRouter(prefix="/api/books", tags=["books"])
 
 
 def _book_summary(book: Book) -> BookSummary:
+    owned_copy_count = len(book.files) if book.is_owned else 0
     return BookSummary(
         id=book.id,
         title=book.title,
@@ -72,6 +73,7 @@ def _book_summary(book: Book) -> BookSummary:
         rating=book.rating,
         pages=book.pages,
         is_owned=book.is_owned,
+        owned_copy_count=owned_copy_count,
         series_info=[
             SeriesPositionInfo(
                 series_id=bs.series.id,
@@ -93,6 +95,7 @@ async def list_books(
 ):
     query = select(Book).options(
         selectinload(Book.author),
+        selectinload(Book.files),
         selectinload(Book.book_series).selectinload(BookSeries.series),
     )
 
@@ -133,6 +136,7 @@ async def list_hidden_books(
 ):
     query = select(Book).options(
         selectinload(Book.author),
+        selectinload(Book.files),
         selectinload(Book.book_series).selectinload(BookSeries.series),
     ).order_by(Book.title.asc())
 
@@ -167,6 +171,7 @@ async def get_book(book_id: int, db: AsyncSession = Depends(get_db)):
         .where(Book.id == book_id)
         .options(
             selectinload(Book.author),
+            selectinload(Book.files),
             selectinload(Book.book_series).selectinload(BookSeries.series),
         )
     )
@@ -225,6 +230,7 @@ async def get_book(book_id: int, db: AsyncSession = Depends(get_db)):
         rating=book.rating,
         pages=book.pages,
         is_owned=book.is_owned,
+        owned_copy_count=len(book.files) if book.is_owned else 0,
         series_info=series_info,
     )
 

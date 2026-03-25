@@ -8,10 +8,12 @@ from backend.app.models import Author, Book, BookSeries, Series
 from backend.app.schemas.author import (
     AuthorSummary, AuthorDetail, BookInAuthor, SeriesPositionInfo,
     SeriesInAuthor, SeriesBookEntry,
+    AuthorPortraitOption, AuthorPortraitOptionsResponse, AuthorPortraitSelectionRequest,
 )
 from backend.app.utils.book_visibility import get_book_visibility_settings, is_book_visible
 from backend.app.utils.isbn import has_any_valid_isbn
 from backend.app.services.image_cache import get_cached_cover_aspect_ratio
+from backend.app.services.author_images import get_author_portrait_options, set_author_portrait_selection
 
 router = APIRouter(prefix="/api/authors", tags=["authors"])
 
@@ -73,7 +75,10 @@ async def get_author(author_id: int, db: AsyncSession = Depends(get_db)):
     books_result = await db.execute(
         select(Book)
         .where(Book.author_id == author_id)
-        .options(selectinload(Book.book_series).selectinload(BookSeries.series))
+        .options(
+            selectinload(Book.files),
+            selectinload(Book.book_series).selectinload(BookSeries.series),
+        )
     )
     all_books = books_result.scalars().all()
 
@@ -145,6 +150,7 @@ async def get_author(author_id: int, db: AsyncSession = Depends(get_db)):
             rating=book.rating,
             pages=book.pages,
             is_owned=book.is_owned,
+            owned_copy_count=len(book.files) if book.is_owned else 0,
             series_info=series_info,
         ))
 
@@ -168,3 +174,44 @@ async def get_author(author_id: int, db: AsyncSession = Depends(get_db)):
         books=books_out,
         series=series_out,
     )
+
+
+@router.get("/{author_id}/portrait-options", response_model=AuthorPortraitOptionsResponse)
+async def get_author_portrait_options_route(author_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Author).where(Author.id == author_id))
+    author = result.scalar_one_or_none()
+    if not author:
+        raise HTTPException(status_code=404, detail="Author not found")
+
+    options = await get_author_portrait_options(author)
+    current_source = next((option["source"] for option in options if option["is_current"]), None)
+    return AuthorPortraitOptionsResponse(
+        author_id=author.id,
+        current_source=current_source,
+        manual_source=author.manual_image_source,
+        options=[AuthorPortraitOption(**option) for option in options],
+    )
+
+
+@router.post("/{author_id}/portrait-selection")
+async def set_author_portrait_selection_route(
+    author_id: int,
+    body: AuthorPortraitSelectionRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Author).where(Author.id == author_id))
+    author = result.scalar_one_or_none()
+    if not author:
+        raise HTTPException(status_code=404, detail="Author not found")
+
+    success = await set_author_portrait_selection(
+        author,
+        source=body.source,
+        image_url=body.image_url,
+        page_url=body.page_url,
+    )
+    if not success:
+        raise HTTPException(status_code=400, detail="Unable to save portrait")
+
+    await db.commit()
+    return {"status": "ok", "message": "Author portrait updated"}

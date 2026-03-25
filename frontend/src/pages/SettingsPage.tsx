@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { useSettings, useUpdateSettings, useScanStatus, useTriggerScan, useResetData, useApiUsage } from "../api/settings";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ScanSummary, VisibilityCategories } from "../types";
@@ -80,8 +80,24 @@ const EMPTY_SCAN_SOURCE = {
   failure_reasons: {},
 };
 
-export default function SettingsPage() {
-  const location = useLocation();
+type SettingsSection = "api-keys" | "profiles" | "metadata-refreshes";
+
+const SECTION_META: Record<SettingsSection, { title: string; description: string }> = {
+  "api-keys": {
+    title: "API Keys",
+    description: "Configure the external services used for metadata enrichment.",
+  },
+  profiles: {
+    title: "Profiles",
+    description: "Control what kinds of books appear in the library and review the current library profile.",
+  },
+  "metadata-refreshes": {
+    title: "Metadata Refreshes",
+    description: "Run scans, manage refresh cadence, and reset metadata state when needed.",
+  },
+};
+
+export default function SettingsPage({ section }: { section: SettingsSection }) {
   const { data: settings } = useSettings();
   const updateSettings = useUpdateSettings();
   const triggerScan = useTriggerScan();
@@ -141,16 +157,6 @@ export default function SettingsPage() {
     setPersistedScanSummary(null);
     window.localStorage.removeItem("booksarr:lastScanSummary");
   }, [settings]);
-
-  useEffect(() => {
-    if (!location.hash) return;
-    const id = location.hash.slice(1);
-    const el = document.getElementById(id);
-    if (!el) return;
-    requestAnimationFrame(() => {
-      el.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-  }, [location.hash]);
 
   useEffect(() => {
     if (isScanning) {
@@ -221,16 +227,18 @@ export default function SettingsPage() {
       .split("_")
       .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
       .join(" ");
+  const sectionMeta = SECTION_META[section];
 
   return (
     <div className="max-w-2xl">
-      <h2 className="text-2xl font-bold mb-6">Settings</h2>
+      <h2 className="text-2xl font-bold mb-1">Settings</h2>
+      <div className="mb-6">
+        <h3 className="text-lg font-semibold">{sectionMeta.title}</h3>
+        <p className="text-sm text-slate-400">{sectionMeta.description}</p>
+      </div>
 
-      <section id="api-keys" className="scroll-mt-6 mb-8">
-        <div className="mb-3">
-          <h3 className="text-lg font-semibold">API Keys</h3>
-          <p className="text-sm text-slate-400">Configure the external services used for metadata enrichment.</p>
-        </div>
+      {section === "api-keys" && (
+        <>
 
       {/* Hardcover API Key */}
       <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
@@ -395,13 +403,11 @@ export default function SettingsPage() {
           </table>
         </div>
       </div>
-      </section>
+        </>
+      )}
 
-      <section id="profiles" className="scroll-mt-6 mb-8">
-        <div className="mb-3">
-          <h3 className="text-lg font-semibold">Profiles</h3>
-          <p className="text-sm text-slate-400">Control what kinds of books appear in the library and review the current library profile.</p>
-        </div>
+      {section === "profiles" && (
+        <>
 
         {/* Visibility */}
         <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
@@ -460,31 +466,29 @@ export default function SettingsPage() {
           </div>
         </div>
 
-      {/* Library Info */}
-      <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
-        <h3 className="text-lg font-semibold mb-4">Library</h3>
-        <div className="space-y-3 text-sm">
-          <div className="flex justify-between">
-            <span className="text-slate-400">Library Path</span>
-            <code className="text-slate-300">{settings?.library_path || "-"}</code>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-slate-400">Last Scan</span>
-            <span className="text-slate-300">
-              {settings?.last_scan_at
-                ? formatApiDateTime(settings.last_scan_at, "Never")
-                : "Never"}
-            </span>
+        {/* Library Info */}
+        <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
+          <h3 className="text-lg font-semibold mb-4">Library</h3>
+          <div className="space-y-3 text-sm">
+            <div className="flex justify-between">
+              <span className="text-slate-400">Library Path</span>
+              <code className="text-slate-300">{settings?.library_path || "-"}</code>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400">Last Scan</span>
+              <span className="text-slate-300">
+                {settings?.last_scan_at
+                  ? formatApiDateTime(settings.last_scan_at, "Never")
+                  : "Never"}
+              </span>
+            </div>
           </div>
         </div>
-      </div>
-      </section>
+        </>
+      )}
 
-      <section id="metadata-refreshes" className="scroll-mt-6 mb-8">
-        <div className="mb-3">
-          <h3 className="text-lg font-semibold">Metadata Refreshes</h3>
-          <p className="text-sm text-slate-400">Run scans, manage refresh cadence, and reset metadata state when needed.</p>
-        </div>
+      {section === "metadata-refreshes" && (
+        <>
 
         {/* Scan Controls */}
         <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
@@ -710,32 +714,8 @@ export default function SettingsPage() {
           </div>
         )}
       </div>
-      </section>
-
-      <section id="logs" className="scroll-mt-6 mb-8">
-        <div className="mb-3">
-          <h3 className="text-lg font-semibold">Logs</h3>
-          <p className="text-sm text-slate-400">Open the live application log viewer for filtering, scrolling, and download.</p>
-        </div>
-
-        <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-lg font-semibold">Logs</h3>
-              <p className="text-sm text-slate-400 mt-1">View application logs, filter by category, and download.</p>
-            </div>
-            <Link
-              to="/logs"
-              className="bg-slate-600 hover:bg-slate-500 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors flex items-center gap-2"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-              View Logs
-            </Link>
-          </div>
-        </div>
-      </section>
+        </>
+      )}
     </div>
   );
 }

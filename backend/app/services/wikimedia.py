@@ -35,6 +35,8 @@ class WikimediaAuthor:
     title: str
     image_url: str
     page_url: str = ""
+    width: int | None = None
+    height: int | None = None
 
 
 @dataclass
@@ -62,24 +64,37 @@ class WikimediaClient:
     async def search_author(self, name: str) -> WikimediaAuthor | None:
         return (await self.search_author_with_result(name)).author
 
-    async def search_author_with_result(self, name: str) -> WikimediaAuthorLookupResult:
+    async def search_author_candidates(self, name: str, limit: int = 4) -> list[WikimediaAuthor]:
+        candidates: list[WikimediaAuthor] = []
+        seen_urls: set[str] = set()
+
         exact_result = await self._fetch_summary_for_title(name, expected_name=name)
         if exact_result.author:
-            return exact_result
+            candidates.append(exact_result.author)
+            seen_urls.add(exact_result.author.image_url)
 
         search_titles = await self._search_author_candidates(name)
         if not search_titles:
-            return WikimediaAuthorLookupResult(author=None, reason=exact_result.reason)
+            return candidates[:limit]
 
-        best_reason = exact_result.reason
         for title in search_titles:
+            if len(candidates) >= limit:
+                break
             summary_result = await self._fetch_summary_for_title(title, expected_name=name)
-            if summary_result.author:
-                return summary_result
-            if summary_result.reason != "no_result":
-                best_reason = summary_result.reason
+            if not summary_result.author or summary_result.author.image_url in seen_urls:
+                continue
+            candidates.append(summary_result.author)
+            seen_urls.add(summary_result.author.image_url)
 
-        return WikimediaAuthorLookupResult(author=None, reason=best_reason)
+        return candidates[:limit]
+
+    async def search_author_with_result(self, name: str) -> WikimediaAuthorLookupResult:
+        candidates = await self.search_author_candidates(name, limit=1)
+        if candidates:
+            return WikimediaAuthorLookupResult(author=candidates[0], reason="matched")
+
+        exact_result = await self._fetch_summary_for_title(name, expected_name=name)
+        return WikimediaAuthorLookupResult(author=None, reason=exact_result.reason)
 
     async def _search_author_candidates(self, name: str) -> list[str] | None:
         client = await self._get_client()
@@ -169,6 +184,8 @@ class WikimediaClient:
                 title=summary_title,
                 image_url=image_url,
                 page_url=str(page_url or ""),
+                width=original_image.get("width") or thumbnail.get("width"),
+                height=original_image.get("height") or thumbnail.get("height"),
             ),
             reason="matched",
         )

@@ -549,7 +549,12 @@ def _should_replace_cover(
 
 
 def _preferred_google_isbns(book: Book) -> list[str]:
+    local_file_isbns = [
+        normalized_valid_isbn(book_file.opf_isbn)
+        for book_file in sorted(book.files, key=lambda bf: bf.id)
+    ]
     ordered = [
+        *local_file_isbns,
         book.isbn,
         book.hardcover_isbn_13,
         book.hardcover_isbn_10,
@@ -569,13 +574,90 @@ def _preferred_google_isbns(book: Book) -> list[str]:
     return result
 
 
+def _reparse_book_files(book: Book) -> tuple[str | None, str | None, str | None, str | None]:
+    primary_title = None
+    primary_isbn = None
+    primary_publisher = None
+    primary_description = None
+
+    for book_file in sorted(book.files, key=lambda bf: bf.id):
+        ebook_path = BOOKS_DIR / book_file.file_path
+        path_parts = book_file.file_path.split("/")
+        fallback_author = path_parts[0] if path_parts else (book_file.opf_author or "")
+        fallback_book_dir = path_parts[1] if len(path_parts) > 1 else book_file.file_name
+
+        if not ebook_path.exists():
+            continue
+
+        opf = extract_best_metadata(ebook_path, fallback_author, fallback_book_dir)
+        book_file.opf_title = opf.title or None
+        book_file.opf_author = opf.author or fallback_author
+        book_file.opf_isbn = opf.isbn or None
+        book_file.opf_series = opf.series or None
+        book_file.opf_series_index = opf.series_index
+        book_file.opf_publisher = opf.publisher or None
+        book_file.opf_description = opf.description or None
+        book_file.last_scanned_at = datetime.utcnow()
+
+        if primary_title is None and book_file.opf_title:
+            primary_title = book_file.opf_title
+        if primary_isbn is None:
+            primary_isbn = normalized_valid_isbn(book_file.opf_isbn)
+        if primary_publisher is None and book_file.opf_publisher:
+            primary_publisher = book_file.opf_publisher
+        if primary_description is None and book_file.opf_description:
+            primary_description = book_file.opf_description
+
+    return primary_title, primary_isbn, primary_publisher, primary_description
+
+
+def _linked_book_matches_local_metadata(
+    book: Book,
+    local_title: str | None,
+    local_isbn: str | None,
+) -> bool:
+    if local_title and not titles_match(local_title, book.title):
+        return False
+
+    normalized_local_isbn = normalize_isbn(local_isbn)
+    if normalized_local_isbn:
+        trusted_book_isbns = (
+            {
+                normalize_isbn(book.hardcover_isbn_13),
+                normalize_isbn(book.hardcover_isbn_10),
+            }
+            if book.hardcover_id
+            else {normalize_isbn(book.isbn)}
+        )
+        trusted_book_isbns.discard("")
+        if trusted_book_isbns and normalized_local_isbn in trusted_book_isbns:
+            return True
+
+    if local_title:
+        return True
+
+    if not normalized_local_isbn and not local_title:
+        return True
+
+    return False
+
+
 async def _count_local_match_candidates(db: AsyncSession) -> int:
     result = await db.execute(
-        select(func.count(BookFile.id))
-        .outerjoin(Book, Book.id == BookFile.book_id)
-        .where((BookFile.book_id.is_(None)) | (Book.hardcover_id.is_(None)))
+        select(BookFile).options(selectinload(BookFile.book))
     )
-    return result.scalar() or 0
+    count = 0
+    for book_file in result.scalars().all():
+        if book_file.book_id is None or (book_file.book and book_file.book.hardcover_id is None):
+            count += 1
+            continue
+        if book_file.book and not _linked_book_matches_local_metadata(
+            book_file.book,
+            book_file.opf_title,
+            book_file.opf_isbn,
+        ):
+            count += 1
+    return count
 
 
 async def _count_authors_needing_images(db: AsyncSession) -> int:
@@ -593,7 +675,11 @@ async def _repair_local_file_links(db: AsyncSession) -> tuple[int, int, int]:
     )
     candidate_files = [
         bf for bf in result.scalars().all()
-        if bf.book_id is None or (bf.book and bf.book.hardcover_id is None)
+        if (
+            bf.book_id is None
+            or (bf.book and bf.book.hardcover_id is None)
+            or (bf.book and not _linked_book_matches_local_metadata(bf.book, bf.opf_title, bf.opf_isbn))
+        )
     ]
 
     matched_count = 0
@@ -641,13 +727,14 @@ async def _repair_local_file_links(db: AsyncSession) -> tuple[int, int, int]:
         if bf.opf_isbn:
             target_isbn = normalize_isbn(bf.opf_isbn)
             for book in candidate_books:
-                book_isbns = [
-                    normalize_isbn(book.isbn),
-                    normalize_isbn(book.hardcover_isbn_13),
-                    normalize_isbn(book.hardcover_isbn_10),
-                    normalize_isbn(book.google_isbn_13),
-                    normalize_isbn(book.google_isbn_10),
-                ]
+                book_isbns = (
+                    [
+                        normalize_isbn(book.hardcover_isbn_13),
+                        normalize_isbn(book.hardcover_isbn_10),
+                    ]
+                    if book.hardcover_id
+                    else [normalize_isbn(book.isbn)]
+                )
                 if target_isbn and target_isbn in {value for value in book_isbns if value}:
                     matched_book = book
                     break
@@ -662,7 +749,10 @@ async def _repair_local_file_links(db: AsyncSession) -> tuple[int, int, int]:
             previous_book_id = bf.book_id
             bf.book = matched_book
             matched_book.is_owned = True
-            if bf.opf_isbn and not matched_book.isbn:
+            if bf.opf_isbn and (
+                not matched_book.isbn
+                or (previous_book_id and previous_book_id != matched_book.id)
+            ):
                 matched_book.isbn = bf.opf_isbn
                 if matched_book.google_id == "_none":
                     matched_book.google_id = None
@@ -926,6 +1016,7 @@ async def run_full_sync(force: bool = False):
                 new_author_count = 0
                 books_added = 0
                 for i, author in enumerate(authors):
+                    author_has_manual_image = bool(author.manual_image_source and author.manual_image_url)
                     author_needs_cached_image = not author.image_cached_path
                     if not author.hardcover_id:
                         new_author_count += 1
@@ -940,7 +1031,8 @@ async def run_full_sync(force: bool = False):
                             author.hardcover_id = hc_author.id
                             author.hardcover_slug = hc_author.slug
                             author.bio = hc_author.bio
-                            author.image_url = hc_author.image_url
+                            if not author_has_manual_image:
+                                author.image_url = hc_author.image_url
                         else:
                             summary.hardcover.record_failure("no_result")
                     elif author_needs_cached_image and not author.image_url:
@@ -949,12 +1041,15 @@ async def run_full_sync(force: bool = False):
                         except HardcoverLookupError as e:
                             summary.hardcover.record_failure(e.reason)
                             raise
-                        if hc_author and hc_author.image_url:
+                        if hc_author and hc_author.image_url and not author_has_manual_image:
                             author.image_url = hc_author.image_url
                             if not author.bio:
                                 author.bio = hc_author.bio
                             if not author.hardcover_slug:
                                 author.hardcover_slug = hc_author.slug
+
+                    if author_has_manual_image:
+                        author.image_url = author.manual_image_url
 
                     if author.image_url and not author.image_cached_path:
                         source = _get_author_image_source(author.image_url)
@@ -962,7 +1057,7 @@ async def run_full_sync(force: bool = False):
                         if cached:
                             author.image_cached_path = cached
 
-                    if not author.image_cached_path:
+                    if not author.image_cached_path and not author_has_manual_image:
                         summary.openlibrary.lookups_attempted += 1
                         ol_author = await ol_client.search_author(author.name)
                         if ol_author and ol_author.photo_url_large:
@@ -976,7 +1071,7 @@ async def run_full_sync(force: bool = False):
                         else:
                             summary.openlibrary.record_failure("no_result", attempted=False)
 
-                    if not author.image_cached_path:
+                    if not author.image_cached_path and not author_has_manual_image:
                         wikimedia_lookup = await wikimedia_client.search_author_with_result(author.name)
                         if wikimedia_lookup.author and wikimedia_lookup.author.image_url:
                             summary.wikimedia.record_match()
@@ -1810,8 +1905,19 @@ async def refresh_single_book(book_id: int):
             gbook: GBook | None = None
             ol_book: OLBook | None = None
             google_retry = False
+            local_title, local_isbn, local_publisher, local_description = _reparse_book_files(book)
 
-            # Clear external metadata so this behaves like a targeted re-import.
+            # Clear imported metadata so this behaves like a fresh re-import.
+            # The attached local file(s) are reparsed first and become the
+            # starting point before Hardcover/Google/Open Library run again.
+            book.title = local_title or book.title
+            book.isbn = local_isbn
+            book.publisher = local_publisher
+            book.description = local_description
+            book.release_date = None
+            book.tags = None
+            book.rating = None
+            book.pages = None
             book.google_id = None
             book.google_published_date = None
             book.google_cover_url = None
@@ -1823,6 +1929,8 @@ async def refresh_single_book(book_id: int):
             book.ol_isbn_10 = None
             book.ol_isbn_13 = None
             book.publish_date_checked_at = None
+            book.cover_image_cached_path = None
+            book.is_owned = bool(book.files)
 
             api_key = await get_api_key(db)
             if book.hardcover_id and api_key:

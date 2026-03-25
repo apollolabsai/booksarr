@@ -37,6 +37,7 @@ class BookSummary(BaseModel):
     rating: float | None
     pages: int | None
     is_owned: bool
+    owned_copy_count: int
     series_info: list[SeriesPositionInfo]
 
     class Config:

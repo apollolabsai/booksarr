@@ -10,6 +10,29 @@ export interface Author {
   book_count_total: number;
 }
 
+export interface AuthorPortraitOption {
+  key: string;
+  source: string;
+  label: string;
+  image_url: string | null;
+  cached_path: string | null;
+  page_url: string | null;
+  creator: string | null;
+  license: string | null;
+  width: number | null;
+  height: number | null;
+  aspect_ratio: number | null;
+  is_current: boolean;
+  is_manual: boolean;
+}
+
+export interface AuthorPortraitOptionsResponse {
+  author_id: number;
+  current_source: string | null;
+  manual_source: string | null;
+  options: AuthorPortraitOption[];
+}
+
 export interface SeriesPositionInfo {
   series_id: number;
   series_name: string;
@@ -45,6 +68,7 @@ export interface BookInAuthor {
   rating: number | null;
   pages: number | null;
   is_owned: boolean;
+  owned_copy_count: number;
   series_info: SeriesPositionInfo[];
 }
 
@@ -98,6 +122,7 @@ export interface Book {
   rating: number | null;
   pages: number | null;
   is_owned: boolean;
+  owned_copy_count: number;
   series_info: SeriesPositionInfo[];
 }
 

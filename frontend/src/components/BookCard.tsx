@@ -11,6 +11,31 @@ function isFullBook(book: BookLike): book is Book {
   return "author_name" in book;
 }
 
+function OwnedBadge({ count }: { count: number }) {
+  if (count > 1) {
+    return (
+      <div
+        className="absolute top-2 right-2 min-w-6 rounded-full bg-emerald-500 px-1.5 py-0.5 text-center text-xs font-semibold text-white"
+        title={`${count} owned copies`}
+      >
+        {count}
+      </div>
+    );
+  }
+
+  return (
+    <div className="absolute top-2 right-2 rounded-full bg-emerald-500 p-1" title="Owned">
+      <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+        <path
+          fillRule="evenodd"
+          d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+          clipRule="evenodd"
+        />
+      </svg>
+    </div>
+  );
+}
+
 export default function BookCard({
   book,
   onClick,
@@ -59,7 +84,7 @@ export default function BookCard({
   return (
     <>
       <div
-        className={`group cursor-pointer ${!book.is_owned ? "opacity-60" : ""}`}
+        className="group cursor-pointer"
         onClick={handleClick}
       >
         <div
@@ -145,17 +170,7 @@ export default function BookCard({
               </div>
             )}
           </div>
-          {book.is_owned && (
-            <div className="absolute top-2 right-2 bg-emerald-500 rounded-full p-1">
-              <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
-                <path
-                  fillRule="evenodd"
-                  d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                  clipRule="evenodd"
-                />
-              </svg>
-            </div>
-          )}
+          {book.is_owned && <OwnedBadge count={book.owned_copy_count} />}
         </div>
         <div className="mt-2">
           <p className="text-sm font-medium text-slate-200 truncate group-hover:text-emerald-400 transition-colors">

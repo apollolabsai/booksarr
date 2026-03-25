@@ -10,6 +10,7 @@ from backend.app.utils.epub_cover import extract_cover, get_image_dimensions
 logger = logging.getLogger("booksarr.images")
 
 CACHE_DIR = CONFIG_DIR / "cache"
+DEFAULT_HEADERS = {"User-Agent": "Booksarr/0.1.0 (ebook library manager)"}
 
 # Local covers smaller than this are considered thumbnails and skipped
 MIN_COVER_BYTES = 20_000  # 20KB
@@ -27,7 +28,11 @@ async def download_image(url: str, category: str, filename: str) -> str | None:
 
     try:
         logger.info("Downloading image: %s -> %s/%s", url[:80], category, filename)
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=15.0,
+            follow_redirects=True,
+            headers=DEFAULT_HEADERS,
+        ) as client:
             resp = await client.get(url)
             resp.raise_for_status()
             cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -173,7 +178,11 @@ async def download_image_bytes(url: str) -> bytes | None:
     if not url:
         return None
     try:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=15.0,
+            follow_redirects=True,
+            headers=DEFAULT_HEADERS,
+        ) as client:
             resp = await client.get(url)
             resp.raise_for_status()
             if len(resp.content) < 1000:
