@@ -56,14 +56,32 @@ async def scan_library(db: AsyncSession, library_path: Path) -> ScanResult:
 
     # Step 2: Walk filesystem and collect current paths + metadata
     current_paths: set[str] = set()
-    # Map rel_path -> (author_name, book_dir) for new files only
-    file_context: dict[str, tuple[str, Path]] = {}
+    # Map rel_path -> (author_name, fallback_book_name, standalone_in_author_root)
+    file_context: dict[str, tuple[str, str, bool]] = {}
 
     for author_dir in sorted(library_path.iterdir()):
         if not author_dir.is_dir() or author_dir.name.startswith("."):
             continue
 
         author_name = author_dir.name
+
+        # Support standalone ebooks directly inside the author folder.
+        for ebook_file in sorted(author_dir.iterdir()):
+            if (
+                not ebook_file.is_file()
+                or ebook_file.name.startswith(".")
+                or ebook_file.suffix.lower() not in EBOOK_EXTENSIONS
+            ):
+                continue
+
+            rel_path = str(ebook_file.relative_to(library_path))
+            current_paths.add(rel_path)
+            if rel_path not in known_paths:
+                file_context[rel_path] = (
+                    author_name,
+                    _clean_title_text(ebook_file.stem) or ebook_file.stem,
+                    True,
+                )
 
         for book_dir in sorted(author_dir.iterdir()):
             if not book_dir.is_dir() or book_dir.name.startswith("."):
@@ -78,7 +96,7 @@ async def scan_library(db: AsyncSession, library_path: Path) -> ScanResult:
                 rel_path = str(ebook_file.relative_to(library_path))
                 current_paths.add(rel_path)
                 if rel_path not in known_paths:
-                    file_context[rel_path] = (author_name, book_dir)
+                    file_context[rel_path] = (author_name, book_dir.name, False)
 
     result.total_files = len(current_paths)
 
@@ -101,7 +119,7 @@ async def scan_library(db: AsyncSession, library_path: Path) -> ScanResult:
     # Step 5: Process new files — create authors, parse OPF, create BookFile records
     if new_paths:
         for rel_path in sorted(new_paths):
-            author_name, book_dir = file_context[rel_path]
+            author_name, fallback_book_name, is_standalone = file_context[rel_path]
 
             # Track new authors
             if author_name not in known_authors:
@@ -112,11 +130,9 @@ async def scan_library(db: AsyncSession, library_path: Path) -> ScanResult:
 
             ebook_file = library_path / rel_path
 
-            opf = extract_best_metadata(ebook_file, author_name, book_dir.name)
+            opf = extract_best_metadata(ebook_file, author_name, fallback_book_name)
 
-            # Check for cover
-            cover_path = book_dir / "cover.jpg"
-            local_cover = str(cover_path) if cover_path.exists() else None
+            local_cover = _find_local_cover(ebook_file, standalone_in_author_root=is_standalone)
 
             file_size = ebook_file.stat().st_size
 
@@ -198,7 +214,10 @@ async def _get_or_create_author(db: AsyncSession, name: str) -> Author:
 
 def extract_best_metadata(ebook_file: Path, author_name: str, book_dir_name: str) -> OPFMetadata:
     opf_path = ebook_file.parent / "metadata.opf"
+    named_opf_path = ebook_file.with_suffix(".opf")
     sidecar_meta = parse_opf(opf_path) if opf_path.exists() else None
+    if not _has_useful_metadata(sidecar_meta) and named_opf_path.exists():
+        sidecar_meta = parse_opf(named_opf_path)
     epub_meta = parse_epub_opf(ebook_file) if ebook_file.suffix.lower() == ".epub" else None
     if _has_useful_metadata(sidecar_meta):
         return _normalize_metadata(sidecar_meta, author_name, book_dir_name, ebook_file)
@@ -258,3 +277,19 @@ def _clean_title_text(title: str) -> str:
         cleaned = stripped
 
     return cleaned
+
+
+def _find_local_cover(ebook_file: Path, standalone_in_author_root: bool) -> str | None:
+    if standalone_in_author_root:
+        for ext in (".jpg", ".jpeg", ".png"):
+            candidate = ebook_file.with_suffix(ext)
+            if candidate.exists():
+                return str(candidate)
+        return None
+
+    for name in ("cover.jpg", "cover.jpeg", "cover.png"):
+        candidate = ebook_file.parent / name
+        if candidate.exists():
+            return str(candidate)
+
+    return None
