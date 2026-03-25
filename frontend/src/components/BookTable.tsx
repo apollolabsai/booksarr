@@ -11,6 +11,10 @@ function isFullBook(book: BookLike): book is Book {
   return "author_name" in book;
 }
 
+function downloadBook(bookId: number) {
+  window.open(`/api/books/${bookId}/download`, "_blank", "noopener,noreferrer");
+}
+
 function OwnedIndicator({ count }: { count: number }) {
   if (count > 1) {
     return (
@@ -103,6 +107,7 @@ export default function BookTable({
               <th className="px-4 py-3 text-right">Year</th>
               <th className="px-4 py-3 text-right">Rating</th>
               <th className="px-4 py-3 text-right">Poster</th>
+              <th className="px-4 py-3 text-right">Download</th>
               <th className="px-4 py-3 text-right">Refresh</th>
               <th className="px-4 py-3 text-right">Visibility</th>
             </tr>
@@ -193,6 +198,17 @@ export default function BookTable({
                       title="Choose a poster for this book"
                     >
                       Poster
+                    </button>
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    <button
+                      type="button"
+                      onClick={() => downloadBook(book.id)}
+                      disabled={!book.is_owned}
+                      className="inline-flex items-center justify-center rounded-md border border-slate-600 bg-slate-700 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+                      title={book.is_owned ? "Download book" : "No local file available"}
+                    >
+                      Download
                     </button>
                   </td>
                   <td className="px-4 py-2 text-right">

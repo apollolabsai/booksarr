@@ -11,6 +11,10 @@ function isFullBook(book: BookLike): book is Book {
   return "author_name" in book;
 }
 
+function downloadBook(bookId: number) {
+  window.open(`/api/books/${bookId}/download`, "_blank", "noopener,noreferrer");
+}
+
 function OwnedBadge({ count }: { count: number }) {
   if (count > 1) {
     return (
@@ -155,6 +159,17 @@ export default function BookCard({
                   className="flex w-full items-center rounded-md px-2.5 py-1.5 text-xs text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Refresh
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    downloadBook(book.id);
+                  }}
+                  disabled={!book.is_owned}
+                  className="flex w-full items-center rounded-md px-2.5 py-1.5 text-xs text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Download Book
                 </button>
                 <button
                   type="button"

@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from backend.app.config import BOOKS_DIR
 from backend.app.database import get_db
 from backend.app.models import Author, Book, BookSeries
 from backend.app.schemas.book import (
@@ -313,3 +315,29 @@ async def refresh_book(book_id: int):
     except ValueError:
         raise HTTPException(status_code=404, detail="Book not found")
     return {"status": "ok", "message": "Book metadata refreshed"}
+
+
+@router.get("/{book_id}/download")
+async def download_book(book_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Book)
+        .where(Book.id == book_id)
+        .options(selectinload(Book.files))
+    )
+    book = result.scalar_one_or_none()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    if not book.is_owned or not book.files:
+        raise HTTPException(status_code=404, detail="No local file available for this book")
+
+    book_file = sorted(book.files, key=lambda file: file.id)[0]
+    file_path = BOOKS_DIR / book_file.file_path
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Local file not found")
+
+    media_type = "application/epub+zip" if (book_file.file_format or "").lower() == "epub" else "application/octet-stream"
+    return FileResponse(
+        str(file_path),
+        media_type=media_type,
+        filename=book_file.file_name,
+    )
