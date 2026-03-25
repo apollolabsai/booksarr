@@ -2,7 +2,11 @@ import re
 import unicodedata
 
 
-_SUBTITLE_DESCRIPTOR_RE = re.compile(r"^(a|an|the|book|volume|vol\.?)\b", re.IGNORECASE)
+_GENERIC_SUBTITLE_RE = re.compile(
+    r"^(?:a novel|a thriller|a memoir|stories|short stories|collection|omnibus)$",
+    re.IGNORECASE,
+)
+_NUMBERED_SUBTITLE_RE = re.compile(r"^(?:book|volume|vol\.?)\s+\d+\b", re.IGNORECASE)
 
 
 def normalize_title(title: str) -> str:
@@ -32,7 +36,7 @@ def _title_variants(title: str) -> set[str]:
     if ":" in raw:
         left, right = raw.split(":", 1)
         variants.add(normalize_title(left))
-        if not _SUBTITLE_DESCRIPTOR_RE.match(right.strip()):
+        if not _looks_like_descriptor(right):
             variants.add(normalize_title(right))
 
     if " - " in raw:
@@ -41,6 +45,17 @@ def _title_variants(title: str) -> set[str]:
             variants.add(normalize_title(parts[-1]))
 
     return {variant for variant in variants if variant}
+
+
+def _looks_like_descriptor(value: str) -> bool:
+    normalized = normalize_title(value)
+    if not normalized:
+        return True
+    if _GENERIC_SUBTITLE_RE.match(normalized):
+        return True
+    if _NUMBERED_SUBTITLE_RE.match(normalized):
+        return True
+    return False
 
 
 def titles_match(local_title: str, hc_title: str) -> bool:

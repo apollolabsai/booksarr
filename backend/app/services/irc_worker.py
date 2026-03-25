@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import shutil
 import ssl
 import struct
@@ -10,10 +11,11 @@ from socket import inet_ntoa
 from typing import Any
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.orm import selectinload
 
 from backend.app.config import BOOKS_DIR, DOWNLOADS_DIR, IRC_STATE_DIR
 from backend.app.database import async_session
-from backend.app.models import IrcDownloadJob, IrcSearchJob, IrcSearchResult, Setting
+from backend.app.models import Book, IrcDownloadJob, IrcSearchJob, IrcSearchResult, Setting
 from backend.app.services.irc_parser import (
     build_expected_result_filename,
     build_search_command,
@@ -22,6 +24,7 @@ from backend.app.services.irc_parser import (
     parse_search_results_archive,
     result_archive_matches_query,
 )
+from backend.app.utils.opf_parser import parse_epub_opf
 
 logger = logging.getLogger("booksarr.irc")
 
@@ -764,7 +767,7 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
 
         settings = await _load_irc_settings()
         if settings["auto_move_to_library"]:
-            moved_path = await _move_download_into_library(download_path)
+            moved_path = await _move_download_into_library(download_path, job_id)
             await _update_download_job(
                 job_id,
                 status="moved",
@@ -1066,20 +1069,121 @@ async def _store_search_results(
         await db.commit()
 
 
-async def _move_download_into_library(download_path: Path) -> Path:
-    import_dir = BOOKS_DIR / "IRC Imports"
-    import_dir.mkdir(parents=True, exist_ok=True)
+async def _move_download_into_library(download_path: Path, job_id: int) -> Path:
+    target_path = await _build_library_target_path(download_path, job_id)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
 
-    target_path = import_dir / download_path.name
     if target_path.exists():
         stem = target_path.stem
         suffix = target_path.suffix
         timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
-        target_path = import_dir / f"{stem}_{timestamp}{suffix}"
+        target_path = target_path.with_name(f"{stem}_{timestamp}{suffix}")
 
     logger.info("Moving IRC download into library: source=%s target=%s", download_path, target_path)
     shutil.move(str(download_path), str(target_path))
     return target_path
+
+
+async def _build_library_target_path(download_path: Path, job_id: int) -> Path:
+    author_name, book_name = await _resolve_import_names(download_path, job_id)
+    author_dir_name = _sanitize_library_component(author_name or "IRC Imports")
+    book_dir_name = _sanitize_library_component(book_name or download_path.stem)
+
+    target_dir = BOOKS_DIR / author_dir_name / book_dir_name
+    logger.info(
+        "Resolved IRC library import destination: job_id=%s author=%r book=%r target_dir=%s",
+        job_id,
+        author_dir_name,
+        book_dir_name,
+        target_dir,
+    )
+    return target_dir / download_path.name
+
+
+async def _resolve_import_names(download_path: Path, job_id: int) -> tuple[str, str]:
+    author_name: str | None = None
+    book_name: str | None = None
+
+    async with async_session() as db:
+        result = await db.execute(
+            select(IrcDownloadJob)
+            .options(selectinload(IrcDownloadJob.search_result))
+            .where(IrcDownloadJob.id == job_id)
+        )
+        job = result.scalar_one_or_none()
+
+        if job and job.book_id:
+            book_result = await db.execute(
+                select(Book).options(selectinload(Book.author)).where(Book.id == job.book_id)
+            )
+            linked_book = book_result.scalar_one_or_none()
+            if linked_book:
+                author_name = linked_book.author.name if linked_book.author else None
+                book_name = linked_book.title
+                logger.info(
+                    "IRC import destination using linked library book: job_id=%s author=%r title=%r",
+                    job_id,
+                    author_name,
+                    book_name,
+                )
+
+        if job and job.search_result:
+            if not author_name and job.search_result.normalized_author:
+                author_name = job.search_result.normalized_author
+            if not book_name:
+                book_name = (
+                    job.search_result.normalized_title
+                    or job.search_result.display_name
+                    or job.dcc_filename
+                )
+
+    epub_meta = parse_epub_opf(download_path) if download_path.suffix.lower() == ".epub" else None
+    if epub_meta:
+        if not author_name and epub_meta.author:
+            author_name = epub_meta.author.strip()
+        if not book_name and epub_meta.title:
+            book_name = epub_meta.title.strip()
+        logger.info(
+            "IRC import EPUB metadata probe: job_id=%s epub_author=%r epub_title=%r",
+            job_id,
+            epub_meta.author,
+            epub_meta.title,
+        )
+
+    if not author_name or not book_name:
+        guessed_author, guessed_title = _guess_author_title_from_filename(download_path.name)
+        author_name = author_name or guessed_author
+        book_name = book_name or guessed_title
+        logger.info(
+            "IRC import filename fallback: job_id=%s guessed_author=%r guessed_title=%r filename=%r",
+            job_id,
+            guessed_author,
+            guessed_title,
+            download_path.name,
+        )
+
+    return author_name or "IRC Imports", book_name or download_path.stem
+
+
+def _guess_author_title_from_filename(filename: str) -> tuple[str | None, str | None]:
+    stem = Path(filename).stem.strip()
+    if not stem:
+        return None, None
+
+    if " - " in stem:
+        parts = [part.strip() for part in stem.split(" - ") if part.strip()]
+        if len(parts) == 2:
+            return parts[1], parts[0]
+        if len(parts) >= 3:
+            return parts[0], " - ".join(parts[1:])
+
+    return None, stem
+
+
+def _sanitize_library_component(value: str) -> str:
+    sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", value).strip()
+    sanitized = re.sub(r"\s+", " ", sanitized).rstrip(".")
+    return sanitized or "Unknown"
 
 
 async def _trigger_library_scan_after_irc_import(moved_path: Path):
