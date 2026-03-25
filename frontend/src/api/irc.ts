@@ -114,6 +114,16 @@ export function useIrcDownloadJobs() {
   });
 }
 
+export function useIrcDownloadJob(jobId: number | null, enabled: boolean = true) {
+  return useQuery({
+    queryKey: ["ircDownloadJob", jobId],
+    queryFn: () => fetchApi<IrcDownloadJob>(`/irc/download-jobs/${jobId}`),
+    enabled: enabled && jobId != null,
+    refetchInterval: enabled && jobId != null ? 3000 : false,
+    refetchIntervalInBackground: true,
+  });
+}
+
 export function useCreateIrcDownloadJob() {
   const queryClient = useQueryClient();
   return useMutation({

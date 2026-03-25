@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   useCreateIrcDownloadJob,
   useCreateIrcSearchJob,
+  useIrcDownloadJob,
   useIrcSearchJob,
   useIrcSearchResults,
 } from "../api/irc";
@@ -23,14 +24,17 @@ export default function IrcSearchDialog({
   const createDownloadJob = useCreateIrcDownloadJob();
   const [queryText, setQueryText] = useState("");
   const [jobId, setJobId] = useState<number | null>(null);
+  const [downloadJobId, setDownloadJobId] = useState<number | null>(null);
   const { data: job } = useIrcSearchJob(jobId, open);
   const { data: results, isLoading: resultsLoading } = useIrcSearchResults(jobId, open);
+  const { data: downloadJob } = useIrcDownloadJob(downloadJobId, open);
 
   useEffect(() => {
     if (!open) return;
     const defaultQuery = [authorName ?? "", title].filter(Boolean).join(" ").trim();
     setQueryText(defaultQuery);
     setJobId(null);
+    setDownloadJobId(null);
   }, [authorName, title, open]);
 
   if (!open || !bookId) return null;
@@ -107,6 +111,36 @@ export default function IrcSearchDialog({
             </div>
           )}
 
+          {downloadJob && (
+            <div className="mt-5 rounded-xl border border-slate-700 bg-slate-800 p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-sm font-medium text-slate-100">Latest Download State</div>
+                  <div className="mt-1 text-sm text-slate-300">
+                    Job #{downloadJob.id}: {downloadJob.status}
+                  </div>
+                </div>
+                <div className="text-right text-xs text-slate-500">
+                  <div>{downloadJob.created_at ? new Date(downloadJob.created_at).toLocaleString() : "Queued just now"}</div>
+                  <div>{downloadJob.dcc_filename || "Waiting for bot response"}</div>
+                </div>
+              </div>
+              {downloadJob.saved_path && (
+                <div className="mt-3 text-xs text-slate-400">
+                  Downloaded to: <span className="text-slate-300">{downloadJob.saved_path}</span>
+                </div>
+              )}
+              {downloadJob.moved_to_library_path && (
+                <div className="mt-2 text-xs text-emerald-300">
+                  Moved to library: <span className="text-emerald-200">{downloadJob.moved_to_library_path}</span>
+                </div>
+              )}
+              {downloadJob.error_message && (
+                <div className="mt-3 text-sm text-rose-300">{downloadJob.error_message}</div>
+              )}
+            </div>
+          )}
+
           {jobId != null && (
             <div className="mt-5 rounded-xl border border-slate-700 bg-slate-800 p-4">
               <div className="mb-3 flex items-center justify-between">
@@ -146,7 +180,10 @@ export default function IrcSearchDialog({
                         )}
                         <button
                           type="button"
-                          onClick={() => createDownloadJob.mutate({ search_result_id: result.id })}
+                          onClick={async () => {
+                            const job = await createDownloadJob.mutateAsync({ search_result_id: result.id });
+                            setDownloadJobId(job.id);
+                          }}
                           disabled={createDownloadJob.isPending}
                           className="rounded-md border border-slate-600 bg-slate-700 px-3 py-1.5 text-xs font-medium text-slate-100 transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
                         >

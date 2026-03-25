@@ -184,6 +184,17 @@ export default function IrcSettingsPage() {
         <div className="text-sm text-slate-400">
           Downloads directory: <code className="text-slate-300">{settings?.downloads_dir ?? "/downloads"}</code>
         </div>
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={updateSettings.isPending}
+            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {updateSettings.isPending ? "Saving..." : "Save Download Settings"}
+          </button>
+          {saved && <span className="text-sm text-emerald-400">IRC settings saved.</span>}
+        </div>
       </div>
 
       <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">

@@ -229,6 +229,29 @@ async def list_download_jobs(db: AsyncSession = Depends(get_db)):
     ]
 
 
+@router.get("/download-jobs/{job_id}", response_model=IrcDownloadJobSummary)
+async def get_download_job(job_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(IrcDownloadJob).where(IrcDownloadJob.id == job_id))
+    job = result.scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="IRC download job not found")
+
+    return IrcDownloadJobSummary(
+        id=job.id,
+        book_id=job.book_id,
+        search_job_id=job.search_job_id,
+        search_result_id=job.search_result_id,
+        status=job.status,
+        dcc_filename=job.dcc_filename,
+        saved_path=job.saved_path,
+        moved_to_library_path=job.moved_to_library_path,
+        error_message=job.error_message,
+        created_at=_iso(job.created_at),
+        updated_at=_iso(job.updated_at),
+        completed_at=_iso(job.completed_at),
+    )
+
+
 @router.post("/download", response_model=IrcDownloadJobSummary)
 async def create_download_job(body: IrcDownloadRequest, db: AsyncSession = Depends(get_db)):
     result = await db.execute(

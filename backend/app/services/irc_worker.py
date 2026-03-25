@@ -25,10 +25,10 @@ from backend.app.services.irc_parser import (
 
 logger = logging.getLogger("booksarr.irc")
 
-IRC_MAX_TIMEOUT_SECONDS = 30
+IRC_MAX_TIMEOUT_SECONDS = 60
 IRC_CONNECT_TIMEOUT_SECONDS = 15
 IRC_DCC_CONNECT_TIMEOUT_SECONDS = 15
-IRC_DCC_WAIT_TIMEOUT_SECONDS = 30
+IRC_DCC_WAIT_TIMEOUT_SECONDS = 60
 IRC_DCC_CHUNK_TIMEOUT_SECONDS = 10
 
 _worker_task: asyncio.Task | None = None
@@ -194,18 +194,14 @@ async def _attempt_connection(settings: dict[str, object]):
         _writer = writer
         _send_raw_line(writer, f"NICK {nickname}")
         _send_raw_line(writer, f"USER {username} 0 * :{real_name}")
-        if settings["channel_password"]:
-            _send_raw_line(writer, f"JOIN {channel} {settings['channel_password']}")
-        else:
-            _send_raw_line(writer, f"JOIN {channel}")
 
         _runtime.connected = True
-        _runtime.joined_channel = True
-        _runtime.state = "connected"
+        _runtime.joined_channel = False
+        _runtime.state = "registering"
         _runtime.last_error = None
-        _runtime.last_message = f"Connected to {server} and joined {channel}"
+        _runtime.last_message = f"Connected to {server}; waiting for IRC registration before joining {channel}"
         _reader_task = asyncio.create_task(_reader_loop(reader))
-        logger.info("IRC connected successfully to %s and joined %s", server, channel)
+        logger.info("IRC TCP connection established to %s; waiting for server registration", server)
     except Exception as exc:
         await _close_connection(f"Connection failed: {exc}")
         _runtime.state = "connect_failed"
@@ -363,6 +359,8 @@ async def _reader_loop(reader: asyncio.StreamReader):
                     logger.info("IRC heartbeat reply sent for server ping")
                 continue
 
+            await _handle_server_line(line)
+
             dcc_offer = _parse_dcc_send_offer(line)
             if dcc_offer is not None:
                 await _handle_dcc_offer(dcc_offer)
@@ -389,6 +387,72 @@ async def _send_channel_message(channel: str, message: str):
         logger.warning("IRC channel command failed during drain: %s", exc)
         raise
     logger.info("IRC channel command sent to %s: %s", channel, message)
+
+
+async def _join_configured_channel():
+    if _writer is None or not _runtime.channel:
+        return
+
+    if _runtime.joined_channel:
+        return
+
+    settings = await _load_irc_settings()
+    channel = str(settings["channel"])
+    if not channel:
+        return
+
+    _runtime.state = "joining"
+    _runtime.last_message = f"Joining IRC channel {channel}"
+    if settings["channel_password"]:
+        _send_raw_line(_writer, f"JOIN {channel} {settings['channel_password']}")
+    else:
+        _send_raw_line(_writer, f"JOIN {channel}")
+    try:
+        await _writer.drain()
+    except Exception as exc:
+        logger.warning("IRC JOIN command failed during drain: %s", exc)
+        raise
+    logger.info("IRC JOIN command sent for channel %s", channel)
+
+
+async def _fail_active_channel_job(error_message: str):
+    async with async_session() as db:
+        active_search_result = await db.execute(
+            select(IrcSearchJob).where(
+                IrcSearchJob.status.in_(["sent", "waiting_dcc", "downloading_results"])
+            ).order_by(IrcSearchJob.updated_at.asc())
+        )
+        active_search_job = active_search_result.scalars().first()
+        if active_search_job is not None:
+            active_search_job.status = "failed"
+            active_search_job.error_message = error_message
+            active_search_job.updated_at = datetime.utcnow()
+            active_search_job.completed_at = datetime.utcnow()
+            await db.commit()
+            logger.warning(
+                "IRC search job %s failed because the server rejected the channel message: %s",
+                active_search_job.id,
+                error_message,
+            )
+            return
+
+        active_download_result = await db.execute(
+            select(IrcDownloadJob).where(
+                IrcDownloadJob.status.in_(["sent", "waiting_dcc", "downloading"])
+            ).order_by(IrcDownloadJob.updated_at.asc())
+        )
+        active_download_job = active_download_result.scalars().first()
+        if active_download_job is not None:
+            active_download_job.status = "failed"
+            active_download_job.error_message = error_message
+            active_download_job.updated_at = datetime.utcnow()
+            active_download_job.completed_at = datetime.utcnow()
+            await db.commit()
+            logger.warning(
+                "IRC download job %s failed because the server rejected the channel message: %s",
+                active_download_job.id,
+                error_message,
+            )
 
 
 async def _handle_dcc_offer(offer: dict[str, Any]):
@@ -457,6 +521,59 @@ async def _handle_dcc_offer(offer: dict[str, Any]):
         )
 
     logger.info("IRC DCC offer ignored: no active search or download job matched filename=%s", offer["filename"])
+
+
+async def _handle_server_line(line: str):
+    if " 001 " in line:
+        logger.info("IRC registration completed; requesting channel join for %s", _runtime.channel)
+        await _join_configured_channel()
+        return
+
+    if line.startswith(":") and " JOIN " in line:
+        prefix = line[1:].split(" ", 1)[0]
+        nickname = prefix.split("!", 1)[0]
+        channel = line.split(" JOIN ", 1)[1].lstrip(":").strip()
+        if nickname == _runtime.nickname and channel == _runtime.channel:
+            _runtime.joined_channel = True
+            _runtime.state = "connected"
+            _runtime.last_error = None
+            _runtime.last_message = f"Joined IRC channel {channel}"
+            logger.info("IRC confirmed local nick %s joined %s", nickname, channel)
+        return
+
+    if " 366 " in line and _runtime.channel and f" {_runtime.channel} " in line:
+        _runtime.joined_channel = True
+        _runtime.state = "connected"
+        _runtime.last_error = None
+        _runtime.last_message = f"Joined IRC channel {_runtime.channel}"
+        logger.info("IRC end-of-names confirms join completed for %s", _runtime.channel)
+        return
+
+    if " 451 " in line and "You have not registered" in line:
+        logger.warning("IRC server rejected an early command before registration completed: %s", line)
+        _runtime.joined_channel = False
+        _runtime.state = "registering"
+        _runtime.last_message = "Server rejected a pre-registration command; waiting for 001 before rejoining"
+        return
+
+    if " 404 " in line and "Cannot send to channel" in line:
+        logger.warning("IRC channel send rejected by server: %s", line)
+        _runtime.last_error = line
+        _runtime.last_message = "Server rejected sending to the configured channel"
+        await _fail_active_channel_job(f"IRC server rejected channel message: {line}")
+        return
+
+    if " 403 " in line and _runtime.channel and f" {_runtime.channel} " in line:
+        logger.warning("IRC channel does not exist or was rejected: %s", line)
+        _runtime.last_error = line
+        _runtime.last_message = f"Could not join configured channel {_runtime.channel}"
+        return
+
+    if " 474 " in line or " 473 " in line or " 475 " in line:
+        logger.warning("IRC channel join was rejected: %s", line)
+        _runtime.last_error = line
+        _runtime.last_message = "IRC server rejected joining the configured channel"
+        return
 
 
 async def _download_search_result_archive(job_id: int, offer: dict[str, Any]):
