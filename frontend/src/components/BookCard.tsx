@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import type { BookInAuthor, Book } from "../types";
 import { getBookCoverPresentation, getImageUrl } from "../types";
 import CoverPickerDialog from "./CoverPickerDialog";
+import IrcSearchDialog from "./IrcSearchDialog";
 import { useRefreshBook, useSetBookVisibility } from "../api/books";
 
 type BookLike = BookInAuthor | Book;
@@ -44,14 +45,17 @@ export default function BookCard({
   book,
   onClick,
   showAuthor = false,
+  authorName = null,
 }: {
   book: BookLike;
   onClick?: () => void;
   showAuthor?: boolean;
+  authorName?: string | null;
 }) {
   const refreshBook = useRefreshBook();
   const setBookVisibility = useSetBookVisibility();
   const [coverPickerOpen, setCoverPickerOpen] = useState(false);
+  const [ircSearchOpen, setIrcSearchOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const imgUrl = getImageUrl(
@@ -153,6 +157,16 @@ export default function BookCard({
                   type="button"
                   onClick={() => {
                     setMenuOpen(false);
+                    setIrcSearchOpen(true);
+                  }}
+                  className="flex w-full items-center rounded-md px-2.5 py-1.5 text-xs text-slate-200 transition-colors hover:bg-slate-800"
+                >
+                  Search IRC
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
                     refreshBook.mutate(book.id);
                   }}
                   disabled={refreshBook.isPending}
@@ -212,6 +226,13 @@ export default function BookCard({
         title={book.title}
         open={coverPickerOpen}
         onClose={() => setCoverPickerOpen(false)}
+      />
+      <IrcSearchDialog
+        bookId={book.id}
+        title={book.title}
+        authorName={isFullBook(book) ? book.author_name : authorName}
+        open={ircSearchOpen}
+        onClose={() => setIrcSearchOpen(false)}
       />
     </>
   );

@@ -39,10 +39,13 @@ async def lifespan(app: FastAPI):
     logger.info("Database initialized")
 
     from backend.app.services.scheduler import start_scheduler, stop_scheduler
+    from backend.app.services.irc_worker import start_irc_worker, stop_irc_worker
     await start_scheduler()
+    await start_irc_worker()
 
     yield
 
+    await stop_irc_worker()
     await stop_scheduler()
     logger.info("Shutting down Booksarr")
 
@@ -58,7 +61,7 @@ app.add_middleware(
 )
 
 # Register routers
-from backend.app.routers import authors, books, series, library, settings, logs  # noqa: E402
+from backend.app.routers import authors, books, series, library, settings, logs, irc  # noqa: E402
 
 app.include_router(authors.router)
 app.include_router(books.router)
@@ -66,6 +69,7 @@ app.include_router(series.router)
 app.include_router(library.router)
 app.include_router(settings.router)
 app.include_router(logs.router)
+app.include_router(irc.router)
 
 
 @app.get("/api/health")

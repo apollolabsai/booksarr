@@ -240,6 +240,78 @@ export interface ApiUsageDay {
   wikimedia: number;
 }
 
+export interface IrcSettings {
+  enabled: boolean;
+  server: string;
+  port: number;
+  use_tls: boolean;
+  nickname: string;
+  username: string;
+  real_name: string;
+  channel: string;
+  channel_password_set: boolean;
+  auto_move_to_library: boolean;
+  downloads_dir: string;
+}
+
+export interface IrcWorkerStatus {
+  enabled: boolean;
+  desired_connection: boolean;
+  connected: boolean;
+  joined_channel: boolean;
+  state: string;
+  server: string | null;
+  channel: string | null;
+  nickname: string | null;
+  active_search_job_id: number | null;
+  active_download_job_id: number | null;
+  last_message: string | null;
+  last_error: string | null;
+  queued_search_jobs: number;
+  queued_download_jobs: number;
+}
+
+export interface IrcSearchJob {
+  id: number;
+  book_id: number | null;
+  query_text: string;
+  status: string;
+  expected_result_filename: string | null;
+  result_count: number;
+  error_message: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  completed_at: string | null;
+}
+
+export interface IrcSearchResult {
+  id: number;
+  search_job_id: number;
+  result_index: number;
+  raw_line: string;
+  bot_name: string | null;
+  display_name: string;
+  file_format: string | null;
+  file_size_text: string | null;
+  download_command: string;
+  selected: boolean;
+}
+
+export interface IrcDownloadJob {
+  id: number;
+  book_id: number | null;
+  search_job_id: number | null;
+  search_result_id: number | null;
+  status: string;
+  dcc_filename: string | null;
+  saved_path: string | null;
+  moved_to_library_path: string | null;
+  error_message: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  completed_at: string | null;
+}
+
 export interface LogEntry {
   timestamp: string;
   level: string;

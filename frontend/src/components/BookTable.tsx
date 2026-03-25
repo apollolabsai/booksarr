@@ -4,6 +4,7 @@ import type { Book, BookInAuthor } from "../types";
 import { getBookCoverPresentation, getImageUrl } from "../types";
 import { useRefreshBook, useSetBookVisibility } from "../api/books";
 import CoverPickerDialog from "./CoverPickerDialog";
+import IrcSearchDialog from "./IrcSearchDialog";
 
 type BookLike = Book | BookInAuthor;
 
@@ -85,13 +86,16 @@ function MetadataBadges({ book }: { book: BookLike }) {
 export default function BookTable({
   books,
   showAuthor = true,
+  authorName: contextAuthorName = null,
 }: {
   books: BookLike[];
   showAuthor?: boolean;
+  authorName?: string | null;
 }) {
   const refreshBook = useRefreshBook();
   const setBookVisibility = useSetBookVisibility();
   const [coverPickerBook, setCoverPickerBook] = useState<{ id: number; title: string } | null>(null);
+  const [ircSearchBook, setIrcSearchBook] = useState<{ id: number; title: string; authorName: string | null } | null>(null);
 
   return (
     <>
@@ -107,6 +111,7 @@ export default function BookTable({
               <th className="px-4 py-3 text-right">Year</th>
               <th className="px-4 py-3 text-right">Rating</th>
               <th className="px-4 py-3 text-right">Poster</th>
+              <th className="px-4 py-3 text-right">IRC</th>
               <th className="px-4 py-3 text-right">Download</th>
               <th className="px-4 py-3 text-right">Refresh</th>
               <th className="px-4 py-3 text-right">Visibility</th>
@@ -203,6 +208,20 @@ export default function BookTable({
                   <td className="px-4 py-2 text-right">
                     <button
                       type="button"
+                      onClick={() => setIrcSearchBook({
+                        id: book.id,
+                        title: book.title,
+                        authorName: authorName ?? contextAuthorName ?? null,
+                      })}
+                      className="inline-flex items-center justify-center rounded-md border border-slate-600 bg-slate-700 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-600"
+                      title="Search IRC for this book"
+                    >
+                      IRC
+                    </button>
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    <button
+                      type="button"
                       onClick={() => downloadBook(book.id)}
                       disabled={!book.is_owned}
                       className="inline-flex items-center justify-center rounded-md border border-slate-600 bg-slate-700 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
@@ -248,6 +267,13 @@ export default function BookTable({
         title={coverPickerBook?.title ?? ""}
         open={coverPickerBook !== null}
         onClose={() => setCoverPickerBook(null)}
+      />
+      <IrcSearchDialog
+        bookId={ircSearchBook?.id ?? null}
+        title={ircSearchBook?.title ?? ""}
+        authorName={ircSearchBook?.authorName ?? null}
+        open={ircSearchBook !== null}
+        onClose={() => setIrcSearchBook(null)}
       />
     </>
   );

@@ -114,20 +114,20 @@ export default function AuthorDetailPage() {
                       <span className="text-emerald-400">{ownedCount}</span> / {s.books.length} books
                     </span>
                   </div>
-                  <BookTable books={seriesFullBooks} showAuthor={false} />
+                  <BookTable books={seriesFullBooks} showAuthor={false} authorName={author.name} />
                 </div>
               );
             })}
             {standaloneBooks.length > 0 && (
               <div className="mb-6">
                 <h3 className="text-lg font-semibold text-slate-200 mb-3">Standalone</h3>
-                <BookTable books={standaloneBooks} showAuthor={false} />
+                <BookTable books={standaloneBooks} showAuthor={false} authorName={author.name} />
               </div>
             )}
           </>
         );
       }
-      return <BookTable books={sortedBooks} showAuthor={false} />;
+      return <BookTable books={sortedBooks} showAuthor={false} authorName={author.name} />;
     }
 
     // Grid view
@@ -142,7 +142,7 @@ export default function AuthorDetailPage() {
               <h3 className="text-lg font-semibold text-slate-200 mb-4">Standalone</h3>
               <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-4">
                 {standaloneBooks.map((book) => (
-                  <BookCard key={book.id} book={book} />
+                  <BookCard key={book.id} book={book} authorName={author.name} />
                 ))}
               </div>
             </div>
@@ -154,7 +154,7 @@ export default function AuthorDetailPage() {
     return (
       <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-4">
         {sortedBooks.map((book) => (
-          <BookCard key={book.id} book={book} />
+          <BookCard key={book.id} book={book} authorName={author.name} />
         ))}
       </div>
     );

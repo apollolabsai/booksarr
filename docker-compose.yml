@@ -8,9 +8,11 @@ services:
       - TZ=America/Los_Angeles
       - HARDCOVER_API_KEY=
       - GOOGLE_BOOKS_API_KEY=    # Optional but recommended: for accurate publish dates (free)
+      - DOWNLOADS_DIR=/downloads
     volumes:
       - ./config:/config
-      - /Users/jsg/Local Projects/sample_ebook:/books:ro
+      - ./downloads:/downloads
+      - /Users/jsg/Local Projects/sample_ebook:/books
     ports:
       - 8889:8889
     restart: unless-stopped

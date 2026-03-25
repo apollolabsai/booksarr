@@ -10,6 +10,7 @@ const settingsLinks = [
   { to: "/settings/api-keys", label: "API Keys" },
   { to: "/settings/profiles", label: "Profiles" },
   { to: "/settings/metadata-refreshes", label: "Metadata Refreshes" },
+  { to: "/settings/irc", label: "IRC" },
   { to: "/settings/logs", label: "Logs" },
 ];
 
