@@ -1,20 +1,19 @@
 # Booksarr
 
-A Docker-based ebook library manager inspired by Radarr/Sonarr. Scans your local ebook collection, enriches metadata from [Hardcover](https://hardcover.app), and shows all books by each author — marking which you own and which you're missing.
+Booksarr is a Docker-based ebook library manager inspired by Radarr/Sonarr. It scans your local ebook collection, matches files against full author catalogs, enriches metadata from multiple sources, and gives you tools to review hidden books, override covers, refresh individual titles, and track scan outcomes.
 
 ## Features
 
-- **Library Scanning** — Automatically discovers EPUBs organized in `Author/Book/` folders with Calibre `metadata.opf` support
-- **Hardcover Integration** — Fetches complete author catalogs, book metadata, series info, covers, and author photos via the Hardcover GraphQL API
-- **Series Reading Order** — Books grouped by series with position badges (supports novellas at positions like 1.5, 2.5)
-- **Owned vs Missing** — Green checkmark badge on owned books; missing books shown dimmed with dashed borders
-- **Incremental Sync** — Only fetches new authors and books on subsequent scans; recently synced authors are skipped (7-day cooldown). Full refresh available when needed
-- **Smart Matching** — Matches local files to Hardcover entries by ISBN first, then normalized title similarity
-- **Image Caching** — Author photos and book covers cached locally for fast loading
-- **Filtering** — Excludes unreleased books and non-English books (unless locally owned)
-- **Grid & Table Views** — Toggle between card grid and compact table layout on all pages
-- **Dark Theme** — Radarr/Sonarr-style dark UI with emerald accents
-- **Docker** — Multi-stage Docker build with LinuxServer-style PUID/PGID support
+- **Local library scanning** — Discovers EPUBs from your mounted library, reads sidecar `metadata.opf` when present, and falls back to internal EPUB metadata and filename parsing.
+- **Multi-source metadata** — Uses [Hardcover](https://hardcover.app), Google Books, Open Library, and Wikimedia where appropriate for books, covers, publish dates, ISBNs, and author portraits.
+- **Configurable visibility profiles** — Control which books are shown with profile rules such as non-English, upcoming releases, pending Hardcover records, likely collections, and valid ISBN requirements.
+- **Hidden books review** — Dedicated hidden-books page shows every hidden title and every rule that hid it, with support for manual hide/unhide overrides.
+- **Series-aware browsing** — Author pages group books by series and preserve reading-order positions.
+- **Poster and portrait management** — Manually choose a book poster or author portrait from available candidates and keep that choice through future refreshes.
+- **Per-book actions** — Refresh one book from scratch, download its local file, hide it, or launch an IRC search from either table or grid view.
+- **API usage and scan summaries** — Settings shows daily API call counts plus a persisted last-run dashboard with counts for owned books found, authors added, books added, hidden books, and lookup failures.
+- **Grid and table views** — Browse books in poster view or compact table view, with badges for owned copies, ISBN validity, and Google/Open Library matches.
+- **IRC search and download workflow** — Optional IRC integration can search a configured channel, parse DCC-delivered result archives, download selected files, and optionally move them into your library.
 
 ## Quick Start
 
@@ -23,89 +22,108 @@ A Docker-based ebook library manager inspired by Radarr/Sonarr. Scans your local
 ```yaml
 services:
   booksarr:
-    image: apollolabsai/booksarr:latest
+    build: .
     container_name: booksarr
     environment:
       - PUID=1000
       - PGID=1000
       - TZ=America/Los_Angeles
-      - HARDCOVER_API_KEY=         # Optional: or set via Settings UI
-      - GOOGLE_BOOKS_API_KEY=      # Optional but recommended: for accurate publish dates (free)
+      - HARDCOVER_API_KEY=
+      - GOOGLE_BOOKS_API_KEY=    # Optional but recommended
+      - DOWNLOADS_DIR=/downloads # Used by IRC downloads
     volumes:
-      - ./config:/config           # Database, settings, image cache
-      - /path/to/your/ebooks:/books:ro
+      - ./config:/config
+      - ./downloads:/downloads
+      - /path/to/your/ebooks:/books
     ports:
       - 8889:8889
     restart: unless-stopped
 ```
 
 ```bash
-docker-compose up -d
+docker compose up --build -d
 ```
 
 Then open `http://localhost:8889`.
 
 ### Library Structure
 
-Booksarr expects your ebooks organized by author:
+Booksarr expects ebooks under your `/books` mount, typically organized by author:
 
-```
+```text
 /books/
   Brandon Sanderson/
     The Way of Kings (123)/
       The Way of Kings - Brandon Sanderson.epub
-      metadata.opf    # Calibre metadata (optional but recommended)
-      cover.jpg       # Cover image (optional)
-    Mistborn (456)/
-      ...
+      metadata.opf
+      cover.jpg
   John Grisham/
-    ...
+    Theodore Boone 04 - The Activist/
+      John Grisham - [Theodore Boone 04] - The Activist.epub
 ```
 
 ### Setup
 
-1. Navigate to **Settings**
-2. Enter your [Hardcover API key](https://hardcover.app/account/api)
-3. *(Optional but recommended)* Enter a [Google Books API key](https://console.cloud.google.com/apis/library/books.googleapis.com) for more accurate publish dates — free, 1,000 requests/day
-4. Click **Scan Library**
-5. Browse your collection on the **Authors** and **Books** pages
+1. Open **Settings > API Keys** and enter your Hardcover API key.
+2. Optionally add a Google Books API key for better date and ISBN enrichment.
+3. Open **Settings > Profiles** and adjust **Book Visibility** rules.
+4. Open **Settings > Metadata Refreshes** and run **Scan Library** or **Full Refresh**.
+5. Optionally configure **Settings > IRC** if you want IRC search/download support.
 
 ## Configuration
 
 | Environment Variable | Default | Description |
-|---------------------|---------|-------------|
+|----------------------|---------|-------------|
 | `PUID` | `1000` | User ID for file permissions |
 | `PGID` | `1000` | Group ID for file permissions |
-| `TZ` | `UTC` | Timezone |
-| `HARDCOVER_API_KEY` | | Hardcover API key (overrides UI setting) |
-| `GOOGLE_BOOKS_API_KEY` | | Optional. Google Books API key for accurate publish dates (overrides UI setting) |
-| `CONFIG_DIR` | `/config` | Config/database directory |
-| `BOOKS_DIR` | `/books` | Ebook library mount point |
+| `TZ` | `UTC` | Container timezone |
+| `HARDCOVER_API_KEY` | | Hardcover API key, also configurable in the UI |
+| `GOOGLE_BOOKS_API_KEY` | | Optional Google Books API key, also configurable in the UI |
+| `CONFIG_DIR` | `/config` | Config, SQLite database, cache, and app state directory |
+| `BOOKS_DIR` | `/books` | Mounted ebook library directory |
+| `DOWNLOADS_DIR` | `/downloads` | IRC download staging directory |
+| `IRC_STATE_DIR` | `/config/irc` | IRC worker state directory |
 | `PORT` | `8889` | Web UI port |
+
+## Settings Pages
+
+- **API Keys** — Hardcover and Google Books keys, plus the daily API usage table.
+- **Profiles** — Book visibility rules and access to the hidden-books review page.
+- **Metadata Refreshes** — Library scan, full refresh, scan schedule, last run summary, and reset actions.
+- **IRC** — IRC connection settings, auto-move toggle, connection status, and recent search/download activity.
+- **Logs** — In-app log viewer and log download endpoint.
+
+## Notable UI Workflows
+
+- **Hidden books review** — Visit `/books/hidden` to see all hidden titles, the rules that hid them, and manual unhide controls.
+- **Manual poster selection** — Use the poster picker from table view or the three-dot grid menu to compare cover candidates by source, resolution, and ratio fit.
+- **Manual portrait selection** — On author pages, use the hover menu on the portrait to choose a replacement author image.
+- **Single-book refresh** — Refresh one book from scratch to re-parse local metadata, clear imported metadata, and rerun external lookups and cover selection.
+- **Book download** — Download an owned local file directly from table view or from the grid action menu.
+- **IRC search** — Launch a book search from the book actions, inspect parsed results, and monitor download status in the dialog.
+
+## IRC Integration
+
+Booksarr supports one IRC profile at a time from **Settings > IRC**.
+
+- Sends `@search {query}` to the configured public channel.
+- Waits for a DCC-delivered `.zip` archive containing a single `.txt` result file.
+- Parses each downloadable result line and stores the exact command needed to request that file.
+- Receives the selected book via DCC into `/downloads`.
+- Optionally moves completed downloads into `/books` and triggers a library scan.
+
+For auto-move to work, your `/books` mount must be writable.
 
 ## Tech Stack
 
-- **Backend:** Python 3.12, FastAPI, SQLAlchemy 2.0 (async), SQLite
+- **Backend:** Python 3.12, FastAPI, SQLAlchemy 2.0 async, SQLite
 - **Frontend:** React 18, TypeScript, Vite, TanStack Query, Tailwind CSS
-- **Container:** Multi-stage Docker build (Node 20 + Python 3.12)
+- **Container:** Multi-stage Docker build
 
 ## Building from Source
 
 ```bash
 git clone https://github.com/apollolabsai/booksarr.git
 cd booksarr
-docker-compose up --build
+docker compose up --build -d
 ```
-
-## API
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/authors` | GET | List authors (sort, search) |
-| `/api/authors/:id` | GET | Author detail with books and series |
-| `/api/books` | GET | List books (sort, filter, search) |
-| `/api/books/:id` | GET | Book detail |
-| `/api/library/scan` | POST | Trigger library scan (`?force=true` for full refresh) |
-| `/api/library/status` | GET | Scan progress |
-| `/api/settings` | GET/PUT | App settings |
-| `/api/health` | GET | Health check |
