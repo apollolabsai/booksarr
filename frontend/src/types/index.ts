@@ -234,7 +234,27 @@ export function getImageUrl(cachedPath: string | null, fallbackUrl: string | nul
 }
 
 export function getBookCoverPresentation(coverAspectRatio: number | null) {
-  if (coverAspectRatio != null && (coverAspectRatio < 0.62 || coverAspectRatio > 0.72)) {
+  const targetRatio = 2 / 3;
+  const normalLowerBound = 0.62;
+  const normalUpperBound = 0.72;
+  const stretchLowerBound = targetRatio * 0.8;
+  const stretchUpperBound = targetRatio * 1.2;
+
+  if (
+    coverAspectRatio != null &&
+    (coverAspectRatio < normalLowerBound || coverAspectRatio > normalUpperBound) &&
+    coverAspectRatio >= stretchLowerBound &&
+    coverAspectRatio <= stretchUpperBound
+  ) {
+    return {
+      frameStyle: { aspectRatio: "2 / 3" as const },
+      frameClassName: "bg-slate-700",
+      imageClassName: "w-full h-full object-fill",
+      innerClassName: "",
+    };
+  }
+
+  if (coverAspectRatio != null && (coverAspectRatio < normalLowerBound || coverAspectRatio > normalUpperBound)) {
     return {
       frameStyle: { aspectRatio: "2 / 3" as const },
       frameClassName: "bg-black",
