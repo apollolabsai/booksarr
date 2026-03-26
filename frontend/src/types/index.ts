@@ -10,6 +10,20 @@ export interface Author {
   book_count_total: number;
 }
 
+export interface AuthorSearchCandidate {
+  hardcover_id: number;
+  name: string;
+  slug: string | null;
+  bio: string | null;
+  image_url: string | null;
+  books_count: number;
+}
+
+export interface AuthorSearchResponse {
+  query: string;
+  candidates: AuthorSearchCandidate[];
+}
+
 export interface AuthorPortraitOption {
   key: string;
   source: string;

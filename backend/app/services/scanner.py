@@ -285,6 +285,7 @@ def _clean_author_text(author: str) -> str:
         parts = [part.strip() for part in cleaned.split(",") if part.strip()]
         if len(parts) == 2:
             cleaned = f"{parts[1]} {parts[0]}"
+    cleaned = cleaned.rstrip(" ;,")
     return re.sub(r"\s+", " ", cleaned).strip()
 
 

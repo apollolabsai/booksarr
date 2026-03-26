@@ -50,6 +50,24 @@ class AuthorPortraitSelectionRequest(BaseModel):
     page_url: str | None = None
 
 
+class AuthorSearchCandidate(BaseModel):
+    hardcover_id: int
+    name: str
+    slug: str | None = None
+    bio: str | None = None
+    image_url: str | None = None
+    books_count: int = 0
+
+
+class AuthorSearchResponse(BaseModel):
+    query: str
+    candidates: list["AuthorSearchCandidate"]
+
+
+class AuthorAddRequest(BaseModel):
+    hardcover_id: int
+
+
 class BookInAuthor(BaseModel):
     id: int
     title: str

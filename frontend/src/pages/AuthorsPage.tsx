@@ -5,6 +5,7 @@ import AuthorTable from "../components/AuthorTable";
 import SortControls from "../components/SortControls";
 import SearchBar from "../components/SearchBar";
 import ViewToggle from "../components/ViewToggle";
+import AddAuthorDialog from "../components/AddAuthorDialog";
 
 const SORT_OPTIONS = [
   { value: "name", label: "Name A-Z" },
@@ -17,6 +18,7 @@ export default function AuthorsPage() {
   const [sort, setSort] = useState("name");
   const [search, setSearch] = useState("");
   const [view, setView] = useState<"grid" | "table">("grid");
+  const [addAuthorOpen, setAddAuthorOpen] = useState(false);
   const { data: authors, isLoading } = useAuthors(sort, search);
 
   const handleSearch = useCallback((v: string) => setSearch(v), []);
@@ -34,6 +36,13 @@ export default function AuthorsPage() {
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-2xl font-bold">Authors</h2>
         <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setAddAuthorOpen(true)}
+            className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500"
+          >
+            Add Author
+          </button>
           <SearchBar value={search} onChange={handleSearch} placeholder="Search authors..." />
           <SortControls options={SORT_OPTIONS} value={sort} onChange={setSort} />
           <ViewToggle view={view} onChange={setView} />
@@ -59,6 +68,7 @@ export default function AuthorsPage() {
           ))}
         </div>
       )}
+      <AddAuthorDialog open={addAuthorOpen} onClose={() => setAddAuthorOpen(false)} />
     </div>
   );
 }

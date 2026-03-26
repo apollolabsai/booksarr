@@ -1,6 +1,8 @@
 import json
 import logging
+import re
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 
 import httpx
 
@@ -151,6 +153,103 @@ class HardcoverClient:
         logger.info("Found author: %s (HC ID: %d, %d books)", result.name, result.id, result.books_count)
         return result
 
+    async def get_author(self, author_id: int) -> HCAuthor | None:
+        query = """
+        query($id: Int!) {
+          authors(where: {id: {_eq: $id}}, limit: 1) {
+            id name slug bio cached_image books_count users_count
+          }
+        }
+        """
+        logger.info("Fetching Hardcover author HC ID: %d", author_id)
+        data = await self._query(query, {"id": author_id})
+        authors = data.get("authors", [])
+        if not authors:
+            return None
+
+        row = authors[0]
+        image_url = ""
+        cached_image = row.get("cached_image")
+        if cached_image and isinstance(cached_image, dict):
+            image_url = cached_image.get("url", "")
+
+        return HCAuthor(
+            id=row["id"],
+            name=row["name"],
+            slug=row.get("slug", ""),
+            bio=row.get("bio", "") or "",
+            image_url=image_url,
+            books_count=row.get("books_count", 0),
+        )
+
+    async def search_author_candidates(self, name: str, limit: int = 10) -> list[HCAuthor]:
+        normalized_query = _normalize_author_query(name)
+        if not normalized_query:
+            return []
+
+        query = """
+        query($query: String!, $per_page: Int!) {
+          search(query: $query, query_type: "author", per_page: $per_page, page: 1) {
+            results
+          }
+        }
+        """
+        logger.info("Searching Hardcover author candidates for: %s", name)
+        data = await self._query(query, {"query": name.strip(), "per_page": limit * 3})
+        results = data.get("search", {}).get("results", {}) or {}
+        hits = results.get("hits", []) or []
+        if not hits:
+            logger.warning("No Hardcover author candidates found for: %s", name)
+            return []
+
+        candidates: list[HCAuthor] = []
+        for hit in hits:
+            document = hit.get("document", {}) if isinstance(hit, dict) else {}
+            try:
+                candidate_id = int(document.get("id"))
+            except (TypeError, ValueError):
+                continue
+            name_value = str(document.get("name") or "").strip()
+            if not name_value:
+                continue
+            image = document.get("image") if isinstance(document.get("image"), dict) else {}
+            candidates.append(HCAuthor(
+                id=candidate_id,
+                name=name_value,
+                slug=str(document.get("slug") or "").strip(),
+                bio="",
+                image_url=str(image.get("url") or "").strip(),
+                books_count=int(document.get("books_count") or 0),
+            ))
+
+        if not candidates:
+            logger.warning("Hardcover author search returned hits but no usable author documents for: %s", name)
+            return []
+
+        scored: list[tuple[tuple[float, int], HCAuthor]] = []
+        query_tokens = set(normalized_query.split())
+        for candidate in candidates:
+            normalized_name = _normalize_author_query(candidate.name)
+            exact = 1.0 if normalized_name == normalized_query else 0.0
+            token_overlap = (
+                len(query_tokens & set(normalized_name.split())) / max(len(query_tokens), 1)
+                if normalized_name else 0.0
+            )
+            similarity = SequenceMatcher(None, normalized_query, normalized_name).ratio()
+            prefix_bonus = 0.5 if normalized_name.startswith(normalized_query) else 0.0
+            score = exact * 10.0 + token_overlap * 2.0 + similarity + prefix_bonus
+            scored.append(((score, candidate.books_count), candidate))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        results = [candidate for _, candidate in scored[:limit]]
+        logger.info(
+            "Found %d Hardcover author candidate(s) for %s: %s",
+            len(results),
+            name,
+            [candidate.name for candidate in results],
+        )
+        return results
+
     async def get_author_books(self, author_id: int) -> list[HCBook]:
         query = """
         query($author_id: Int!) {
@@ -297,3 +396,10 @@ class HardcoverClient:
             if book_id:
                 return int(book_id)
         return None
+
+
+def _normalize_author_query(value: str) -> str:
+    lowered = value.lower().strip()
+    lowered = re.sub(r"[^\w\s]", " ", lowered)
+    lowered = re.sub(r"\s+", " ", lowered).strip()
+    return lowered
