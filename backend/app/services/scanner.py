@@ -63,7 +63,7 @@ async def scan_library(db: AsyncSession, library_path: Path) -> ScanResult:
         if not author_dir.is_dir() or author_dir.name.startswith("."):
             continue
 
-        author_name = author_dir.name
+        author_name = _clean_author_text(author_dir.name) or author_dir.name
 
         # Support standalone ebooks directly inside the author folder.
         for ebook_file in sorted(author_dir.iterdir()):
@@ -232,7 +232,7 @@ def _has_useful_metadata(meta: OPFMetadata | None) -> bool:
 
 def _normalize_metadata(meta: OPFMetadata, author_name: str, book_dir_name: str, ebook_file: Path) -> OPFMetadata:
     title = _clean_title_text(meta.title or "")
-    author = (meta.author or "").strip() or author_name
+    author = _clean_author_text((meta.author or "").strip()) or author_name
     if not title or title.lower() == author_name.strip().lower():
         fallback = _filename_fallback_metadata(ebook_file, author_name, book_dir_name)
         title = fallback.title
@@ -277,6 +277,15 @@ def _clean_title_text(title: str) -> str:
         cleaned = stripped
 
     return cleaned
+
+
+def _clean_author_text(author: str) -> str:
+    cleaned = author.strip()
+    if "," in cleaned:
+        parts = [part.strip() for part in cleaned.split(",") if part.strip()]
+        if len(parts) == 2:
+            cleaned = f"{parts[1]} {parts[0]}"
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 
 def _find_local_cover(ebook_file: Path, standalone_in_author_root: bool) -> str | None:

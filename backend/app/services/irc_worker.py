@@ -24,6 +24,7 @@ from backend.app.services.irc_parser import (
     parse_search_results_archive,
     result_archive_matches_query,
 )
+from backend.app.services.matcher import normalize_title
 from backend.app.utils.opf_parser import parse_epub_opf
 
 logger = logging.getLogger("booksarr.irc")
@@ -1085,9 +1086,9 @@ async def _move_download_into_library(download_path: Path, job_id: int) -> Path:
 
 
 async def _build_library_target_path(download_path: Path, job_id: int) -> Path:
-    author_name, book_name = await _resolve_import_names(download_path, job_id)
-    author_dir_name = _sanitize_library_component(author_name or "IRC Imports")
-    book_dir_name = _sanitize_library_component(book_name or download_path.stem)
+    author_name, book_name, linked_file_path = await _resolve_import_names(download_path, job_id)
+    author_dir_name = _resolve_existing_author_dir_name(author_name, linked_file_path)
+    book_dir_name = _resolve_existing_book_dir_name(author_dir_name, book_name, linked_file_path)
 
     target_dir = BOOKS_DIR / author_dir_name / book_dir_name
     logger.info(
@@ -1100,9 +1101,10 @@ async def _build_library_target_path(download_path: Path, job_id: int) -> Path:
     return target_dir / download_path.name
 
 
-async def _resolve_import_names(download_path: Path, job_id: int) -> tuple[str, str]:
+async def _resolve_import_names(download_path: Path, job_id: int) -> tuple[str, str, str | None]:
     author_name: str | None = None
     book_name: str | None = None
+    linked_file_path: str | None = None
 
     async with async_session() as db:
         result = await db.execute(
@@ -1114,17 +1116,20 @@ async def _resolve_import_names(download_path: Path, job_id: int) -> tuple[str, 
 
         if job and job.book_id:
             book_result = await db.execute(
-                select(Book).options(selectinload(Book.author)).where(Book.id == job.book_id)
+                select(Book).options(selectinload(Book.author), selectinload(Book.files)).where(Book.id == job.book_id)
             )
             linked_book = book_result.scalar_one_or_none()
             if linked_book:
                 author_name = linked_book.author.name if linked_book.author else None
                 book_name = linked_book.title
+                if linked_book.files:
+                    linked_file_path = linked_book.files[0].file_path
                 logger.info(
-                    "IRC import destination using linked library book: job_id=%s author=%r title=%r",
+                    "IRC import destination using linked library book: job_id=%s author=%r title=%r linked_file=%r",
                     job_id,
                     author_name,
                     book_name,
+                    linked_file_path,
                 )
 
         if job and job.search_result:
@@ -1162,7 +1167,7 @@ async def _resolve_import_names(download_path: Path, job_id: int) -> tuple[str, 
             download_path.name,
         )
 
-    return author_name or "IRC Imports", book_name or download_path.stem
+    return author_name or "IRC Imports", book_name or download_path.stem, linked_file_path
 
 
 def _guess_author_title_from_filename(filename: str) -> tuple[str | None, str | None]:
@@ -1184,6 +1189,51 @@ def _sanitize_library_component(value: str) -> str:
     sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", value).strip()
     sanitized = re.sub(r"\s+", " ", sanitized).rstrip(".")
     return sanitized or "Unknown"
+
+
+def _resolve_existing_author_dir_name(author_name: str | None, linked_file_path: str | None) -> str:
+    if linked_file_path:
+        parts = Path(linked_file_path).parts
+        if parts:
+            return parts[0]
+
+    normalized_author = _normalize_author_key(author_name or "")
+    if normalized_author and BOOKS_DIR.exists():
+        for author_dir in sorted(BOOKS_DIR.iterdir()):
+            if not author_dir.is_dir() or author_dir.name.startswith("."):
+                continue
+            if _normalize_author_key(author_dir.name) == normalized_author:
+                return author_dir.name
+
+    return _sanitize_library_component(author_name or "IRC Imports")
+
+
+def _resolve_existing_book_dir_name(author_dir_name: str, book_name: str | None, linked_file_path: str | None) -> str:
+    if linked_file_path:
+        parts = Path(linked_file_path).parts
+        if len(parts) >= 3:
+            return parts[1]
+
+    normalized_book = normalize_title(book_name or "")
+    author_dir = BOOKS_DIR / author_dir_name
+    if normalized_book and author_dir.exists():
+        for book_dir in sorted(author_dir.iterdir()):
+            if not book_dir.is_dir() or book_dir.name.startswith("."):
+                continue
+            if normalize_title(book_dir.name) == normalized_book:
+                return book_dir.name
+
+    return _sanitize_library_component(book_name or "Unknown")
+
+
+def _normalize_author_key(author_name: str) -> str:
+    cleaned = author_name.strip()
+    if "," in cleaned:
+        parts = [part.strip() for part in cleaned.split(",") if part.strip()]
+        if len(parts) == 2:
+            cleaned = f"{parts[1]} {parts[0]}"
+    cleaned = re.sub(r"\s+", " ", cleaned).strip().lower()
+    return cleaned
 
 
 async def _trigger_library_scan_after_irc_import(moved_path: Path):
