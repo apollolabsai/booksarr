@@ -25,6 +25,7 @@ export default function IrcSearchDialog({
   const [queryText, setQueryText] = useState("");
   const [jobId, setJobId] = useState<number | null>(null);
   const [downloadJobId, setDownloadJobId] = useState<number | null>(null);
+  const [activeResultId, setActiveResultId] = useState<number | null>(null);
   const { data: job } = useIrcSearchJob(jobId, open);
   const { data: results, isLoading: resultsLoading } = useIrcSearchResults(jobId, open);
   const { data: downloadJob } = useIrcDownloadJob(downloadJobId, open);
@@ -35,6 +36,7 @@ export default function IrcSearchDialog({
     setQueryText(defaultQuery);
     setJobId(null);
     setDownloadJobId(null);
+    setActiveResultId(null);
   }, [authorName, title, open]);
 
   if (!open || !bookId) return null;
@@ -111,36 +113,6 @@ export default function IrcSearchDialog({
             </div>
           )}
 
-          {downloadJob && (
-            <div className="mt-5 rounded-xl border border-slate-700 bg-slate-800 p-4">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <div className="text-sm font-medium text-slate-100">Latest Download State</div>
-                  <div className="mt-1 text-sm text-slate-300">
-                    Job #{downloadJob.id}: {downloadJob.status}
-                  </div>
-                </div>
-                <div className="text-right text-xs text-slate-500">
-                  <div>{downloadJob.created_at ? new Date(downloadJob.created_at).toLocaleString() : "Queued just now"}</div>
-                  <div>{downloadJob.dcc_filename || "Waiting for bot response"}</div>
-                </div>
-              </div>
-              {downloadJob.saved_path && (
-                <div className="mt-3 text-xs text-slate-400">
-                  Downloaded to: <span className="text-slate-300">{downloadJob.saved_path}</span>
-                </div>
-              )}
-              {downloadJob.moved_to_library_path && (
-                <div className="mt-2 text-xs text-emerald-300">
-                  Moved to library: <span className="text-emerald-200">{downloadJob.moved_to_library_path}</span>
-                </div>
-              )}
-              {downloadJob.error_message && (
-                <div className="mt-3 text-sm text-rose-300">{downloadJob.error_message}</div>
-              )}
-            </div>
-          )}
-
           {jobId != null && (
             <div className="mt-5 rounded-xl border border-slate-700 bg-slate-800 p-4">
               <div className="mb-3 flex items-center justify-between">
@@ -155,41 +127,62 @@ export default function IrcSearchDialog({
                   No parsed results yet. Once a DCC result archive arrives and is parsed, the lines will appear here.
                 </div>
               ) : (
-                <div className="space-y-3">
+                <div className="divide-y divide-slate-700 overflow-hidden rounded-lg border border-slate-700 bg-slate-900/40">
                   {results?.map((result) => (
-                    <div key={result.id} className="rounded-lg border border-slate-700 bg-slate-900/40 p-3">
-                      <div className="flex items-start justify-between gap-4">
-                        <div>
-                          <div className="text-sm font-medium text-slate-100">{result.display_name}</div>
-                          <div className="mt-1 text-xs text-slate-500">{result.raw_line}</div>
+                    <div key={result.id} className="px-3 py-2.5">
+                      <div className="flex items-center gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm text-slate-100">
+                            {result.download_command}
+                          </div>
                         </div>
-                        <div className="text-right text-xs text-slate-400">
-                          <div>{result.bot_name || "Unknown bot"}</div>
-                          <div>{result.file_format || "Unknown format"}</div>
-                          <div>{result.file_size_text || "Unknown size"}</div>
+                        <div className="shrink-0 text-xs text-slate-400">
+                          {result.file_size_text || "Unknown size"}
                         </div>
-                      </div>
-                      <div className="mt-2 rounded-md bg-slate-950/50 px-2.5 py-2 font-mono text-xs text-slate-300">
-                        {result.download_command}
-                      </div>
-                      <div className="mt-3 flex items-center justify-between gap-3">
-                        {result.selected ? (
-                          <div className="text-xs text-emerald-300">Selected for download</div>
-                        ) : (
-                          <div className="text-xs text-slate-500">Ready to queue as a download job</div>
-                        )}
                         <button
                           type="button"
                           onClick={async () => {
+                            setActiveResultId(result.id);
                             const job = await createDownloadJob.mutateAsync({ search_result_id: result.id });
                             setDownloadJobId(job.id);
                           }}
                           disabled={createDownloadJob.isPending}
-                          className="rounded-md border border-slate-600 bg-slate-700 px-3 py-1.5 text-xs font-medium text-slate-100 transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+                          className="shrink-0 rounded-md border border-slate-600 bg-slate-700 px-3 py-1.5 text-xs font-medium text-slate-100 transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                          {createDownloadJob.isPending ? "Queueing..." : "Download"}
+                          {createDownloadJob.isPending && activeResultId === result.id ? "Queueing..." : "Download"}
                         </button>
                       </div>
+                      {(activeResultId === result.id || result.selected || downloadJob?.search_result_id === result.id) && (
+                        <div className="mt-2 rounded-md bg-slate-950/60 px-3 py-2 text-xs">
+                          <div className="text-emerald-300">
+                            {downloadJob?.search_result_id === result.id
+                              ? `Selected for download. Status: ${formatDownloadStatus(downloadJob.status)}`
+                              : "Selected for download. Waiting to queue download job..."}
+                          </div>
+                          {downloadJob?.search_result_id === result.id && (
+                            <>
+                              {downloadJob.dcc_filename && (
+                                <div className="mt-1 text-slate-400">
+                                  File: <span className="text-slate-300">{downloadJob.dcc_filename}</span>
+                                </div>
+                              )}
+                              {downloadJob.saved_path && (
+                                <div className="mt-1 text-slate-400">
+                                  Downloaded to: <span className="text-slate-300">{downloadJob.saved_path}</span>
+                                </div>
+                              )}
+                              {downloadJob.moved_to_library_path && (
+                                <div className="mt-1 text-emerald-300">
+                                  Imported to: <span className="text-emerald-200">{downloadJob.moved_to_library_path}</span>
+                                </div>
+                              )}
+                              {downloadJob.error_message && (
+                                <div className="mt-1 text-rose-300">{downloadJob.error_message}</div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -210,4 +203,27 @@ export default function IrcSearchDialog({
       </div>
     </div>
   );
+}
+
+function formatDownloadStatus(status: string): string {
+  switch (status) {
+    case "queued":
+      return "queued";
+    case "sent":
+      return "request sent";
+    case "waiting_dcc":
+      return "waiting on download";
+    case "downloading":
+      return "downloading";
+    case "downloaded":
+      return "downloaded";
+    case "moved":
+      return "imported";
+    case "failed":
+      return "failed";
+    case "cancelled":
+      return "cancelled";
+    default:
+      return status;
+  }
 }
