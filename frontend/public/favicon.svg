@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="bg" x1="10" y1="8" x2="54" y2="56" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0f172a" />
+      <stop offset="1" stop-color="#111827" />
+    </linearGradient>
+    <linearGradient id="bookA" x1="16" y1="14" x2="46" y2="48" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#34d399" />
+      <stop offset="1" stop-color="#059669" />
+    </linearGradient>
+    <linearGradient id="bookB" x1="14" y1="18" x2="50" y2="46" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f59e0b" />
+      <stop offset="1" stop-color="#ea580c" />
+    </linearGradient>
+    <linearGradient id="bookC" x1="18" y1="10" x2="52" y2="42" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#60a5fa" />
+      <stop offset="1" stop-color="#2563eb" />
+    </linearGradient>
+  </defs>
+
+  <rect width="64" height="64" rx="16" fill="url(#bg)" />
+
+  <g transform="translate(4 4) scale(1.12)">
+    <g transform="rotate(-10 18 31)">
+      <rect x="4" y="18" width="30" height="22" rx="5" fill="url(#bookB)" />
+      <rect x="8.5" y="22.5" width="3.5" height="13" rx="1.75" fill="#ffedd5" opacity="0.95" />
+      <rect x="15.5" y="23.5" width="12.5" height="2.7" rx="1.35" fill="#ffedd5" opacity="0.82" />
+      <rect x="15.5" y="29" width="9.5" height="2.7" rx="1.35" fill="#ffedd5" opacity="0.65" />
+    </g>
+
+    <g transform="translate(7 1) rotate(8 18 26)">
+      <rect x="8" y="10" width="30" height="22" rx="5" fill="url(#bookC)" />
+      <rect x="12.5" y="14.5" width="3.5" height="13" rx="1.75" fill="#dbeafe" opacity="0.96" />
+      <rect x="19.5" y="15.5" width="12.5" height="2.7" rx="1.35" fill="#dbeafe" opacity="0.84" />
+      <rect x="19.5" y="21" width="10" height="2.7" rx="1.35" fill="#dbeafe" opacity="0.66" />
+    </g>
+
+    <g transform="translate(2 13)">
+      <rect x="8" y="10" width="32" height="23" rx="5" fill="url(#bookA)" />
+      <rect x="12.5" y="14.5" width="3.5" height="14" rx="1.75" fill="#ecfdf5" opacity="0.96" />
+      <rect x="19.5" y="15.5" width="13" height="2.7" rx="1.35" fill="#ecfdf5" opacity="0.86" />
+      <rect x="19.5" y="21" width="10.5" height="2.7" rx="1.35" fill="#ecfdf5" opacity="0.68" />
+    </g>
+  </g>
+</svg>

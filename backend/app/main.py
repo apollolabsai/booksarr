@@ -98,8 +98,26 @@ if frontend_dist.exists():
     # Serve static assets (JS, CSS, etc.)
     app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="assets")
 
+    @app.get("/favicon.svg")
+    async def serve_favicon_svg():
+        favicon_path = frontend_dist / "favicon.svg"
+        if not favicon_path.exists():
+            raise HTTPException(status_code=404, detail="Favicon not found")
+        return FileResponse(str(favicon_path), media_type="image/svg+xml")
+
+    @app.get("/favicon.ico")
+    async def serve_favicon_ico():
+        # Modern browsers can consume SVG favicons; serve the same artwork for /favicon.ico
+        favicon_path = frontend_dist / "favicon.svg"
+        if not favicon_path.exists():
+            raise HTTPException(status_code=404, detail="Favicon not found")
+        return FileResponse(str(favicon_path), media_type="image/svg+xml")
+
     # Catch-all for SPA client-side routing
     @app.get("/{full_path:path}")
     async def serve_spa(request: Request, full_path: str):
+        file_path = frontend_dist / full_path
+        if full_path and file_path.is_file():
+            return FileResponse(str(file_path))
         # Serve index.html for all non-API, non-asset routes
         return FileResponse(str(frontend_dist / "index.html"))
