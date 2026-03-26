@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -143,7 +143,15 @@ async def list_hidden_books(
     ).order_by(Book.title.asc())
 
     if search:
-        query = query.where(Book.title.ilike(f"%{search}%"))
+        query = (
+            query.join(Author)
+            .where(
+                or_(
+                    Book.title.ilike(f"%{search}%"),
+                    Author.name.ilike(f"%{search}%"),
+                )
+            )
+        )
 
     result = await db.execute(query)
     visibility_settings = await get_book_visibility_settings(db)

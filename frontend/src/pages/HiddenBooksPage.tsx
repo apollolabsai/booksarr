@@ -77,7 +77,7 @@ export default function HiddenBooksPage() {
       </div>
 
       <div className="mb-4 max-w-sm">
-        <SearchBar value={search} onChange={handleSearch} placeholder="Search hidden books..." />
+        <SearchBar value={search} onChange={handleSearch} placeholder="Search hidden books or authors..." />
       </div>
 
       {!sortedBooks || sortedBooks.length === 0 ? (
