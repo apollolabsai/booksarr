@@ -14,7 +14,7 @@ from backend.app.schemas.author import (
     AuthorSummary, AuthorDetail, BookInAuthor, SeriesPositionInfo,
     SeriesInAuthor, SeriesBookEntry,
     AuthorPortraitOption, AuthorPortraitOptionsResponse, AuthorPortraitSelectionRequest,
-    AuthorSearchCandidate, AuthorSearchResponse, AuthorAddRequest,
+    AuthorSearchCandidate, AuthorSearchResponse, AuthorAddRequest, LocalBookFile,
 )
 from backend.app.services.hardcover import HardcoverClient, HardcoverLookupError
 from backend.app.utils.book_visibility import get_book_visibility_settings, is_book_visible
@@ -347,6 +347,16 @@ async def get_author(author_id: int, db: AsyncSession = Depends(get_db)):
             pages=book.pages,
             is_owned=book.is_owned,
             owned_copy_count=len(book.files) if book.is_owned else 0,
+            local_files=[
+                LocalBookFile(
+                    id=book_file.id,
+                    file_path=book_file.file_path,
+                    file_name=book_file.file_name,
+                    file_size=book_file.file_size,
+                    file_format=book_file.file_format,
+                )
+                for book_file in book.files
+            ],
             series_info=series_info,
         ))
 

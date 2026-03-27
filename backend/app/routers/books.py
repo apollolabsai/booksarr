@@ -12,6 +12,7 @@ from backend.app.schemas.book import (
     BookDetail,
     HiddenBookSummary,
     HiddenCategoryTag,
+    LocalBookFile,
     SeriesPositionInfo,
     BookCoverOptionsResponse,
     CoverOption,
@@ -76,6 +77,16 @@ def _book_summary(book: Book) -> BookSummary:
         pages=book.pages,
         is_owned=book.is_owned,
         owned_copy_count=owned_copy_count,
+        local_files=[
+            LocalBookFile(
+                id=book_file.id,
+                file_path=book_file.file_path,
+                file_name=book_file.file_name,
+                file_size=book_file.file_size,
+                file_format=book_file.file_format,
+            )
+            for book_file in book.files
+        ],
         series_info=[
             SeriesPositionInfo(
                 series_id=bs.series.id,
@@ -241,6 +252,16 @@ async def get_book(book_id: int, db: AsyncSession = Depends(get_db)):
         pages=book.pages,
         is_owned=book.is_owned,
         owned_copy_count=len(book.files) if book.is_owned else 0,
+        local_files=[
+            LocalBookFile(
+                id=book_file.id,
+                file_path=book_file.file_path,
+                file_name=book_file.file_name,
+                file_size=book_file.file_size,
+                file_format=book_file.file_format,
+            )
+            for book_file in book.files
+        ],
         series_info=series_info,
     )
 

@@ -53,6 +53,14 @@ export interface SeriesPositionInfo {
   position: number | null;
 }
 
+export interface LocalBookFile {
+  id: number;
+  file_path: string;
+  file_name: string;
+  file_size: number | null;
+  file_format: string | null;
+}
+
 export interface BookInAuthor {
   id: number;
   title: string;
@@ -83,6 +91,7 @@ export interface BookInAuthor {
   pages: number | null;
   is_owned: boolean;
   owned_copy_count: number;
+  local_files: LocalBookFile[];
   series_info: SeriesPositionInfo[];
 }
 
@@ -137,6 +146,7 @@ export interface Book {
   pages: number | null;
   is_owned: boolean;
   owned_copy_count: number;
+  local_files: LocalBookFile[];
   series_info: SeriesPositionInfo[];
 }
 

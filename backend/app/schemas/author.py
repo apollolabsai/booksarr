@@ -68,6 +68,14 @@ class AuthorAddRequest(BaseModel):
     hardcover_id: int
 
 
+class LocalBookFile(BaseModel):
+    id: int
+    file_path: str
+    file_name: str
+    file_size: int | None
+    file_format: str | None
+
+
 class BookInAuthor(BaseModel):
     id: int
     title: str
@@ -98,6 +106,7 @@ class BookInAuthor(BaseModel):
     pages: int | None
     is_owned: bool
     owned_copy_count: int
+    local_files: list["LocalBookFile"]
     series_info: list["SeriesPositionInfo"]
 
     class Config:
