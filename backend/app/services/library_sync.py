@@ -222,6 +222,8 @@ def _get_cached_cover_source(cached_path: str | None) -> str | None:
         return "local"
     if filename.startswith("hc_") or filename.startswith("hardcover_"):
         return "hardcover"
+    if filename.startswith("google_image_"):
+        return "google_image"
     if filename.startswith("google_"):
         return "google"
     if filename.startswith("openlibrary_"):
@@ -273,6 +275,7 @@ def _cover_source_label(source: str) -> str:
         "hardcover": "Hardcover",
         "google": "Google Books",
         "openlibrary": "Open Library",
+        "google_image": "Google Images",
     }
     return labels.get(source, source.title())
 
@@ -385,7 +388,7 @@ async def _apply_cover_source(book: Book, source: str, *, override_url: str | No
 
 async def apply_manual_cover_selection(book: Book) -> bool:
     source = (book.manual_cover_source or "").strip().lower()
-    if source not in {"local", "hardcover", "google", "openlibrary"}:
+    if source not in {"local", "hardcover", "google", "openlibrary", "google_image"}:
         return False
 
     current_source = _get_cached_cover_source(book.cover_image_cached_path)
@@ -396,14 +399,24 @@ async def apply_manual_cover_selection(book: Book) -> bool:
     return await _apply_cover_source(book, source, override_url=override_url)
 
 
-async def set_book_cover_selection(book: Book, source: str) -> bool:
+async def set_book_cover_selection(
+    book: Book, source: str, *, url: str | None = None,
+) -> bool:
     normalized_source = source.strip().lower()
-    if normalized_source not in {"local", "hardcover", "google", "openlibrary"}:
+    valid_sources = {"local", "hardcover", "google", "openlibrary", "google_image"}
+    if normalized_source not in valid_sources:
         return False
 
-    override_url = None if normalized_source == "local" else _get_book_source_cover_url(book, normalized_source)
-    if normalized_source != "local" and not override_url:
-        return False
+    if normalized_source == "google_image":
+        if not url:
+            return False
+        override_url = url
+    elif normalized_source == "local":
+        override_url = None
+    else:
+        override_url = _get_book_source_cover_url(book, normalized_source)
+        if not override_url:
+            return False
 
     applied = await _apply_cover_source(book, normalized_source, override_url=override_url)
     if not applied:

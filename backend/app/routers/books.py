@@ -17,6 +17,8 @@ from backend.app.schemas.book import (
     BookCoverOptionsResponse,
     CoverOption,
     BookCoverSelectionRequest,
+    BookCoverSearchResponse,
+    CoverSearchResult,
     BookVisibilityRequest,
 )
 from backend.app.utils.isbn import has_any_valid_isbn
@@ -302,11 +304,45 @@ async def set_book_cover_selection_route(
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
 
-    if not await set_book_cover_selection(book, body.source):
+    if not await set_book_cover_selection(book, body.source, url=body.url):
         raise HTTPException(status_code=400, detail="Cover source is not available for this book")
 
     await db.commit()
     return {"status": "ok", "message": "Cover updated"}
+
+
+@router.get("/{book_id}/cover-search", response_model=BookCoverSearchResponse)
+async def search_book_covers_route(book_id: int, db: AsyncSession = Depends(get_db)):
+    from backend.app.services.google_image_search import search_book_covers
+
+    result = await db.execute(
+        select(Book)
+        .where(Book.id == book_id)
+        .options(selectinload(Book.author))
+    )
+    book = result.scalar_one_or_none()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    author_name = book.author.name if book.author else ""
+    query = f"{book.title} {author_name}".strip()
+    results = await search_book_covers(book.title, author_name)
+
+    return BookCoverSearchResponse(
+        book_id=book.id,
+        query=query,
+        results=[
+            CoverSearchResult(
+                url=r.url,
+                thumbnail_url=r.thumbnail_url,
+                width=r.width,
+                height=r.height,
+                title=r.title,
+                source_url=r.source_url,
+            )
+            for r in results
+        ],
+    )
 
 
 @router.post("/{book_id}/visibility")

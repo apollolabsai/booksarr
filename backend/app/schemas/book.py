@@ -100,7 +100,23 @@ class BookCoverOptionsResponse(BaseModel):
 
 class BookCoverSelectionRequest(BaseModel):
     source: str
+    url: str | None = None
 
 
 class BookVisibilityRequest(BaseModel):
     action: str
+
+
+class CoverSearchResult(BaseModel):
+    url: str
+    thumbnail_url: str
+    width: int | None
+    height: int | None
+    title: str
+    source_url: str
+
+
+class BookCoverSearchResponse(BaseModel):
+    book_id: int
+    query: str
+    results: list[CoverSearchResult]

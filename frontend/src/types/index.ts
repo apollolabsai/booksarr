@@ -180,6 +180,21 @@ export interface BookCoverOptionsResponse {
   options: CoverOption[];
 }
 
+export interface CoverSearchResult {
+  url: string;
+  thumbnail_url: string;
+  width: number | null;
+  height: number | null;
+  title: string;
+  source_url: string;
+}
+
+export interface BookCoverSearchResponse {
+  book_id: number;
+  query: string;
+  results: CoverSearchResult[];
+}
+
 export interface ScanStatus {
   status: "idle" | "scanning";
   progress: number;

@@ -1,6 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchApi } from "./client";
-import type { Book, HiddenBook, BookCoverOptionsResponse } from "../types";
+import type { Book, HiddenBook, BookCoverOptionsResponse, BookCoverSearchResponse } from "../types";
 
 export function useBooks(sort: string = "title", owned?: boolean, search: string = "") {
   return useQuery({
@@ -48,13 +48,21 @@ export function useBookCoverOptions(bookId: number | null, enabled: boolean) {
   });
 }
 
+export function useBookCoverSearch(bookId: number | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ["bookCoverSearch", bookId],
+    queryFn: () => fetchApi<BookCoverSearchResponse>(`/books/${bookId}/cover-search`),
+    enabled: enabled && !!bookId,
+  });
+}
+
 export function useSetBookCover() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ bookId, source }: { bookId: number; source: string }) =>
+    mutationFn: ({ bookId, source, url }: { bookId: number; source: string; url?: string }) =>
       fetchApi(`/books/${bookId}/cover-selection`, {
         method: "POST",
-        body: JSON.stringify({ source }),
+        body: JSON.stringify({ source, url }),
       }),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ["books"] });
