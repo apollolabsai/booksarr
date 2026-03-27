@@ -100,6 +100,10 @@ class HardcoverClient:
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
             logger.error("Hardcover API HTTP error %d for %s", e.response.status_code, op_name)
+            if e.response.status_code == 429:
+                raise HardcoverLookupError("throttled", "HTTP 429") from e
+            if e.response.status_code == 401:
+                raise HardcoverLookupError("unauthorized", "HTTP 401") from e
             raise HardcoverLookupError("http_error", f"HTTP {e.response.status_code}") from e
         except httpx.RequestError as e:
             logger.error("Hardcover API request failed for %s: %s", op_name, e)

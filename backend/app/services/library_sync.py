@@ -853,6 +853,36 @@ async def get_google_api_key(db: AsyncSession) -> str:
     return setting.value if setting else ""
 
 
+def _author_needs_hardcover_lookup(author: Author) -> bool:
+    author_has_manual_image = bool(author.manual_image_source and author.manual_image_url)
+    author_needs_cached_image = not author.image_cached_path
+    return (
+        not author.hardcover_id
+        or (
+            author.hardcover_id
+            and author_needs_cached_image
+            and not author.image_url
+            and not author_has_manual_image
+        )
+    )
+
+
+def _author_needs_hardcover_books_sync(
+    author: Author,
+    force: bool,
+    authors_with_new_files: set[str],
+) -> bool:
+    if not author.hardcover_id:
+        return False
+    if force:
+        return True
+    if not author.last_synced_at:
+        return True
+    if author.name in authors_with_new_files:
+        return True
+    return False
+
+
 async def run_full_sync(force: bool = False):
     """Run a library sync. Incremental by default; force=True refreshes all authors."""
     if scan_status.status == "scanning":
@@ -936,6 +966,7 @@ async def run_full_sync(force: bool = False):
             ol_client = OpenLibraryClient()
             wikimedia_client = WikimediaClient()
             try:
+                hardcover_throttled = False
                 # Phase 2: Match new authors to Hardcover
                 scan_status.message = "Matching authors to Hardcover..."
                 result = await db.execute(select(Author))
@@ -947,6 +978,10 @@ async def run_full_sync(force: bool = False):
                 for i, author in enumerate(authors):
                     author_has_manual_image = bool(author.manual_image_source and author.manual_image_url)
                     author_needs_cached_image = not author.image_cached_path
+                    if hardcover_throttled:
+                        progress = 20.0 + (30.0 * (i + 1) / max(total_authors, 1))
+                        scan_status.progress = progress
+                        continue
                     if not author.hardcover_id:
                         new_author_count += 1
                         scan_status.message = f"Looking up author: {author.name}"
@@ -954,6 +989,22 @@ async def run_full_sync(force: bool = False):
                             hc_author = await client.search_author(author.name)
                         except HardcoverLookupError as e:
                             summary.hardcover.record_failure(e.reason)
+                            if e.reason == "throttled":
+                                hardcover_throttled = True
+                                remaining = sum(
+                                    1 for remaining_author in authors[i + 1:]
+                                    if _author_needs_hardcover_lookup(remaining_author)
+                                )
+                                if remaining:
+                                    summary.hardcover.record_deferred("throttled", remaining)
+                                logger.warning(
+                                    "Hardcover throttled during author matching at %r; "
+                                    "deferring %d remaining author lookup(s) for this run",
+                                    author.name,
+                                    remaining,
+                                )
+                                scan_status.message = "Hardcover throttled; deferring remaining Hardcover author lookups..."
+                                continue
                             raise
                         if hc_author:
                             summary.hardcover.record_match()
@@ -969,6 +1020,22 @@ async def run_full_sync(force: bool = False):
                             hc_author = await client.search_author(author.name)
                         except HardcoverLookupError as e:
                             summary.hardcover.record_failure(e.reason)
+                            if e.reason == "throttled":
+                                hardcover_throttled = True
+                                remaining = sum(
+                                    1 for remaining_author in authors[i + 1:]
+                                    if _author_needs_hardcover_lookup(remaining_author)
+                                )
+                                if remaining:
+                                    summary.hardcover.record_deferred("throttled", remaining)
+                                logger.warning(
+                                    "Hardcover throttled while refreshing author images at %r; "
+                                    "deferring %d remaining author lookup(s) for this run",
+                                    author.name,
+                                    remaining,
+                                )
+                                scan_status.message = "Hardcover throttled; deferring remaining Hardcover author lookups..."
+                                continue
                             raise
                         if hc_author and hc_author.image_url and not author_has_manual_image:
                             author.image_url = hc_author.image_url
@@ -1037,6 +1104,18 @@ async def run_full_sync(force: bool = False):
                     if parts:
                         authors_with_new_files.add(parts[0])
 
+                if hardcover_throttled:
+                    deferred_book_syncs = sum(
+                        1 for author in authors
+                        if _author_needs_hardcover_books_sync(author, force, authors_with_new_files)
+                    )
+                    if deferred_book_syncs:
+                        summary.hardcover.record_deferred("throttled", deferred_book_syncs)
+                        logger.warning(
+                            "Skipping %d Hardcover author book lookup(s) for this run because Hardcover is throttled",
+                            deferred_book_syncs,
+                        )
+
                 for i, author in enumerate(authors):
                     if not author.hardcover_id:
                         continue
@@ -1057,11 +1136,33 @@ async def run_full_sync(force: bool = False):
                         scan_status.progress = progress
                         continue
 
+                    if hardcover_throttled:
+                        authors_skipped += 1
+                        progress = 50.0 + (25.0 * (i + 1) / max(total_authors, 1))
+                        scan_status.progress = progress
+                        continue
+
                     scan_status.message = f"Fetching books for: {author.name}"
                     try:
                         hc_books = await client.get_author_books(author.hardcover_id)
                     except HardcoverLookupError as e:
                         summary.hardcover.record_failure(e.reason)
+                        if e.reason == "throttled":
+                            hardcover_throttled = True
+                            remaining = sum(
+                                1 for remaining_author in authors[i + 1:]
+                                if _author_needs_hardcover_books_sync(remaining_author, force, authors_with_new_files)
+                            )
+                            if remaining:
+                                summary.hardcover.record_deferred("throttled", remaining)
+                            logger.warning(
+                                "Hardcover throttled during book sync at author %r; "
+                                "deferring %d remaining Hardcover author book lookup(s) for this run",
+                                author.name,
+                                remaining,
+                            )
+                            scan_status.message = "Hardcover throttled; deferring remaining Hardcover book lookups..."
+                            continue
                         raise
                     summary.hardcover.record_match()
 
@@ -1754,10 +1855,19 @@ async def run_full_sync(force: bool = False):
 
             await flush_api_usage_batch(db)
             await _update_last_scan(db)
-            await _finalize_scan_summary(db, summary, message="Scan complete!")
+            final_message = (
+                "Scan complete with some Hardcover work deferred due to rate limiting."
+                if summary.hardcover.deferred > 0 and summary.hardcover.failure_reasons.get("throttled")
+                else "Scan complete!"
+            )
+            await _finalize_scan_summary(db, summary, message=final_message)
 
         scan_status.progress = 100.0
-        scan_status.message = "Scan complete!"
+        scan_status.message = (
+            "Scan complete with some Hardcover work deferred due to rate limiting."
+            if summary.hardcover.deferred > 0 and summary.hardcover.failure_reasons.get("throttled")
+            else "Scan complete!"
+        )
         scan_status.status = "idle"
 
     except Exception as e:
