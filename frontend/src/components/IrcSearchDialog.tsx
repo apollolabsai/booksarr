@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   useCreateIrcDownloadJob,
   useCreateIrcSearchJob,
   useIrcDownloadJob,
   useIrcSearchJob,
   useIrcSearchResults,
+  useIrcStatus,
 } from "../api/irc";
 
 export default function IrcSearchDialog({
@@ -26,6 +28,7 @@ export default function IrcSearchDialog({
   const [jobId, setJobId] = useState<number | null>(null);
   const [downloadJobId, setDownloadJobId] = useState<number | null>(null);
   const [activeResultId, setActiveResultId] = useState<number | null>(null);
+  const { data: ircStatus, isLoading: ircStatusLoading } = useIrcStatus(open);
   const { data: job } = useIrcSearchJob(jobId, open);
   const { data: results, isLoading: resultsLoading } = useIrcSearchResults(jobId, open);
   const { data: downloadJob } = useIrcDownloadJob(downloadJobId, open);
@@ -40,6 +43,8 @@ export default function IrcSearchDialog({
   }, [authorName, title, open]);
 
   if (!open || !bookId) return null;
+
+  const isIrcReady = Boolean(ircStatus?.connected && ircStatus?.joined_channel);
 
   const handleSearch = async () => {
     const job = await createSearchJob.mutateAsync({
@@ -69,6 +74,55 @@ export default function IrcSearchDialog({
         </div>
 
         <div className="max-h-[calc(90vh-140px)] overflow-y-auto px-6 py-5">
+          {!ircStatusLoading && !isIrcReady && (
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-5">
+              <div className="text-base font-semibold text-amber-200">Connect to IRC first</div>
+              <p className="mt-2 text-sm text-amber-100/90">
+                Search can only run when the app is connected to the IRC server and joined to the configured channel.
+              </p>
+              <div className="mt-3 space-y-1 text-sm text-amber-50/80">
+                <div>
+                  Connection state: <span className="font-medium text-amber-100">{ircStatus?.state || "disconnected"}</span>
+                </div>
+                {ircStatus?.server && (
+                  <div>
+                    Server: <span className="text-amber-100">{ircStatus.server}</span>
+                  </div>
+                )}
+                {ircStatus?.channel && (
+                  <div>
+                    Channel: <span className="text-amber-100">{ircStatus.channel}</span>
+                  </div>
+                )}
+                {ircStatus?.last_error && (
+                  <div className="text-rose-200">
+                    Last error: <span className="text-rose-100">{ircStatus.last_error}</span>
+                  </div>
+                )}
+              </div>
+              <div className="mt-4 flex items-center gap-3">
+                <Link
+                  to="/settings/irc"
+                  onClick={onClose}
+                  className="inline-flex items-center rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-500"
+                >
+                  Open IRC Settings
+                </Link>
+                <span className="text-xs text-amber-100/70">
+                  Connect there, then come back and run the search again.
+                </span>
+              </div>
+            </div>
+          )}
+
+          {ircStatusLoading && (
+            <div className="rounded-xl border border-slate-700 bg-slate-800 p-5 text-sm text-slate-300">
+              Checking IRC connection status...
+            </div>
+          )}
+
+          {isIrcReady && (
+            <>
           <div className="rounded-xl border border-slate-700 bg-slate-800 p-4">
             <div className="mb-2 text-sm font-medium text-slate-200">Query</div>
             <input
@@ -188,6 +242,8 @@ export default function IrcSearchDialog({
                 </div>
               )}
             </div>
+          )}
+            </>
           )}
         </div>
 
