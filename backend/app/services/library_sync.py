@@ -201,90 +201,6 @@ def _deduplicate_books(books: list) -> list:
     return result
 
 
-def _extract_year(date_str: str | None) -> int | None:
-    """Extract year from a date string like '2024-01-15' or '2024'."""
-    if not date_str or len(date_str) < 4:
-        return None
-    try:
-        return int(date_str[:4])
-    except ValueError:
-        return None
-
-
-def _reconcile_year_3way(
-    hc_date: str | None,
-    google_year: int | None,
-    ol_year: int | None,
-) -> str | None:
-    """Reconcile publish year across up to 3 sources.
-
-    Strategy:
-    - HC date is preferred (may have full YYYY-MM-DD format)
-    - If HC and Google agree (within 1 year), keep HC date
-    - If HC and Google disagree, use OL as tiebreaker
-    - If all three differ, use the latest year
-    """
-    hc_year = _extract_year(hc_date)
-
-    sources = {}
-    if hc_year:
-        sources["HC"] = hc_year
-    if google_year:
-        sources["Google"] = google_year
-    if ol_year:
-        sources["OL"] = ol_year
-
-    if not sources:
-        return hc_date  # No data from any source
-
-    if len(sources) == 1:
-        if hc_year:
-            return hc_date  # Preserve full HC date format
-        return f"{list(sources.values())[0]}-01-01"
-
-    # Multiple sources — check for agreement
-    if hc_year and google_year:
-        if abs(hc_year - google_year) <= 1:
-            return hc_date  # HC and Google agree — keep HC
-
-        # HC and Google disagree
-        if ol_year:
-            if abs(ol_year - hc_year) <= 1:
-                return hc_date  # OL agrees with HC
-            if abs(ol_year - google_year) <= 1:
-                return f"{google_year}-01-01"  # OL agrees with Google
-            # All three differ — use latest
-            best = max(hc_year, google_year, ol_year)
-            source = [k for k, v in sources.items() if v == best][0]
-            logger.debug(
-                "Year 3-way: HC=%s Google=%s OL=%s -> %d (%s)",
-                hc_year, google_year, ol_year, best, source,
-            )
-            return hc_date if best == hc_year else f"{best}-01-01"
-
-        # No OL data — use later year (common error is too-early dates)
-        best = max(hc_year, google_year)
-        return hc_date if best == hc_year else f"{google_year}-01-01"
-
-    # HC + OL only (no Google key)
-    if hc_year and ol_year:
-        if abs(hc_year - ol_year) <= 1:
-            return hc_date
-        best = max(hc_year, ol_year)
-        source = "HC" if best == hc_year else "OL"
-        logger.debug("Year reconcile: HC=%s OL=%s -> %d (%s)", hc_year, ol_year, best, source)
-        return hc_date if best == hc_year else f"{ol_year}-01-01"
-
-    # Google + OL only (no HC date) — unlikely but handle it
-    if google_year and ol_year:
-        if abs(google_year - ol_year) <= 1:
-            return f"{google_year}-01-01"
-        best = max(google_year, ol_year)
-        return f"{best}-01-01"
-
-    return hc_date
-
-
 def _extract_ol_cover_id(cover_url: str | None) -> int | None:
     """Extract the OL cover ID from a URL like .../id/12345-L.jpg."""
     if not cover_url:
@@ -1253,10 +1169,10 @@ async def run_full_sync(force: bool = False):
                 summary.books_added = books_added
                 scan_status.progress = 80.0
 
-                # Phase 5: Year reconciliation
-                # Source priority: Hardcover → Google Books → Open Library
-                # Google is secondary (if API key available), OL is tiebreaker only
-                scan_status.message = "Reconciling publish dates..."
+                # Phase 5: Publish date enrichment
+                # Hardcover remains the authoritative release_date.
+                # Google Books and Open Library dates are stored separately.
+                scan_status.message = "Fetching publish dates..."
                 google_api_key = await get_google_api_key(db)
                 visibility_settings = await get_book_visibility_settings(db)
                 synced_author_ids = [a.id for a in authors if a.hardcover_id]
@@ -1280,9 +1196,8 @@ async def run_full_sync(force: bool = False):
                     author_map = {a.id: a.name for a in authors}
 
                     # 5a: Fetch Google data for books that have not had their
-                    # publish date checked yet. Once a book's date has been
-                    # reconciled, we do not revisit it unless its core metadata
-                    # changes and clears publish_date_checked_at.
+                    # publish-date sources checked yet. Hardcover remains the
+                    # source-of-truth release_date.
                     if google_api_key and books_to_reconcile:
                         # Load cached Google data for books already searched.
                         # google_id="_none" means "searched, no result" — skip
@@ -1400,25 +1315,9 @@ async def run_full_sync(force: bool = False):
                                 len(google_data),
                             )
 
-                    # 5b: Identify books needing OL tiebreaker
-                    # Determine which books need OL data for year reconciliation
-                    ol_candidates = []
-                    if google_api_key and books_to_reconcile:
-                        # With Google: only need OL for HC/Google year disagreements
-                        for book in books_to_reconcile:
-                            hc_year = _extract_year(book.release_date)
-                            gbook = google_data.get(book.id)
-                            g_year = gbook.publish_year if gbook else None
-                            if hc_year and g_year and abs(hc_year - g_year) > 1:
-                                ol_candidates.append(book)
-                        if ol_candidates:
-                            logger.info(
-                                "Year disagreements: %d book(s) need OL tiebreaker",
-                                len(ol_candidates),
-                            )
-                    else:
-                        # No Google key: fall back to HC vs OL for unchecked books
-                        ol_candidates = list(books_to_reconcile)
+                    # 5b: Fetch Open Library dates for the same eligible books so
+                    # we retain source-specific metadata without overriding Hardcover.
+                    ol_candidates = list(books_to_reconcile)
 
                     # Load cached OL data; only fetch books not yet searched.
                     # ol_edition_key="_none" means "searched, no result" — skip
@@ -1442,7 +1341,8 @@ async def run_full_sync(force: bool = False):
                     if books_need_ol_fetch:
                         ol_cached = len(ol_candidates) - len(books_need_ol_fetch)
                         scan_status.message = (
-                            f"Verifying {len(books_need_ol_fetch)} date(s) with Open Library... "
+                            f"Fetching dates from Open Library... "
+                            f"{len(books_need_ol_fetch)} remaining "
                             f"({ol_cached} cached)"
                         )
                         ol_client = OpenLibraryClient()
@@ -1451,8 +1351,8 @@ async def run_full_sync(force: bool = False):
 
                             async def _fetch_ol_year(book):
                                 async with sem:
-                                    if book.isbn:
-                                        isbn_lookup = await ol_client.search_book_by_isbn_with_result(book.isbn)
+                                    for isbn in _preferred_google_isbns(book):
+                                        isbn_lookup = await ol_client.search_book_by_isbn_with_result(isbn)
                                         if isbn_lookup.book:
                                             return isbn_lookup
                                         if isbn_lookup.reason not in {"no_result"}:
@@ -1497,34 +1397,18 @@ async def run_full_sync(force: bool = False):
                             len(ol_data),
                         )
 
-                    # 5c: Apply reconciled dates
-                    reconciled = 0
+                    # 5c: Finalize publish-date source fetch state
                     finalized = 0
                     for book in books_to_reconcile:
                         if book.id in google_retry_ids:
                             continue
-                        gbook = google_data.get(book.id)
-                        g_year = gbook.publish_year if gbook else None
-                        ol_book = ol_data.get(book.id)
-                        ol_year = ol_book.first_publish_year if ol_book else None
-
-                        new_date = _reconcile_year_3way(book.release_date, g_year, ol_year)
-                        if new_date and new_date != book.release_date:
-                            logger.info(
-                                "Date fix: '%s' %s -> %s (Google: %s, OL: %s)",
-                                book.title, book.release_date, new_date, g_year, ol_year,
-                            )
-                            book.release_date = new_date
-                            reconciled += 1
                         book.publish_date_checked_at = datetime.utcnow()
                         finalized += 1
 
                     if books_to_reconcile:
                         await db.commit()
-                        if reconciled:
-                            logger.info("Reconciled %d publish date(s)", reconciled)
                         logger.info(
-                            "Publish dates finalized for %d book(s); future scans will skip them",
+                            "Stored Google/Open Library publish dates for %d book(s); Hardcover dates retained",
                             finalized,
                         )
                         if google_retry_ids:
@@ -1533,7 +1417,7 @@ async def run_full_sync(force: bool = False):
                                 len(google_retry_ids),
                             )
                     else:
-                        logger.info("Publish dates already finalized for all books; skipping phase 5")
+                        logger.info("Publish date sources already finalized for all books; skipping phase 5")
 
                 scan_status.progress = 87.0
 
@@ -2036,13 +1920,6 @@ async def refresh_single_book(book_id: int):
             finally:
                 await ol_client.close()
 
-            new_date = _reconcile_year_3way(
-                book.release_date,
-                gbook.publish_year if gbook else None,
-                ol_book.first_publish_year if ol_book else None,
-            )
-            if new_date:
-                book.release_date = new_date
             if not google_retry:
                 book.publish_date_checked_at = datetime.utcnow()
 
