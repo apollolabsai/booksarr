@@ -601,6 +601,7 @@ async def _count_authors_needing_images(db: AsyncSession) -> int:
 async def _repair_local_file_links(
     db: AsyncSession,
     author: Author | None = None,
+    file_paths: set[str] | None = None,
 ) -> tuple[int, int, int]:
     result = await db.execute(
         select(BookFile).options(selectinload(BookFile.book))
@@ -613,6 +614,8 @@ async def _repair_local_file_links(
             or (bf.book and not _linked_book_matches_local_metadata(bf.book, bf.opf_title, bf.opf_isbn))
         )
     ]
+    if file_paths is not None:
+        candidate_files = [bf for bf in candidate_files if bf.file_path in file_paths]
     if author is not None:
         author_dir_paths = {directory.dir_path for directory in author.author_directories}
         candidate_files = [
@@ -752,6 +755,43 @@ async def _repair_local_file_links(
             repaired_count,
         )
     return matched_count, repaired_count, books_added
+
+
+async def refresh_imported_library_file(moved_path) -> bool:
+    try:
+        relative_path = str(moved_path.relative_to(BOOKS_DIR))
+    except Exception:
+        logger.warning("Imported file is not inside BOOKS_DIR; skipping targeted refresh: %s", moved_path)
+        return False
+
+    async with async_session() as db:
+        await scan_library(db, BOOKS_DIR)
+        matched_count, repaired_count, books_added = await _repair_local_file_links(
+            db,
+            file_paths={relative_path},
+        )
+
+        result = await db.execute(
+            select(BookFile)
+            .options(selectinload(BookFile.book))
+            .where(BookFile.file_path == relative_path)
+        )
+        book_file = result.scalar_one_or_none()
+        if book_file is None:
+            logger.warning("Targeted import refresh could not find scanned file: %s", relative_path)
+            return False
+
+        linked_book = book_file.book
+        logger.info(
+            "Targeted import refresh complete: file=%s matched=%d repaired=%d local_books_added=%d linked_book_id=%s owned=%s",
+            relative_path,
+            matched_count,
+            repaired_count,
+            books_added,
+            linked_book.id if linked_book else None,
+            linked_book.is_owned if linked_book else None,
+        )
+        return linked_book is not None and bool(linked_book.is_owned)
 
 
 async def _sync_author_hardcover_catalog(

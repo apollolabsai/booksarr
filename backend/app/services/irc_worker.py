@@ -1267,7 +1267,7 @@ def _normalize_author_key(author_name: str) -> str:
 
 async def _trigger_library_scan_after_irc_import(moved_path: Path):
     try:
-        from backend.app.services.library_sync import run_full_sync, scan_status
+        from backend.app.services.library_sync import refresh_imported_library_file, run_full_sync, scan_status
     except Exception as exc:
         logger.warning("Could not import library sync after IRC move for %s: %s", moved_path, exc)
         return
@@ -1279,7 +1279,18 @@ async def _trigger_library_scan_after_irc_import(moved_path: Path):
         )
         return
 
-    logger.info("Triggering library scan after IRC import: %s", moved_path)
+    logger.info("Triggering targeted refresh after IRC import: %s", moved_path)
+    try:
+        imported_and_matched = await refresh_imported_library_file(moved_path)
+    except Exception as exc:
+        logger.warning("Targeted refresh after IRC import failed for %s: %s", moved_path, exc)
+        imported_and_matched = False
+
+    if imported_and_matched:
+        logger.info("Targeted IRC import refresh marked the book as owned without a full library scan: %s", moved_path)
+        return
+
+    logger.info("Targeted IRC import refresh did not fully resolve ownership; falling back to library scan: %s", moved_path)
     asyncio.create_task(run_full_sync(force=False))
 
 

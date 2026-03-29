@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   useCreateIrcDownloadJob,
   useCreateIrcSearchJob,
@@ -24,10 +25,12 @@ export default function IrcSearchDialog({
 }) {
   const createSearchJob = useCreateIrcSearchJob();
   const createDownloadJob = useCreateIrcDownloadJob();
+  const queryClient = useQueryClient();
   const [queryText, setQueryText] = useState("");
   const [jobId, setJobId] = useState<number | null>(null);
   const [downloadJobId, setDownloadJobId] = useState<number | null>(null);
   const [activeResultId, setActiveResultId] = useState<number | null>(null);
+  const lastOwnershipRefreshJobId = useRef<number | null>(null);
   const { data: ircStatus, isLoading: ircStatusLoading } = useIrcStatus(open);
   const { data: job } = useIrcSearchJob(jobId, open);
   const { data: results, isLoading: resultsLoading } = useIrcSearchResults(jobId, open);
@@ -40,7 +43,18 @@ export default function IrcSearchDialog({
     setJobId(null);
     setDownloadJobId(null);
     setActiveResultId(null);
+    lastOwnershipRefreshJobId.current = null;
   }, [authorName, title, open]);
+
+  useEffect(() => {
+    if (!downloadJob || downloadJob.status !== "moved") return;
+    if (lastOwnershipRefreshJobId.current === downloadJob.id) return;
+
+    lastOwnershipRefreshJobId.current = downloadJob.id;
+    queryClient.invalidateQueries({ queryKey: ["books"] });
+    queryClient.invalidateQueries({ queryKey: ["authors"] });
+    queryClient.invalidateQueries({ queryKey: ["hiddenBooks"] });
+  }, [downloadJob, queryClient]);
 
   if (!open || !bookId) return null;
 
