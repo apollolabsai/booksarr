@@ -13,7 +13,7 @@ from sqlalchemy.orm import selectinload
 from backend.app.config import BOOKS_DIR
 from backend.app.database import async_session
 from backend.app.models import Author, Book, BookFile, BookSeries, Series, Setting
-from backend.app.services.scanner import scan_library, extract_best_metadata
+from backend.app.services.scanner import scan_library, extract_best_metadata, _clean_author_text
 from backend.app.services.hardcover import HardcoverClient, HardcoverLookupError
 from backend.app.services.matcher import titles_match
 from backend.app.services.image_cache import (
@@ -598,7 +598,10 @@ async def _count_authors_needing_images(db: AsyncSession) -> int:
     return result.scalar() or 0
 
 
-async def _repair_local_file_links(db: AsyncSession) -> tuple[int, int, int]:
+async def _repair_local_file_links(
+    db: AsyncSession,
+    author: Author | None = None,
+) -> tuple[int, int, int]:
     result = await db.execute(
         select(BookFile).options(selectinload(BookFile.book))
     )
@@ -610,6 +613,20 @@ async def _repair_local_file_links(db: AsyncSession) -> tuple[int, int, int]:
             or (bf.book and not _linked_book_matches_local_metadata(bf.book, bf.opf_title, bf.opf_isbn))
         )
     ]
+    if author is not None:
+        author_dir_paths = {directory.dir_path for directory in author.author_directories}
+        candidate_files = [
+            bf for bf in candidate_files
+            if (
+                (bf.book and bf.book.author_id == author.id)
+                or ((bf.opf_author or "").strip() == author.name)
+                or (bf.file_path and bf.file_path.split("/")[0] in author_dir_paths)
+                or (
+                    bf.file_path
+                    and _clean_author_text(bf.file_path.split("/")[0]) == author.name
+                )
+            )
+        ]
 
     matched_count = 0
     repaired_count = 0
@@ -735,6 +752,100 @@ async def _repair_local_file_links(db: AsyncSession) -> tuple[int, int, int]:
             repaired_count,
         )
     return matched_count, repaired_count, books_added
+
+
+async def _sync_author_hardcover_catalog(
+    db: AsyncSession,
+    author: Author,
+    client: HardcoverClient,
+) -> int:
+    books_added = 0
+
+    if not author.hardcover_id:
+        hc_author = await client.search_author(author.name)
+        if not hc_author:
+            logger.info("No Hardcover author match found during author refresh: %s", author.name)
+            return 0
+        author.hardcover_id = hc_author.id
+        author.hardcover_slug = hc_author.slug
+        author.bio = hc_author.bio
+        if not author.manual_image_source:
+            author.image_url = hc_author.image_url
+
+    hc_books = await client.get_author_books(author.hardcover_id)
+    canonical_books = [b for b in hc_books if b.is_canonical]
+    valid_books = [b for b in canonical_books if _is_valid_title(b.title)]
+    eligible_books = _deduplicate_books(valid_books)
+    author.book_count_total = len(eligible_books)
+
+    for hc_book in eligible_books:
+        existing = await db.execute(select(Book).where(Book.hardcover_id == hc_book.id))
+        book = existing.scalar_one_or_none()
+        tags_json = json.dumps(hc_book.tags) if hc_book.tags else None
+
+        if book:
+            book.title = hc_book.title
+            book.author_id = author.id
+            book.hardcover_slug = hc_book.slug
+            book.compilation = hc_book.compilation
+            book.book_category_id = hc_book.book_category_id
+            book.book_category_name = get_book_category_name(hc_book.book_category_id)
+            book.literary_type_id = hc_book.literary_type_id
+            book.literary_type_name = get_literary_type_name(hc_book.literary_type_id)
+            book.hardcover_state = hc_book.state or None
+            book.hardcover_isbn_10 = normalized_valid_isbn(hc_book.isbn_10)
+            book.hardcover_isbn_13 = normalized_valid_isbn(hc_book.isbn_13)
+            book.description = hc_book.description
+            book.release_date = hc_book.release_date
+            book.cover_image_url = hc_book.image_url
+            book.tags = tags_json
+            book.rating = hc_book.rating
+            book.pages = hc_book.pages
+            book.language = hc_book.language
+        else:
+            book = Book(
+                title=hc_book.title,
+                author_id=author.id,
+                hardcover_id=hc_book.id,
+                hardcover_slug=hc_book.slug,
+                compilation=hc_book.compilation,
+                book_category_id=hc_book.book_category_id,
+                book_category_name=get_book_category_name(hc_book.book_category_id),
+                literary_type_id=hc_book.literary_type_id,
+                literary_type_name=get_literary_type_name(hc_book.literary_type_id),
+                hardcover_state=hc_book.state or None,
+                hardcover_isbn_10=normalized_valid_isbn(hc_book.isbn_10),
+                hardcover_isbn_13=normalized_valid_isbn(hc_book.isbn_13),
+                description=hc_book.description,
+                release_date=hc_book.release_date,
+                cover_image_url=hc_book.image_url,
+                tags=tags_json,
+                rating=hc_book.rating,
+                pages=hc_book.pages,
+                language=hc_book.language,
+                is_owned=False,
+            )
+            db.add(book)
+            await db.flush()
+            books_added += 1
+
+        for sr in hc_book.series_refs:
+            series = await _get_or_create_series(db, sr.id, sr.name)
+            existing_bs = await db.execute(
+                select(BookSeries).where(
+                    BookSeries.book_id == book.id,
+                    BookSeries.series_id == series.id,
+                )
+            )
+            if not existing_bs.scalar_one_or_none():
+                db.add(BookSeries(
+                    book_id=book.id,
+                    series_id=series.id,
+                    position=sr.position,
+                ))
+
+    author.last_synced_at = datetime.utcnow()
+    return books_added
 
 
 class ScanStatus:
@@ -2127,6 +2238,57 @@ async def refresh_single_book(book_id: int):
 
             await flush_api_usage_batch(db)
             await db.commit()
+    finally:
+        clear_api_usage_batch(usage_batch_token)
+
+
+async def refresh_single_author(author_id: int):
+    usage_batch_token = begin_api_usage_batch()
+    try:
+        async with async_session() as db:
+            await scan_library(db, BOOKS_DIR)
+
+            result = await db.execute(
+                select(Author)
+                .where(Author.id == author_id)
+                .options(
+                    selectinload(Author.books).selectinload(Book.files),
+                    selectinload(Author.author_directories),
+                )
+            )
+            author = result.scalar_one_or_none()
+            if not author:
+                raise ValueError("Author not found")
+
+            api_key = await get_api_key(db)
+            books_added = 0
+            if api_key:
+                client = HardcoverClient(api_key)
+                try:
+                    books_added = await _sync_author_hardcover_catalog(db, author, client)
+                finally:
+                    await client.close()
+
+            matched_count, repaired_count, new_local_books = await _repair_local_file_links(db, author=author)
+            books_added += new_local_books
+
+            count_result = await db.execute(
+                select(func.count(Book.id)).where(
+                    Book.author_id == author.id,
+                    Book.is_owned == True,
+                )
+            )
+            author.book_count_local = count_result.scalar() or 0
+
+            await db.commit()
+            logger.info(
+                "Author refresh complete: author_id=%s name=%r books_added=%d matched=%d repaired=%d",
+                author.id,
+                author.name,
+                books_added,
+                matched_count,
+                repaired_count,
+            )
     finally:
         clear_api_usage_batch(usage_batch_token)
 

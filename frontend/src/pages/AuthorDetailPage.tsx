@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
-import { useAuthor } from "../api/authors";
+import { useAuthor, useRefreshAuthor } from "../api/authors";
 import { getImageUrl } from "../types";
 import type { BookInAuthor, SeriesInAuthor } from "../types";
 import BookCard from "../components/BookCard";
@@ -22,6 +22,7 @@ const SORT_OPTIONS = [
 export default function AuthorDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { data: author, isLoading } = useAuthor(Number(id));
+  const refreshAuthor = useRefreshAuthor();
   const [sort, setSort] = useState("series");
   const [view, setView] = useState<"grid" | "table">("grid");
   const [search, setSearch] = useState("");
@@ -219,13 +220,48 @@ export default function AuthorDetailPage() {
         </div>
         <div className="flex-1 min-w-0">
           <div className="mb-2">
-            <h1 className="text-3xl font-bold">{author.name}</h1>
+            <div className="flex items-center gap-3">
+              <h1 className="text-3xl font-bold">{author.name}</h1>
+              <button
+                type="button"
+                onClick={() => refreshAuthor.mutate(author.id)}
+                disabled={refreshAuthor.isPending}
+                className="inline-flex items-center gap-2 rounded-md border border-slate-600 bg-slate-800 px-3 py-1.5 text-sm text-slate-200 transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                title="Refresh this author and rescan local files for newly added books"
+              >
+                <svg className={`h-4 w-4 ${refreshAuthor.isPending ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m14.836 2A8.001 8.001 0 005.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.356-2m15.356 2H15" />
+                </svg>
+                {refreshAuthor.isPending ? "Refreshing..." : "Refresh Author"}
+              </button>
+            </div>
           </div>
           <div className="flex gap-4 text-sm text-slate-400 mb-4">
             <span><span className="text-emerald-400 font-semibold">{author.book_count_local}</span> owned</span>
             <span><span className="text-slate-200 font-semibold">{author.book_count_total}</span> total books</span>
             <span><span className="text-slate-200 font-semibold">{author.series.length}</span> series</span>
           </div>
+          {author.author_directories.length > 0 && (
+            <div className="mb-4">
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Linked Paths
+              </div>
+              <div className="space-y-1">
+                {author.author_directories.map((directory) => (
+                  <div key={directory.id} className="flex items-start gap-2 text-sm text-slate-300">
+                    <code className="break-all rounded bg-slate-800 px-2 py-1 text-xs text-slate-200">
+                      {directory.dir_path}
+                    </code>
+                    {directory.is_primary && (
+                      <span className="rounded bg-emerald-500/15 px-2 py-1 text-[11px] font-medium text-emerald-300">
+                        Primary
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {author.bio && (
             <div className="text-sm text-slate-300 leading-relaxed">
               <p className="whitespace-pre-line">{displayBio}{bioTruncated && !bioExpanded ? "..." : ""}</p>

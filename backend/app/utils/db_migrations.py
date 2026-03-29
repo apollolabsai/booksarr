@@ -43,6 +43,24 @@ def run_schema_migrations(conn: Connection) -> None:
 
     conn.exec_driver_sql(
         """
+        CREATE TABLE IF NOT EXISTS author_directories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            author_id INTEGER NOT NULL,
+            dir_path VARCHAR NOT NULL UNIQUE,
+            is_primary BOOLEAN NOT NULL DEFAULT 0,
+            last_seen_at DATETIME NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(author_id) REFERENCES authors (id)
+        )
+        """
+    )
+    conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_author_directories_author_id ON author_directories (author_id)"
+    )
+
+    conn.exec_driver_sql(
+        """
         CREATE TABLE IF NOT EXISTS irc_search_jobs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             book_id INTEGER NULL,

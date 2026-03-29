@@ -9,19 +9,19 @@ from sqlalchemy.orm import selectinload
 
 from backend.app.config import BOOKS_DIR
 from backend.app.database import get_db
-from backend.app.models import Author, Book, BookSeries, Series
+from backend.app.models import Author, AuthorDirectory, Book, BookSeries, Series
 from backend.app.schemas.author import (
     AuthorSummary, AuthorDetail, BookInAuthor, SeriesPositionInfo,
     SeriesInAuthor, SeriesBookEntry,
     AuthorPortraitOption, AuthorPortraitOptionsResponse, AuthorPortraitSelectionRequest,
-    AuthorSearchCandidate, AuthorSearchResponse, AuthorAddRequest, LocalBookFile,
+    AuthorSearchCandidate, AuthorSearchResponse, AuthorAddRequest, LocalBookFile, AuthorDirectoryEntry,
 )
 from backend.app.services.hardcover import HardcoverClient, HardcoverLookupError
 from backend.app.utils.book_visibility import get_book_visibility_settings, is_book_visible
 from backend.app.utils.isbn import has_any_valid_isbn
 from backend.app.services.image_cache import get_cached_cover_aspect_ratio
 from backend.app.services.author_images import get_author_portrait_options, set_author_portrait_selection
-from backend.app.services.library_sync import get_api_key, _get_or_create_series
+from backend.app.services.library_sync import get_api_key, _get_or_create_series, refresh_single_author
 from backend.app.utils.hardcover_metadata import get_book_category_name, get_literary_type_name
 from backend.app.utils.isbn import normalized_valid_isbn
 from backend.app.utils.api_usage import begin_api_usage_batch, clear_api_usage_batch, flush_api_usage_batch
@@ -109,6 +109,7 @@ async def add_author_from_hardcover(
         folder_name = _sanitize_author_folder_name(hc_author.name)
         folder_path = BOOKS_DIR / folder_name
         folder_path.mkdir(parents=True, exist_ok=True)
+        await _upsert_author_directory(db, author, folder_name)
         logger.info("Ensured author folder exists: %s", folder_path)
 
         hc_books = await client.get_author_books(hc_author.id)
@@ -214,6 +215,39 @@ async def add_author_from_hardcover(
     )
 
 
+async def _upsert_author_directory(db: AsyncSession, author: Author, dir_name: str):
+    result = await db.execute(select(AuthorDirectory).where(AuthorDirectory.dir_path == dir_name))
+    author_dir = result.scalar_one_or_none()
+    if author_dir is None:
+        primary_result = await db.execute(
+            select(AuthorDirectory).where(
+                AuthorDirectory.author_id == author.id,
+                AuthorDirectory.is_primary == True,
+            )
+        )
+        has_primary = primary_result.scalar_one_or_none() is not None
+        db.add(AuthorDirectory(
+            author_id=author.id,
+            dir_path=dir_name,
+            is_primary=not has_primary,
+        ))
+        return
+
+    author_dir.author_id = author.id
+
+
+@router.post("/{author_id}/refresh")
+async def refresh_author_route(author_id: int):
+    try:
+        await refresh_single_author(author_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except HardcoverLookupError as exc:
+        raise HTTPException(status_code=502, detail=f"Hardcover lookup failed: {exc}") from exc
+
+    return {"status": "ok", "message": "Author refreshed"}
+
+
 @router.get("", response_model=list[AuthorSummary])
 async def list_authors(
     sort: str = Query("name", regex="^(name|-name|books|-books|owned|-owned)$"),
@@ -262,7 +296,11 @@ async def list_authors(
 
 @router.get("/{author_id}", response_model=AuthorDetail)
 async def get_author(author_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Author).where(Author.id == author_id))
+    result = await db.execute(
+        select(Author)
+        .options(selectinload(Author.author_directories))
+        .where(Author.id == author_id)
+    )
     author = result.scalar_one_or_none()
     if not author:
         raise HTTPException(status_code=404, detail="Author not found")
@@ -377,6 +415,17 @@ async def get_author(author_id: int, db: AsyncSession = Depends(get_db)):
         image_cached_path=author.image_cached_path,
         book_count_local=sum(1 for book in books if book.is_owned),
         book_count_total=len(books),
+        author_directories=[
+            AuthorDirectoryEntry(
+                id=directory.id,
+                dir_path=directory.dir_path,
+                is_primary=directory.is_primary,
+            )
+            for directory in sorted(
+                author.author_directories,
+                key=lambda item: (not item.is_primary, item.dir_path.lower()),
+            )
+        ],
         books=books_out,
         series=series_out,
     )

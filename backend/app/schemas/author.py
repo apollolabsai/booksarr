@@ -16,7 +16,14 @@ class AuthorSummary(BaseModel):
         from_attributes = True
 
 
+class AuthorDirectoryEntry(BaseModel):
+    id: int
+    dir_path: str
+    is_primary: bool
+
+
 class AuthorDetail(AuthorSummary):
+    author_directories: list["AuthorDirectoryEntry"]
     books: list["BookInAuthor"]
     series: list["SeriesInAuthor"]
 

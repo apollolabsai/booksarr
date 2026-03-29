@@ -81,3 +81,19 @@ export function useAddAuthorFromHardcover() {
     },
   });
 }
+
+export function useRefreshAuthor() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (authorId: number) =>
+      fetchApi(`/authors/${authorId}/refresh`, {
+        method: "POST",
+      }),
+    onSuccess: (_, authorId) => {
+      queryClient.invalidateQueries({ queryKey: ["authors"] });
+      queryClient.invalidateQueries({ queryKey: ["authors", authorId] });
+      queryClient.invalidateQueries({ queryKey: ["books"] });
+      queryClient.invalidateQueries({ queryKey: ["hiddenBooks"] });
+    },
+  });
+}

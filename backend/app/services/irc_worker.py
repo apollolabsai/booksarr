@@ -15,7 +15,7 @@ from sqlalchemy.orm import selectinload
 
 from backend.app.config import BOOKS_DIR, DOWNLOADS_DIR, IRC_STATE_DIR
 from backend.app.database import async_session
-from backend.app.models import Book, IrcDownloadJob, IrcSearchJob, IrcSearchResult, Setting
+from backend.app.models import Author, Book, IrcDownloadJob, IrcSearchJob, IrcSearchResult, Setting
 from backend.app.services.irc_parser import (
     build_expected_result_filename,
     build_search_command,
@@ -1086,8 +1086,8 @@ async def _move_download_into_library(download_path: Path, job_id: int) -> Path:
 
 
 async def _build_library_target_path(download_path: Path, job_id: int) -> Path:
-    author_name, book_name, linked_file_path = await _resolve_import_names(download_path, job_id)
-    author_dir_name = _resolve_existing_author_dir_name(author_name, linked_file_path)
+    author_name, book_name, linked_file_path, mapped_author_dir_name = await _resolve_import_names(download_path, job_id)
+    author_dir_name = _resolve_existing_author_dir_name(author_name, linked_file_path, mapped_author_dir_name)
     book_dir_name = _resolve_existing_book_dir_name(author_dir_name, book_name, linked_file_path)
 
     target_dir = BOOKS_DIR / author_dir_name / book_dir_name
@@ -1101,10 +1101,11 @@ async def _build_library_target_path(download_path: Path, job_id: int) -> Path:
     return target_dir / download_path.name
 
 
-async def _resolve_import_names(download_path: Path, job_id: int) -> tuple[str, str, str | None]:
+async def _resolve_import_names(download_path: Path, job_id: int) -> tuple[str, str, str | None, str | None]:
     author_name: str | None = None
     book_name: str | None = None
     linked_file_path: str | None = None
+    mapped_author_dir_name: str | None = None
 
     async with async_session() as db:
         result = await db.execute(
@@ -1130,6 +1131,27 @@ async def _resolve_import_names(download_path: Path, job_id: int) -> tuple[str, 
                     author_name,
                     book_name,
                     linked_file_path,
+                )
+
+        if author_name and not linked_file_path:
+            author_result = await db.execute(
+                select(Author)
+                .options(selectinload(Author.author_directories))
+                .limit(1)
+                .where(Author.name == author_name)
+            )
+            mapped_author = author_result.scalar_one_or_none()
+            if mapped_author and mapped_author.author_directories:
+                primary_dir = next(
+                    (directory for directory in mapped_author.author_directories if directory.is_primary),
+                    mapped_author.author_directories[0],
+                )
+                mapped_author_dir_name = primary_dir.dir_path
+                logger.info(
+                    "IRC import destination using mapped author directory: job_id=%s author=%r dir=%r",
+                    job_id,
+                    author_name,
+                    mapped_author_dir_name,
                 )
 
         if job and job.search_result:
@@ -1167,7 +1189,7 @@ async def _resolve_import_names(download_path: Path, job_id: int) -> tuple[str, 
             download_path.name,
         )
 
-    return author_name or "IRC Imports", book_name or download_path.stem, linked_file_path
+    return author_name or "IRC Imports", book_name or download_path.stem, linked_file_path, mapped_author_dir_name
 
 
 def _guess_author_title_from_filename(filename: str) -> tuple[str | None, str | None]:
@@ -1191,11 +1213,18 @@ def _sanitize_library_component(value: str) -> str:
     return sanitized or "Unknown"
 
 
-def _resolve_existing_author_dir_name(author_name: str | None, linked_file_path: str | None) -> str:
+def _resolve_existing_author_dir_name(
+    author_name: str | None,
+    linked_file_path: str | None,
+    mapped_author_dir_name: str | None = None,
+) -> str:
     if linked_file_path:
         parts = Path(linked_file_path).parts
         if parts:
             return parts[0]
+
+    if mapped_author_dir_name:
+        return mapped_author_dir_name
 
     normalized_author = _normalize_author_key(author_name or "")
     if normalized_author and BOOKS_DIR.exists():

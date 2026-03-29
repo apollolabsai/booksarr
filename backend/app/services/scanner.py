@@ -6,7 +6,7 @@ from pathlib import Path
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.models import Author, Book, BookFile
+from backend.app.models import Author, AuthorDirectory, Book, BookFile
 from backend.app.utils.opf_parser import OPFMetadata, parse_epub_opf, parse_opf
 
 logger = logging.getLogger("booksarr.scanner")
@@ -64,6 +64,8 @@ async def scan_library(db: AsyncSession, library_path: Path) -> ScanResult:
             continue
 
         author_name = _clean_author_text(author_dir.name) or author_dir.name
+        author = await _get_or_create_author(db, author_name)
+        await _register_author_directory(db, author, author_dir.name)
 
         # Support standalone ebooks directly inside the author folder.
         for ebook_file in sorted(author_dir.iterdir()):
@@ -125,7 +127,6 @@ async def scan_library(db: AsyncSession, library_path: Path) -> ScanResult:
             if author_name not in known_authors:
                 result.new_author_names.add(author_name)
 
-            author = await _get_or_create_author(db, author_name)
             known_authors.add(author_name)  # avoid re-flagging
 
             ebook_file = library_path / rel_path
@@ -210,6 +211,32 @@ async def _get_or_create_author(db: AsyncSession, name: str) -> Author:
         db.add(author)
         await db.flush()
     return author
+
+
+async def _register_author_directory(db: AsyncSession, author: Author, dir_name: str):
+    result = await db.execute(select(AuthorDirectory).where(AuthorDirectory.dir_path == dir_name))
+    author_dir = result.scalar_one_or_none()
+    primary_result = await db.execute(
+        select(func.count(AuthorDirectory.id)).where(
+            AuthorDirectory.author_id == author.id,
+            AuthorDirectory.is_primary == True,
+        )
+    )
+    has_primary = bool(primary_result.scalar() or 0)
+    if author_dir is None:
+        author_dir = AuthorDirectory(
+            author_id=author.id,
+            dir_path=dir_name,
+            is_primary=not has_primary,
+            last_seen_at=datetime.utcnow(),
+        )
+        db.add(author_dir)
+        return
+
+    author_dir.author_id = author.id
+    author_dir.last_seen_at = datetime.utcnow()
+    if not has_primary:
+        author_dir.is_primary = True
 
 
 def extract_best_metadata(ebook_file: Path, author_name: str, book_dir_name: str) -> OPFMetadata:

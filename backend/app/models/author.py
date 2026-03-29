@@ -26,3 +26,8 @@ class Author(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     books: Mapped[list["Book"]] = relationship("Book", back_populates="author", lazy="selectin")
+    author_directories: Mapped[list["AuthorDirectory"]] = relationship(
+        "AuthorDirectory",
+        back_populates="author",
+        lazy="selectin",
+    )

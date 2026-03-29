@@ -10,6 +10,12 @@ export interface Author {
   book_count_total: number;
 }
 
+export interface AuthorDirectoryEntry {
+  id: number;
+  dir_path: string;
+  is_primary: boolean;
+}
+
 export interface AuthorSearchCandidate {
   hardcover_id: number;
   name: string;
@@ -111,6 +117,7 @@ export interface SeriesInAuthor {
 }
 
 export interface AuthorDetail extends Author {
+  author_directories: AuthorDirectoryEntry[];
   books: BookInAuthor[];
   series: SeriesInAuthor[];
 }

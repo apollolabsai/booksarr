@@ -1,4 +1,5 @@
 from backend.app.models.author import Author
+from backend.app.models.author_directory import AuthorDirectory
 from backend.app.models.book import Book
 from backend.app.models.series import Series
 from backend.app.models.book_series import BookSeries
@@ -11,6 +12,7 @@ from backend.app.models.irc_download_job import IrcDownloadJob
 
 __all__ = [
     "Author",
+    "AuthorDirectory",
     "Book",
     "Series",
     "BookSeries",
