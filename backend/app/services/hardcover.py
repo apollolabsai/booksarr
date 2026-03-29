@@ -1,17 +1,25 @@
+import asyncio
 import json
 import logging
+import random
 import re
+import time
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
+from email.utils import parsedate_to_datetime
 
 import httpx
 
-from backend.app.utils.rate_limiter import RateLimiter
 from backend.app.utils.api_usage import record_api_call
 
 logger = logging.getLogger("booksarr.hardcover")
 
 API_URL = "https://api.hardcover.app/v1/graphql"
+MIN_REQUEST_INTERVAL_SECONDS = 1.35
+REQUEST_JITTER_MIN_SECONDS = 0.05
+REQUEST_JITTER_MAX_SECONDS = 0.15
+THROTTLE_RETRY_MIN_SECONDS = 30.0
+THROTTLE_RETRY_FALLBACK_SECONDS = 60.0
 
 
 class HardcoverLookupError(RuntimeError):
@@ -63,8 +71,10 @@ class HCBook:
 class HardcoverClient:
     def __init__(self, api_key: str):
         self.api_key = api_key
-        self.rate_limiter = RateLimiter(max_tokens=55, refill_rate=1.0)
         self._client: httpx.AsyncClient | None = None
+        self._pacing_lock = asyncio.Lock()
+        self._next_request_at = 0.0
+        self._throttled_until = 0.0
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -81,8 +91,41 @@ class HardcoverClient:
         if self._client and not self._client.is_closed:
             await self._client.aclose()
 
+    async def _wait_for_request_slot(self):
+        async with self._pacing_lock:
+            now = time.monotonic()
+            wait_until = max(self._next_request_at, self._throttled_until)
+            if wait_until > now:
+                delay = wait_until - now
+                logger.info("Hardcover pacing: sleeping %.2fs before next request", delay)
+                await asyncio.sleep(delay)
+                now = time.monotonic()
+
+            self._next_request_at = (
+                now
+                + MIN_REQUEST_INTERVAL_SECONDS
+                + random.uniform(REQUEST_JITTER_MIN_SECONDS, REQUEST_JITTER_MAX_SECONDS)
+            )
+
+    def _apply_throttle_cooldown(self, seconds: float):
+        self._throttled_until = max(self._throttled_until, time.monotonic() + seconds)
+
+    def _retry_after_seconds(self, response: httpx.Response) -> float:
+        raw_value = response.headers.get("Retry-After")
+        if not raw_value:
+            return THROTTLE_RETRY_FALLBACK_SECONDS
+
+        try:
+            return max(float(raw_value), THROTTLE_RETRY_MIN_SECONDS)
+        except ValueError:
+            try:
+                retry_at = parsedate_to_datetime(raw_value)
+                seconds = retry_at.timestamp() - time.time()
+                return max(seconds, THROTTLE_RETRY_MIN_SECONDS)
+            except (TypeError, ValueError, OverflowError):
+                return THROTTLE_RETRY_FALLBACK_SECONDS
+
     async def _query(self, query: str, variables: dict | None = None) -> dict:
-        await self.rate_limiter.acquire()
         client = await self._get_client()
         payload: dict = {"query": query}
         if variables:
@@ -94,20 +137,32 @@ class HardcoverClient:
             op_name = str(list(variables.values())[:1])
 
         logger.debug("GraphQL request: vars=%s", op_name)
-        try:
-            await record_api_call("hardcover")
-            resp = await client.post(API_URL, json=payload)
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            logger.error("Hardcover API HTTP error %d for %s", e.response.status_code, op_name)
-            if e.response.status_code == 429:
-                raise HardcoverLookupError("throttled", "HTTP 429") from e
-            if e.response.status_code == 401:
-                raise HardcoverLookupError("unauthorized", "HTTP 401") from e
-            raise HardcoverLookupError("http_error", f"HTTP {e.response.status_code}") from e
-        except httpx.RequestError as e:
-            logger.error("Hardcover API request failed for %s: %s", op_name, e)
-            raise HardcoverLookupError("request_error", str(e)) from e
+        for attempt in (1, 2):
+            try:
+                await self._wait_for_request_slot()
+                await record_api_call("hardcover")
+                resp = await client.post(API_URL, json=payload)
+                resp.raise_for_status()
+                break
+            except httpx.HTTPStatusError as e:
+                logger.error("Hardcover API HTTP error %d for %s", e.response.status_code, op_name)
+                if e.response.status_code == 429 and attempt == 1:
+                    cooldown_seconds = self._retry_after_seconds(e.response)
+                    self._apply_throttle_cooldown(cooldown_seconds)
+                    logger.warning(
+                        "Hardcover throttled for %s; sleeping %.0fs before one retry",
+                        op_name,
+                        cooldown_seconds,
+                    )
+                    continue
+                if e.response.status_code == 429:
+                    raise HardcoverLookupError("throttled", "HTTP 429") from e
+                if e.response.status_code == 401:
+                    raise HardcoverLookupError("unauthorized", "HTTP 401") from e
+                raise HardcoverLookupError("http_error", f"HTTP {e.response.status_code}") from e
+            except httpx.RequestError as e:
+                logger.error("Hardcover API request failed for %s: %s", op_name, e)
+                raise HardcoverLookupError("request_error", str(e)) from e
 
         try:
             data = resp.json()

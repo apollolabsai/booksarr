@@ -22,7 +22,7 @@ Booksarr is a Docker-based ebook library manager inspired by Radarr/Sonarr. It s
 ```yaml
 services:
   booksarr:
-    build: .
+    image: powertowerpro/booksarr:latest
     container_name: booksarr
     environment:
       - PUID=1000
@@ -41,7 +41,13 @@ services:
 ```
 
 ```bash
-docker compose up --build -d
+docker compose up -d
+```
+
+To track the published development image instead, use:
+
+```yaml
+image: powertowerpro/booksarr:dev
 ```
 
 Then open `http://localhost:8889`.
