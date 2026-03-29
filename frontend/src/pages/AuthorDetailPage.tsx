@@ -244,7 +244,7 @@ export default function AuthorDetailPage() {
           {author.author_directories.length > 0 && (
             <div className="mb-4">
               <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Linked Paths
+                Linked Folder Paths
               </div>
               <div className="space-y-1">
                 {author.author_directories.map((directory) => (

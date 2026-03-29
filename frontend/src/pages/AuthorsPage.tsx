@@ -22,6 +22,9 @@ export default function AuthorsPage() {
   const { data: authors, isLoading } = useAuthors(sort, search);
 
   const handleSearch = useCallback((v: string) => setSearch(v), []);
+  const authorCount = authors?.length ?? 0;
+  const ownedBookCount = authors?.reduce((sum, author) => sum + author.book_count_local, 0) ?? 0;
+  const visibleBookCount = authors?.reduce((sum, author) => sum + author.book_count_total, 0) ?? 0;
 
   if (isLoading) {
     return (
@@ -33,8 +36,15 @@ export default function AuthorsPage() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold">Authors</h2>
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold">Authors</h2>
+          <div className="mt-2 flex flex-wrap gap-4 text-sm text-slate-400">
+            <span><span className="font-semibold text-slate-200">{authorCount}</span> authors</span>
+            <span><span className="font-semibold text-emerald-400">{ownedBookCount}</span> books owned</span>
+            <span><span className="font-semibold text-slate-200">{visibleBookCount}</span> books total</span>
+          </div>
+        </div>
         <div className="flex items-center gap-3">
           <button
             type="button"

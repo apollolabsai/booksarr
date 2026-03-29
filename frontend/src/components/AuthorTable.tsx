@@ -1,22 +1,115 @@
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import type { Author } from "../types";
 import { getImageUrl } from "../types";
 
-export default function AuthorTable({ authors }: { authors: Author[] }) {
+type SortKey = "name" | "-name" | "owned" | "-owned" | "total" | "-total" | "completion" | "-completion";
+
+function getCompletion(author: Author) {
+  return author.book_count_total > 0
+    ? author.book_count_local / author.book_count_total
+    : 0;
+}
+
+export default function AuthorTable({
+  authors,
+  initialSort = "name",
+}: {
+  authors: Author[];
+  initialSort?: SortKey | string;
+}) {
+  const [sort, setSort] = useState<SortKey>("name");
+
+  useEffect(() => {
+    if (initialSort === "-name" || initialSort === "owned" || initialSort === "-owned") {
+      setSort(initialSort);
+      return;
+    }
+    if (initialSort === "books") {
+      setSort("total");
+      return;
+    }
+    if (initialSort === "-books") {
+      setSort("-total");
+      return;
+    }
+    setSort("name");
+  }, [initialSort]);
+
+  const sortedAuthors = useMemo(() => {
+    const list = [...authors];
+    list.sort((a, b) => {
+      switch (sort) {
+        case "name":
+          return a.name.localeCompare(b.name);
+        case "-name":
+          return b.name.localeCompare(a.name);
+        case "owned":
+          return a.book_count_local - b.book_count_local || a.name.localeCompare(b.name);
+        case "-owned":
+          return b.book_count_local - a.book_count_local || a.name.localeCompare(b.name);
+        case "total":
+          return a.book_count_total - b.book_count_total || a.name.localeCompare(b.name);
+        case "-total":
+          return b.book_count_total - a.book_count_total || a.name.localeCompare(b.name);
+        case "completion":
+          return getCompletion(a) - getCompletion(b) || a.name.localeCompare(b.name);
+        case "-completion":
+          return getCompletion(b) - getCompletion(a) || a.name.localeCompare(b.name);
+        default:
+          return 0;
+      }
+    });
+    return list;
+  }, [authors, sort]);
+
+  const toggleSort = (asc: SortKey, desc: SortKey) => {
+    setSort((current) => (current === asc ? desc : asc));
+  };
+
+  const headerClass =
+    "px-4 py-3 transition-colors hover:text-slate-200";
+
+  const renderSortIndicator = (asc: SortKey, desc: SortKey) => {
+    if (sort === asc) return <span className="text-slate-300">▲</span>;
+    if (sort === desc) return <span className="text-slate-300">▼</span>;
+    return <span className="text-slate-600">▲</span>;
+  };
+
   return (
     <div className="bg-slate-800 rounded-lg border border-slate-700 overflow-hidden">
       <table className="w-full text-sm text-left">
         <thead className="text-xs uppercase text-slate-400 bg-slate-800/80 border-b border-slate-700">
           <tr>
             <th className="px-4 py-3 w-12"></th>
-            <th className="px-4 py-3">Author</th>
-            <th className="px-4 py-3 text-right">Owned</th>
-            <th className="px-4 py-3 text-right">Total</th>
-            <th className="px-4 py-3 text-right">Completion</th>
+            <th className={headerClass}>
+              <button type="button" className="flex items-center gap-2" onClick={() => toggleSort("name", "-name")}>
+                <span>Author</span>
+                {renderSortIndicator("name", "-name")}
+              </button>
+            </th>
+            <th className={`${headerClass} text-right`}>
+              <button type="button" className="ml-auto flex items-center gap-2" onClick={() => toggleSort("owned", "-owned")}>
+                <span>Owned</span>
+                {renderSortIndicator("owned", "-owned")}
+              </button>
+            </th>
+            <th className={`${headerClass} text-right`}>
+              <button type="button" className="ml-auto flex items-center gap-2" onClick={() => toggleSort("total", "-total")}>
+                <span>Total</span>
+                {renderSortIndicator("total", "-total")}
+              </button>
+            </th>
+            <th className={`${headerClass} text-right`}>
+              <button type="button" className="ml-auto flex items-center gap-2" onClick={() => toggleSort("completion", "-completion")}>
+                <span>Completion</span>
+                {renderSortIndicator("completion", "-completion")}
+              </button>
+            </th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-700">
-          {authors.map((author) => {
+          {sortedAuthors.map((author) => {
             const imgUrl = getImageUrl(author.image_cached_path, author.image_url);
             const pct = author.book_count_total > 0
               ? Math.round((author.book_count_local / author.book_count_total) * 100)
