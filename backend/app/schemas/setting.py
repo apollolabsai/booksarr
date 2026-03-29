@@ -3,13 +3,13 @@ from pydantic import BaseModel, Field
 
 class VisibilityCategories(BaseModel):
     standard_books: bool = True
-    short_fiction: bool = True
-    collections_and_compilations: bool = True
-    likely_collections_by_title: bool = True
+    short_fiction: bool = False
+    collections_and_compilations: bool = False
+    likely_collections_by_title: bool = False
     graphic_and_alternate_formats: bool = False
     research_non_book_material: bool = False
     fan_fiction: bool = False
-    valid_isbn: bool = False
+    valid_isbn: bool = True
     non_english_books: bool = False
     upcoming_unreleased: bool = False
     pending_hardcover_records: bool = False

@@ -11,13 +11,13 @@ from backend.app.utils.isbn import has_any_valid_isbn
 
 VISIBILITY_CATEGORY_DEFAULTS = {
     "standard_books": True,
-    "short_fiction": True,
-    "collections_and_compilations": True,
-    "likely_collections_by_title": True,
+    "short_fiction": False,
+    "collections_and_compilations": False,
+    "likely_collections_by_title": False,
     "graphic_and_alternate_formats": False,
     "research_non_book_material": False,
     "fan_fiction": False,
-    "valid_isbn": False,
+    "valid_isbn": True,
     "non_english_books": False,
     "upcoming_unreleased": False,
     "pending_hardcover_records": False,
