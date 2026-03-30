@@ -20,6 +20,21 @@ REQUEST_JITTER_MIN_SECONDS = 0.05
 REQUEST_JITTER_MAX_SECONDS = 0.15
 THROTTLE_RETRY_MIN_SECONDS = 30.0
 THROTTLE_RETRY_FALLBACK_SECONDS = 60.0
+_SECONDARY_CONTRIBUTION_MARKERS = (
+    "foreword",
+    "afterword",
+    "introduction",
+    "editor",
+    "illustrator",
+    "translator",
+    "contributor",
+    "collaborator",
+    "goodreads author",
+    "prólogo",
+    "preface",
+    "commentary",
+    "notes",
+)
 
 
 class HardcoverLookupError(RuntimeError):
@@ -318,6 +333,10 @@ class HardcoverClient:
           ) {
             id title slug description release_date canonical_id
             compilation book_category_id literary_type_id state
+            contributions(limit: 20) {
+              author_id
+              contribution
+            }
             image { url }
             default_cover_edition {
               language { code2 }
@@ -336,9 +355,20 @@ class HardcoverClient:
         logger.info("Fetching books for author HC ID: %d", author_id)
         data = await self._query(query, {"author_id": author_id})
         books_data = data.get("books", [])
-        logger.info("Retrieved %d books for author HC ID: %d", len(books_data), author_id)
+        filtered_books = [
+            book for book in books_data
+            if _has_primary_contribution_for_author(book, author_id)
+        ]
+        filtered_out = len(books_data) - len(filtered_books)
+        logger.info(
+            "Retrieved %d books for author HC ID: %d (%d kept, %d filtered as secondary contributions)",
+            len(books_data),
+            author_id,
+            len(filtered_books),
+            filtered_out,
+        )
 
-        return [self._parse_hc_book(b) for b in books_data]
+        return [self._parse_hc_book(b) for b in filtered_books]
 
     async def get_book(self, book_id: int) -> HCBook | None:
         query = """
@@ -462,3 +492,25 @@ def _normalize_author_query(value: str) -> str:
     lowered = re.sub(r"[^\w\s]", " ", lowered)
     lowered = re.sub(r"\s+", " ", lowered).strip()
     return lowered
+
+
+def _has_primary_contribution_for_author(book: dict, author_id: int) -> bool:
+    contributions = book.get("contributions") or []
+    for contribution_row in contributions:
+        if not isinstance(contribution_row, dict):
+            continue
+        if contribution_row.get("author_id") != author_id:
+            continue
+        role = str(contribution_row.get("contribution") or "").strip().lower()
+        return _is_primary_contribution_role(role)
+    return False
+
+
+def _is_primary_contribution_role(role: str) -> bool:
+    if not role:
+        return True
+    if role in {"author", "writer"}:
+        return True
+    if role in {"co-author", "coauthor", "co author", "co-writer", "cowriter", "co writer"}:
+        return True
+    return not any(marker in role for marker in _SECONDARY_CONTRIBUTION_MARKERS)
