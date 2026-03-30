@@ -1,6 +1,6 @@
 # Booksarr
 
-Booksarr is a Docker-based ebook library manager inspired by Radarr/Sonarr. It scans your local ebook collection, matches files against full author catalogs, and gives you visibility into all the books an author has written, not just the ones you already own. It highlights owned titles inside that larger catalog, enriches metadata from multiple sources, and gives you tools to review hidden books, override covers, refresh individual titles, search IRC for missing books, and track scan outcomes.
+Booksarr is a Docker-based ebook library manager inspired by Radarr/Sonarr. It scans your local ebook collection, matches files against full author catalogs, and gives you visibility into all the books an author has written, not just the ones you already own. It highlights owned titles inside that larger catalog, enriches metadata from multiple sources, and gives you tools to selectively show or hide books based on profiles or manually. You can override covers, refresh individual titles, search IRC for missing books, and track scan outcomes.
 
 ## Screenshots
 
