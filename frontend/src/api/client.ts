@@ -6,7 +6,23 @@ export async function fetchApi<T>(path: string, options?: RequestInit): Promise<
     ...options,
   });
   if (!resp.ok) {
-    throw new Error(`API error: ${resp.status} ${resp.statusText}`);
+    let detail = "";
+    try {
+      const payload = await resp.json();
+      if (typeof payload?.detail === "string") {
+        detail = payload.detail;
+      } else if (payload?.detail) {
+        detail = JSON.stringify(payload.detail);
+      }
+    } catch {
+      try {
+        detail = await resp.text();
+      } catch {
+        detail = "";
+      }
+    }
+
+    throw new Error(detail || `API error: ${resp.status} ${resp.statusText}`);
   }
   return resp.json();
 }

@@ -323,25 +323,54 @@ async def merge_author_directories_route(
     )
     author = result.scalar_one_or_none()
     if not author:
+        logger.warning("Author folder merge requested for missing author_id=%s", author_id)
         raise HTTPException(status_code=404, detail="Author not found")
 
     directories = sorted(author.author_directories, key=lambda item: (not item.is_primary, item.dir_path.lower()))
     if len(directories) < 2:
+        logger.warning(
+            "Author folder merge requested without enough linked directories: author_id=%s author=%r directories=%s",
+            author.id,
+            author.name,
+            [directory.dir_path for directory in directories],
+        )
         raise HTTPException(status_code=400, detail="Author does not have multiple linked directories")
 
     target_directory = next((directory for directory in directories if directory.id == body.target_directory_id), None)
     if target_directory is None:
+        logger.warning(
+            "Author folder merge requested with invalid target directory: author_id=%s author=%r target_directory_id=%s linked_directory_ids=%s",
+            author.id,
+            author.name,
+            body.target_directory_id,
+            [directory.id for directory in directories],
+        )
         raise HTTPException(status_code=400, detail="Selected target directory is not linked to this author")
 
     source_directories = [directory for directory in directories if directory.id != target_directory.id]
     target_path = BOOKS_DIR / target_directory.dir_path
     target_path.mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "Starting author folder merge: author_id=%s author=%r keep=%s merge_sources=%s",
+        author.id,
+        author.name,
+        target_directory.dir_path,
+        [directory.dir_path for directory in source_directories],
+    )
 
     for source_directory in source_directories:
         source_path = BOOKS_DIR / source_directory.dir_path
         if source_path.exists():
             conflicts = _find_merge_conflicts(source_path, target_path)
             if conflicts:
+                logger.warning(
+                    "Author folder merge blocked by conflicting file paths: author_id=%s author=%r source=%s target=%s conflicts=%s",
+                    author.id,
+                    author.name,
+                    source_directory.dir_path,
+                    target_directory.dir_path,
+                    conflicts,
+                )
                 raise HTTPException(
                     status_code=409,
                     detail=(
@@ -358,6 +387,13 @@ async def merge_author_directories_route(
             moved_items += _move_directory_contents(source_path, target_path)
             _remove_empty_directory_tree(source_path)
             if source_path.exists():
+                logger.error(
+                    "Author folder merge left source directory non-empty after move: author_id=%s author=%r source=%s target=%s",
+                    author.id,
+                    author.name,
+                    source_directory.dir_path,
+                    target_directory.dir_path,
+                )
                 raise HTTPException(
                     status_code=500,
                     detail=f"Source folder was not empty after merge: {source_directory.dir_path}",
