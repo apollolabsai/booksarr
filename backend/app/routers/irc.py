@@ -340,7 +340,17 @@ async def _get_queue_counts(db: AsyncSession) -> tuple[int, int]:
         select(func.count(IrcSearchJob.id)).where(IrcSearchJob.status.in_(["queued", "sent", "waiting_dcc", "downloading_results"]))
     )
     download_result = await db.execute(
-        select(func.count(IrcDownloadJob.id)).where(IrcDownloadJob.status.in_(["queued", "sent", "waiting_dcc", "downloading"]))
+        select(func.count(IrcDownloadJob.id)).where(
+            IrcDownloadJob.status.in_([
+                "queued",
+                "sent",
+                "waiting_dcc",
+                "downloading",
+                "extracting",
+                "importing",
+                "refreshing_library",
+            ])
+        )
     )
     return search_result.scalar() or 0, download_result.scalar() or 0
 

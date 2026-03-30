@@ -12,6 +12,8 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gosu \
+    p7zip-full \
+    unar \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt .

@@ -4,6 +4,7 @@ import re
 import shutil
 import ssl
 import struct
+import subprocess
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -34,6 +35,8 @@ IRC_CONNECT_TIMEOUT_SECONDS = 15
 IRC_DCC_CONNECT_TIMEOUT_SECONDS = 15
 IRC_DCC_WAIT_TIMEOUT_SECONDS = 60
 IRC_DCC_CHUNK_TIMEOUT_SECONDS = 10
+IRC_DCC_TRAILING_READ_TIMEOUT_SECONDS = 1.0
+IRC_DCC_MAX_TRAILING_BYTES = 1024 * 1024
 
 _worker_task: asyncio.Task | None = None
 _stop_event: asyncio.Event | None = None
@@ -288,7 +291,14 @@ async def _process_next_download_job(settings: dict[str, object]):
 
         active_download_result = await db.execute(
             select(IrcDownloadJob).where(
-                IrcDownloadJob.status.in_(["sent", "waiting_dcc", "downloading"])
+                IrcDownloadJob.status.in_([
+                    "sent",
+                    "waiting_dcc",
+                    "downloading",
+                    "extracting",
+                    "importing",
+                    "refreshing_library",
+                ])
             ).order_by(IrcDownloadJob.created_at.asc())
         )
         active_download_job = active_download_result.scalars().first()
@@ -559,6 +569,49 @@ async def _handle_dcc_offer(offer: dict[str, Any]):
     logger.info("IRC DCC offer ignored: no active search or download job matched filename=%s", offer["filename"])
 
 
+async def _read_dcc_trailing_bytes(
+    *,
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter | None,
+    handle,
+    bytes_received: int,
+    advertised_size_bytes: int,
+    log_prefix: str,
+) -> int:
+    trailing_bytes = 0
+
+    while trailing_bytes < IRC_DCC_MAX_TRAILING_BYTES:
+        try:
+            chunk = await asyncio.wait_for(
+                reader.read(min(65536, IRC_DCC_MAX_TRAILING_BYTES - trailing_bytes)),
+                timeout=IRC_DCC_TRAILING_READ_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            break
+
+        if not chunk:
+            break
+
+        handle.write(chunk)
+        bytes_received += len(chunk)
+        trailing_bytes += len(chunk)
+
+        if writer is not None:
+            writer.write(struct.pack("!I", bytes_received & 0xFFFFFFFF))
+            await writer.drain()
+
+    if trailing_bytes > 0:
+        logger.warning(
+            "%s sender transmitted %s extra bytes beyond advertised size=%s; final_size=%s",
+            log_prefix,
+            trailing_bytes,
+            advertised_size_bytes,
+            bytes_received,
+        )
+
+    return bytes_received
+
+
 async def _handle_server_line(line: str):
     normalized_line = _normalize_irc_notice_text(line)
 
@@ -689,10 +742,20 @@ async def _download_search_result_archive(job_id: int, offer: dict[str, Any]):
                     writer.write(struct.pack("!I", bytes_received & 0xFFFFFFFF))
                     await writer.drain()
 
+            bytes_received = await _read_dcc_trailing_bytes(
+                reader=reader,
+                writer=writer,
+                handle=handle,
+                bytes_received=bytes_received,
+                advertised_size_bytes=size_bytes,
+                log_prefix=f"IRC search job {job_id} DCC archive",
+            )
+
         logger.info(
-            "IRC search job %s completed DCC archive download: bytes_received=%s filename=%s",
+            "IRC search job %s completed DCC archive download: bytes_received=%s advertised_size=%s filename=%s",
             job_id,
             bytes_received,
+            size_bytes,
             filename,
         )
 
@@ -750,6 +813,7 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
     reader: asyncio.StreamReader | None = None
     writer: asyncio.StreamWriter | None = None
     bytes_received = 0
+    download_completed = False
     deadline = asyncio.get_running_loop().time() + IRC_DCC_WAIT_TIMEOUT_SECONDS
 
     try:
@@ -791,29 +855,90 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
                     writer.write(struct.pack("!I", bytes_received & 0xFFFFFFFF))
                     await writer.drain()
 
+            bytes_received = await _read_dcc_trailing_bytes(
+                reader=reader,
+                writer=writer,
+                handle=handle,
+                bytes_received=bytes_received,
+                advertised_size_bytes=size_bytes,
+                log_prefix=f"IRC download job {job_id} DCC book",
+            )
+
         logger.info(
-            "IRC download job %s completed DCC book download: bytes_received=%s filename=%s",
+            "IRC download job %s completed DCC book download: bytes_received=%s advertised_size=%s filename=%s",
             job_id,
             bytes_received,
+            size_bytes,
             filename,
         )
+        download_completed = True
+
+        import_path = download_path
+        saved_relative_path = str(download_path.relative_to(DOWNLOADS_DIR))
 
         await _update_download_job(
             job_id,
             status="downloaded",
             dcc_filename=filename,
-            saved_path=str(download_path.relative_to(DOWNLOADS_DIR)),
+            saved_path=saved_relative_path,
             error_message=None,
         )
+        _runtime.last_message = f"Download job {job_id} finished downloading; preparing import"
+
+        if download_path.suffix.lower() == ".rar":
+            await _update_download_job(
+                job_id,
+                status="extracting",
+                dcc_filename=filename,
+                saved_path=saved_relative_path,
+                error_message=None,
+            )
+            _runtime.last_message = f"Extracting EPUB from archive for download job {job_id}"
+            logger.info("IRC download job %s extracting archive to locate EPUB: %s", job_id, download_path)
+            import_path = await _extract_epub_from_rar(download_path, job_id)
+            saved_relative_path = str(import_path.relative_to(DOWNLOADS_DIR))
+            await _update_download_job(
+                job_id,
+                status="extracted",
+                dcc_filename=filename,
+                saved_path=saved_relative_path,
+                error_message=None,
+            )
+            _runtime.last_message = f"Archive extracted for download job {job_id}; EPUB ready for import"
+            logger.info(
+                "IRC download job %s extracted EPUB from archive: archive=%s epub=%s",
+                job_id,
+                download_path,
+                import_path,
+            )
 
         settings = await _load_irc_settings()
         if settings["auto_move_to_library"]:
-            moved_path = await _move_download_into_library(download_path, job_id)
+            await _update_download_job(
+                job_id,
+                status="importing",
+                dcc_filename=filename,
+                saved_path=saved_relative_path,
+                error_message=None,
+            )
+            _runtime.last_message = f"Importing download job {job_id} into the library"
+            moved_path = await _move_download_into_library(import_path, job_id)
+            await _update_download_job(
+                job_id,
+                status="refreshing_library",
+                dcc_filename=filename,
+                saved_path=saved_relative_path,
+                moved_to_library_path=str(moved_path.relative_to(BOOKS_DIR)),
+                error_message=None,
+            )
+            _runtime.last_message = f"Refreshing library state for download job {job_id}"
+            logger.info("IRC download job %s refreshing library state after import: %s", job_id, moved_path)
+            await _trigger_library_scan_after_irc_import(moved_path)
             await _update_download_job(
                 job_id,
                 status="moved",
                 dcc_filename=filename,
-                saved_path=str(download_path.relative_to(DOWNLOADS_DIR)),
+                saved_path=saved_relative_path,
                 moved_to_library_path=str(moved_path.relative_to(BOOKS_DIR)),
                 completed_at=datetime.utcnow(),
             )
@@ -823,13 +948,19 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
                 moved_path,
             )
             _runtime.last_message = f"Download job {job_id} moved into library"
-            await _trigger_library_scan_after_irc_import(moved_path)
         else:
-            await _update_download_job(job_id, completed_at=datetime.utcnow())
+            await _update_download_job(
+                job_id,
+                status="extracted" if import_path != download_path else "downloaded",
+                dcc_filename=filename,
+                saved_path=saved_relative_path,
+                completed_at=datetime.utcnow(),
+                error_message=None,
+            )
             logger.info(
                 "IRC download job %s completed and left file in downloads directory: %s",
                 job_id,
-                download_path,
+                import_path,
             )
             _runtime.last_message = f"Download job {job_id} completed and stayed in /downloads"
     except Exception as exc:
@@ -838,7 +969,7 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
         _runtime.last_message = f"Download job {job_id} failed during DCC book handling"
         await _mark_download_job_failed(job_id, str(exc))
         try:
-            if download_path.exists():
+            if download_path.exists() and not download_completed:
                 download_path.unlink()
         except Exception:
             pass
@@ -849,6 +980,93 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
                 await writer.wait_closed()
             except Exception:
                 pass
+
+
+async def _extract_epub_from_rar(archive_path: Path, job_id: int) -> Path:
+    extract_dir = DOWNLOADS_DIR / "irc" / "extracted_books" / f"job_{job_id}"
+    extract_dir.mkdir(parents=True, exist_ok=True)
+
+    backend_errors: list[str] = []
+
+    extract_commands: list[tuple[str, list[str]]] = [
+        (
+            "unar",
+            [
+                "unar",
+                "-f",
+                "-o",
+                str(extract_dir),
+                str(archive_path),
+            ],
+        ),
+        (
+            "7z",
+            [
+                "7z",
+                "x",
+                "-y",
+                f"-o{extract_dir}",
+                str(archive_path),
+            ],
+        ),
+    ]
+
+    extracted = False
+    for backend_name, command in extract_commands:
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+        except (OSError, TimeoutError) as exc:
+            backend_errors.append(f"{backend_name}: {exc}")
+            logger.warning(
+                "RAR extraction backend failed to start or timed out: backend=%s archive=%s error=%s",
+                backend_name,
+                archive_path,
+                exc,
+            )
+            continue
+
+        if process.returncode == 0:
+            extracted = True
+            logger.info("RAR archive extracted successfully using %s: %s", backend_name, archive_path)
+            break
+
+        output = (stderr or stdout or b"").decode("utf-8", errors="ignore").strip()
+        backend_errors.append(
+            f"{backend_name} exited with code {process.returncode}" + (f" ({output[-300:]})" if output else "")
+        )
+        logger.warning(
+            "RAR extraction backend reported an error: backend=%s archive=%s returncode=%s output=%s",
+            backend_name,
+            archive_path,
+            process.returncode,
+            output[-300:] if output else "",
+        )
+
+    if not extracted:
+        raise RuntimeError(
+            f"Could not extract RAR archive {archive_path.name}: " + " | ".join(backend_errors)
+        )
+
+    epub_candidates = [path for path in extract_dir.rglob("*") if path.is_file() and path.suffix.lower() == ".epub"]
+    if not epub_candidates:
+        raise RuntimeError(f"No EPUB file found in archive {archive_path.name}")
+
+    epub_candidates.sort(key=lambda path: path.stat().st_size, reverse=True)
+    extracted_path = epub_candidates[0]
+    if len(epub_candidates) > 1:
+        logger.info(
+            "RAR archive contains multiple EPUBs; selecting largest extracted file for import: archive=%s selected=%s candidates=%s",
+            archive_path,
+            extracted_path,
+            [str(path.relative_to(extract_dir)) for path in epub_candidates],
+        )
+
+    return extracted_path
 
 
 def _send_raw_line(writer: asyncio.StreamWriter, line: str):
@@ -1359,6 +1577,16 @@ async def _get_queue_counts() -> tuple[int, int]:
             select(func.count(IrcSearchJob.id)).where(IrcSearchJob.status.in_(["queued", "sent", "waiting_dcc", "downloading_results"]))
         )
         download_result = await db.execute(
-            select(func.count(IrcDownloadJob.id)).where(IrcDownloadJob.status.in_(["queued", "sent", "waiting_dcc", "downloading"]))
+            select(func.count(IrcDownloadJob.id)).where(
+                IrcDownloadJob.status.in_([
+                    "queued",
+                    "sent",
+                    "waiting_dcc",
+                    "downloading",
+                    "extracting",
+                    "importing",
+                    "refreshing_library",
+                ])
+            )
         )
         return search_result.scalar() or 0, download_result.scalar() or 0

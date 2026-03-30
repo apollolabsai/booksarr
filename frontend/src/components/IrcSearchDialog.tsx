@@ -291,6 +291,14 @@ function formatDownloadStatus(status: string): string {
       return "waiting on download";
     case "downloading":
       return "downloading";
+    case "extracting":
+      return "extracting archive";
+    case "extracted":
+      return "archive extracted";
+    case "importing":
+      return "importing to library";
+    case "refreshing_library":
+      return "refreshing library";
     case "downloaded":
       return "downloaded";
     case "moved":
