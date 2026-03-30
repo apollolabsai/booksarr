@@ -495,15 +495,32 @@ def _normalize_author_query(value: str) -> str:
 
 
 def _has_primary_contribution_for_author(book: dict, author_id: int) -> bool:
+    primary_author_id = _get_primary_author_id(book)
+    return primary_author_id == author_id
+
+
+def _get_primary_author_id(book: dict) -> int | None:
     contributions = book.get("contributions") or []
+    primary_rows: list[tuple[int, str]] = []
+
     for contribution_row in contributions:
         if not isinstance(contribution_row, dict):
             continue
-        if contribution_row.get("author_id") != author_id:
+        contributor_author_id = contribution_row.get("author_id")
+        if contributor_author_id is None:
             continue
         role = str(contribution_row.get("contribution") or "").strip().lower()
-        return _is_primary_contribution_role(role)
-    return False
+        if _is_primary_contribution_role(role):
+            primary_rows.append((contributor_author_id, role))
+
+    if not primary_rows:
+        return None
+
+    blank_role_primary = next((author_id for author_id, role in primary_rows if not role), None)
+    if blank_role_primary is not None:
+        return blank_role_primary
+
+    return primary_rows[0][0]
 
 
 def _is_primary_contribution_role(role: str) -> bool:
