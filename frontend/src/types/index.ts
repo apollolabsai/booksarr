@@ -53,6 +53,21 @@ export interface AuthorPortraitOptionsResponse {
   options: AuthorPortraitOption[];
 }
 
+export interface AuthorPortraitSearchResult {
+  url: string;
+  thumbnail_url: string;
+  width: number | null;
+  height: number | null;
+  title: string;
+  source_url: string;
+}
+
+export interface AuthorPortraitSearchResponse {
+  author_id: number;
+  query: string;
+  results: AuthorPortraitSearchResult[];
+}
+
 export interface SeriesPositionInfo {
   series_id: number;
   series_name: string;

@@ -1,4 +1,4 @@
-"""Image search via Bing for finding high-resolution book covers."""
+"""Image search via Bing for finding high-resolution book covers and portraits."""
 
 import json
 import logging
@@ -33,19 +33,7 @@ class ImageResult:
     source_url: str
 
 
-async def search_book_covers(
-    title: str,
-    author: str,
-    max_results: int = 10,
-) -> list[ImageResult]:
-    """Search Bing Images for book cover art.
-
-    Returns a list of image results with full-resolution URLs and Bing
-    thumbnail URLs (which load reliably without hotlink issues).
-    """
-    query = f"{title} {author} book cover"
-    logger.info("Image search: query='%s'", query[:120])
-
+async def _search_images(query: str, max_results: int = 10) -> list[ImageResult]:
     params = {
         "q": query,
         "qft": "+filterui:imagesize-large",
@@ -63,7 +51,7 @@ async def search_book_covers(
             resp.raise_for_status()
             html = resp.text
     except Exception as e:
-        logger.warning("Image search failed: %s", e)
+        logger.warning("Image search failed for query '%s': %s", query[:120], e)
         return []
 
     # Bing embeds image metadata in HTML-encoded JSON inside m="" attributes
@@ -109,3 +97,22 @@ async def search_book_covers(
         len(results),
     )
     return results
+
+
+async def search_book_covers(
+    title: str,
+    author: str,
+    max_results: int = 10,
+) -> list[ImageResult]:
+    """Search Bing Images for book cover art."""
+    query = f"{title} {author} book cover".strip()
+    return await _search_images(query, max_results=max_results)
+
+
+async def search_author_portraits(
+    author_name: str,
+    max_results: int = 10,
+) -> list[ImageResult]:
+    """Search Bing Images for author portraits or headshots."""
+    query = f"{author_name} author portrait".strip()
+    return await _search_images(query, max_results=max_results)

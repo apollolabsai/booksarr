@@ -51,6 +51,21 @@ class AuthorPortraitOptionsResponse(BaseModel):
     options: list["AuthorPortraitOption"]
 
 
+class AuthorPortraitSearchResult(BaseModel):
+    url: str
+    thumbnail_url: str
+    width: int | None
+    height: int | None
+    title: str
+    source_url: str
+
+
+class AuthorPortraitSearchResponse(BaseModel):
+    author_id: int
+    query: str
+    results: list["AuthorPortraitSearchResult"]
+
+
 class AuthorPortraitSelectionRequest(BaseModel):
     source: str
     image_url: str
@@ -157,3 +172,4 @@ class SeriesBookEntry(BaseModel):
 AuthorDetail.model_rebuild()
 SeriesInAuthor.model_rebuild()
 AuthorPortraitOptionsResponse.model_rebuild()
+AuthorPortraitSearchResponse.model_rebuild()
