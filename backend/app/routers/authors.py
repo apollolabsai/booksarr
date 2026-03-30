@@ -32,6 +32,7 @@ from backend.app.utils.api_usage import begin_api_usage_batch, clear_api_usage_b
 
 router = APIRouter(prefix="/api/authors", tags=["authors"])
 logger = logging.getLogger("booksarr.authors")
+_IGNORABLE_FOLDER_MERGE_FILES = {".ds_store", "thumbs.db", "desktop.ini"}
 
 
 @router.get("/hardcover-search", response_model=AuthorSearchResponse)
@@ -257,6 +258,8 @@ def _find_merge_conflicts(source_dir: Path, target_dir: Path, relative_path: Pat
     conflicts: list[str] = []
 
     for source_item in source_dir.iterdir():
+        if _is_ignorable_folder_merge_path(source_item):
+            continue
         rel_item = rel_root / source_item.name if rel_root != Path(".") else Path(source_item.name)
         target_item = target_dir / source_item.name
         if not target_item.exists():
@@ -272,6 +275,12 @@ def _find_merge_conflicts(source_dir: Path, target_dir: Path, relative_path: Pat
 def _move_directory_contents(source_dir: Path, target_dir: Path) -> int:
     moved_items = 0
     for source_item in sorted(source_dir.iterdir(), key=lambda item: item.name.lower()):
+        if _is_ignorable_folder_merge_path(source_item):
+            if source_item.is_dir():
+                shutil.rmtree(source_item, ignore_errors=True)
+            else:
+                source_item.unlink(missing_ok=True)
+            continue
         target_item = target_dir / source_item.name
         if source_item.is_dir() and target_item.exists() and target_item.is_dir():
             moved_items += _move_directory_contents(source_item, target_item)
@@ -308,6 +317,10 @@ def _replace_absolute_dir_prefix(path_text: str, source_dir_path: Path, target_d
     if path_text.startswith(source_prefix):
         return f"{target_dir_path}/{path_text[len(source_prefix):]}"
     return path_text
+
+
+def _is_ignorable_folder_merge_path(path: Path) -> bool:
+    return path.name.lower() in _IGNORABLE_FOLDER_MERGE_FILES
 
 
 @router.post("/{author_id}/merge-directories", response_model=AuthorDirectoryMergeResponse)
