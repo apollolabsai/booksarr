@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
-import { useAuthor, useRefreshAuthor } from "../api/authors";
+import { useAuthor, useMergeAuthorDirectories, useRefreshAuthor } from "../api/authors";
 import { getImageUrl } from "../types";
 import type { BookInAuthor, SeriesInAuthor } from "../types";
 import BookCard from "../components/BookCard";
@@ -23,14 +23,26 @@ export default function AuthorDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { data: author, isLoading } = useAuthor(Number(id));
   const refreshAuthor = useRefreshAuthor();
+  const mergeAuthorDirectories = useMergeAuthorDirectories();
   const [sort, setSort] = useState("series");
   const [view, setView] = useState<"grid" | "table">("grid");
   const [search, setSearch] = useState("");
   const [bioExpanded, setBioExpanded] = useState(false);
   const [portraitPickerOpen, setPortraitPickerOpen] = useState(false);
   const [portraitMenuOpen, setPortraitMenuOpen] = useState(false);
+  const [mergeFoldersOpen, setMergeFoldersOpen] = useState(false);
+  const [mergeTargetDirectoryId, setMergeTargetDirectoryId] = useState<number | null>(null);
   const portraitMenuRef = useRef<HTMLDivElement | null>(null);
   const handleSearch = useCallback((value: string) => setSearch(value), []);
+
+  useEffect(() => {
+    if (!author) {
+      setMergeTargetDirectoryId(null);
+      return;
+    }
+    const preferredDirectory = author.author_directories.find((directory) => directory.is_primary) ?? author.author_directories[0];
+    setMergeTargetDirectoryId(preferredDirectory?.id ?? null);
+  }, [author]);
 
   useEffect(() => {
     if (!portraitMenuOpen) return;
@@ -243,8 +255,19 @@ export default function AuthorDetailPage() {
           </div>
           {author.author_directories.length > 0 && (
             <div className="mb-4">
-              <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                Linked Folder Paths
+              <div className="mb-1 flex items-center gap-3">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Linked Folder Paths
+                </div>
+                {author.author_directories.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => setMergeFoldersOpen((current) => !current)}
+                    className="rounded-md border border-slate-600 bg-slate-800 px-2 py-1 text-[11px] font-medium text-slate-200 transition-colors hover:bg-slate-700"
+                  >
+                    {mergeFoldersOpen ? "Cancel Merge" : "Merge Folders"}
+                  </button>
+                )}
               </div>
               <div className="space-y-1">
                 {author.author_directories.map((directory) => (
@@ -260,6 +283,75 @@ export default function AuthorDetailPage() {
                   </div>
                 ))}
               </div>
+              {mergeFoldersOpen && author.author_directories.length > 1 && (
+                <div className="mt-3 rounded-lg border border-slate-700 bg-slate-900/70 p-3">
+                  <div className="mb-2 text-sm font-medium text-slate-200">Choose the folder to keep</div>
+                  <div className="mb-3 text-xs text-slate-400">
+                    Booksarr will move all books from the other linked author folders into the selected folder, update linked file paths, and remove the empty folder mappings. If conflicting file names already exist, the merge will stop instead of overwriting anything.
+                  </div>
+                  <div className="space-y-2">
+                    {author.author_directories.map((directory) => (
+                      <label
+                        key={directory.id}
+                        className="flex cursor-pointer items-start gap-2 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800/70"
+                      >
+                        <input
+                          type="radio"
+                          name="merge-target-directory"
+                          checked={mergeTargetDirectoryId === directory.id}
+                          onChange={() => setMergeTargetDirectoryId(directory.id)}
+                          className="mt-0.5"
+                        />
+                        <div className="flex min-w-0 items-center gap-2">
+                          <code className="break-all text-xs text-slate-200">{directory.dir_path}</code>
+                          {directory.is_primary && (
+                            <span className="rounded bg-emerald-500/15 px-2 py-0.5 text-[11px] font-medium text-emerald-300">
+                              Current primary
+                            </span>
+                          )}
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                  {mergeAuthorDirectories.error && (
+                    <div className="mt-3 text-xs text-rose-300">
+                      {mergeAuthorDirectories.error instanceof Error
+                        ? mergeAuthorDirectories.error.message
+                        : "Unable to merge author folders"}
+                    </div>
+                  )}
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!mergeTargetDirectoryId) return;
+                        mergeAuthorDirectories.mutate(
+                          {
+                            authorId: author.id,
+                            targetDirectoryId: mergeTargetDirectoryId,
+                          },
+                          {
+                            onSuccess: () => {
+                              setMergeFoldersOpen(false);
+                            },
+                          },
+                        );
+                      }}
+                      disabled={!mergeTargetDirectoryId || mergeAuthorDirectories.isPending}
+                      className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {mergeAuthorDirectories.isPending ? "Merging..." : "Merge Into Selected Folder"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMergeFoldersOpen(false)}
+                      className="rounded-md border border-slate-600 bg-slate-800 px-3 py-1.5 text-sm text-slate-200 transition-colors hover:bg-slate-700"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
           {author.bio && (

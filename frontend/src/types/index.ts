@@ -122,6 +122,14 @@ export interface AuthorDetail extends Author {
   series: SeriesInAuthor[];
 }
 
+export interface AuthorDirectoryMergeResponse {
+  status: string;
+  message: string;
+  kept_directory: string;
+  removed_directories: string[];
+  moved_items: number;
+}
+
 export interface Book {
   id: number;
   title: string;

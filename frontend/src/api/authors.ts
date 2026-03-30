@@ -3,6 +3,7 @@ import { fetchApi } from "./client";
 import type {
   Author,
   AuthorDetail,
+  AuthorDirectoryMergeResponse,
   AuthorPortraitOptionsResponse,
   AuthorSearchResponse,
 } from "../types";
@@ -92,6 +93,29 @@ export function useRefreshAuthor() {
     onSuccess: (_, authorId) => {
       queryClient.invalidateQueries({ queryKey: ["authors"] });
       queryClient.invalidateQueries({ queryKey: ["authors", authorId] });
+      queryClient.invalidateQueries({ queryKey: ["books"] });
+      queryClient.invalidateQueries({ queryKey: ["hiddenBooks"] });
+    },
+  });
+}
+
+export function useMergeAuthorDirectories() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      authorId,
+      targetDirectoryId,
+    }: {
+      authorId: number;
+      targetDirectoryId: number;
+    }) =>
+      fetchApi<AuthorDirectoryMergeResponse>(`/authors/${authorId}/merge-directories`, {
+        method: "POST",
+        body: JSON.stringify({ target_directory_id: targetDirectoryId }),
+      }),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["authors"] });
+      queryClient.invalidateQueries({ queryKey: ["authors", variables.authorId] });
       queryClient.invalidateQueries({ queryKey: ["books"] });
       queryClient.invalidateQueries({ queryKey: ["hiddenBooks"] });
     },

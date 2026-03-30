@@ -1,6 +1,9 @@
 import json
 import logging
 import re
+import shutil
+from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -9,12 +12,13 @@ from sqlalchemy.orm import selectinload
 
 from backend.app.config import BOOKS_DIR
 from backend.app.database import get_db
-from backend.app.models import Author, AuthorDirectory, Book, BookSeries, Series
+from backend.app.models import Author, AuthorDirectory, Book, BookFile, BookSeries, Series
 from backend.app.schemas.author import (
     AuthorSummary, AuthorDetail, BookInAuthor, SeriesPositionInfo,
     SeriesInAuthor, SeriesBookEntry,
     AuthorPortraitOption, AuthorPortraitOptionsResponse, AuthorPortraitSelectionRequest,
     AuthorSearchCandidate, AuthorSearchResponse, AuthorAddRequest, LocalBookFile, AuthorDirectoryEntry,
+    AuthorDirectoryMergeRequest, AuthorDirectoryMergeResponse,
 )
 from backend.app.services.hardcover import HardcoverClient, HardcoverLookupError
 from backend.app.utils.book_visibility import get_book_visibility_settings, is_book_visible
@@ -246,6 +250,160 @@ async def refresh_author_route(author_id: int):
         raise HTTPException(status_code=502, detail=f"Hardcover lookup failed: {exc}") from exc
 
     return {"status": "ok", "message": "Author refreshed"}
+
+
+def _find_merge_conflicts(source_dir: Path, target_dir: Path, relative_path: Path | None = None) -> list[str]:
+    rel_root = relative_path or Path(".")
+    conflicts: list[str] = []
+
+    for source_item in source_dir.iterdir():
+        rel_item = rel_root / source_item.name if rel_root != Path(".") else Path(source_item.name)
+        target_item = target_dir / source_item.name
+        if not target_item.exists():
+            continue
+        if source_item.is_dir() and target_item.is_dir():
+            conflicts.extend(_find_merge_conflicts(source_item, target_item, rel_item))
+            continue
+        conflicts.append(rel_item.as_posix())
+
+    return conflicts
+
+
+def _move_directory_contents(source_dir: Path, target_dir: Path) -> int:
+    moved_items = 0
+    for source_item in sorted(source_dir.iterdir(), key=lambda item: item.name.lower()):
+        target_item = target_dir / source_item.name
+        if source_item.is_dir() and target_item.exists() and target_item.is_dir():
+            moved_items += _move_directory_contents(source_item, target_item)
+            _remove_empty_directory_tree(source_item)
+            continue
+
+        shutil.move(str(source_item), str(target_item))
+        moved_items += 1
+
+    return moved_items
+
+
+def _remove_empty_directory_tree(root: Path):
+    if not root.exists() or not root.is_dir():
+        return
+
+    for child in root.iterdir():
+        if child.is_dir():
+            _remove_empty_directory_tree(child)
+
+    if not any(root.iterdir()):
+        root.rmdir()
+
+
+def _replace_dir_prefix(file_path: str, source_dir_name: str, target_dir_name: str) -> str:
+    prefix = f"{source_dir_name}/"
+    if file_path.startswith(prefix):
+        return f"{target_dir_name}/{file_path[len(prefix):]}"
+    return file_path
+
+
+def _replace_absolute_dir_prefix(path_text: str, source_dir_path: Path, target_dir_path: Path) -> str:
+    source_prefix = f"{source_dir_path}/"
+    if path_text.startswith(source_prefix):
+        return f"{target_dir_path}/{path_text[len(source_prefix):]}"
+    return path_text
+
+
+@router.post("/{author_id}/merge-directories", response_model=AuthorDirectoryMergeResponse)
+async def merge_author_directories_route(
+    author_id: int,
+    body: AuthorDirectoryMergeRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Author)
+        .options(selectinload(Author.author_directories))
+        .where(Author.id == author_id)
+    )
+    author = result.scalar_one_or_none()
+    if not author:
+        raise HTTPException(status_code=404, detail="Author not found")
+
+    directories = sorted(author.author_directories, key=lambda item: (not item.is_primary, item.dir_path.lower()))
+    if len(directories) < 2:
+        raise HTTPException(status_code=400, detail="Author does not have multiple linked directories")
+
+    target_directory = next((directory for directory in directories if directory.id == body.target_directory_id), None)
+    if target_directory is None:
+        raise HTTPException(status_code=400, detail="Selected target directory is not linked to this author")
+
+    source_directories = [directory for directory in directories if directory.id != target_directory.id]
+    target_path = BOOKS_DIR / target_directory.dir_path
+    target_path.mkdir(parents=True, exist_ok=True)
+
+    for source_directory in source_directories:
+        source_path = BOOKS_DIR / source_directory.dir_path
+        if source_path.exists():
+            conflicts = _find_merge_conflicts(source_path, target_path)
+            if conflicts:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Cannot merge folder '{source_directory.dir_path}' into '{target_directory.dir_path}' "
+                        f"because conflicting file paths already exist: {', '.join(conflicts[:5])}"
+                    ),
+                )
+
+    moved_items = 0
+    removed_directories: list[str] = []
+    for source_directory in source_directories:
+        source_path = BOOKS_DIR / source_directory.dir_path
+        if source_path.exists():
+            moved_items += _move_directory_contents(source_path, target_path)
+            _remove_empty_directory_tree(source_path)
+            if source_path.exists():
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Source folder was not empty after merge: {source_directory.dir_path}",
+                )
+
+            book_files_result = await db.execute(
+                select(BookFile).where(BookFile.file_path.like(f"{source_directory.dir_path}/%"))
+            )
+            for book_file in book_files_result.scalars().all():
+                book_file.file_path = _replace_dir_prefix(
+                    book_file.file_path,
+                    source_directory.dir_path,
+                    target_directory.dir_path,
+                )
+                if book_file.local_cover_path:
+                    book_file.local_cover_path = _replace_absolute_dir_prefix(
+                        book_file.local_cover_path,
+                        source_path,
+                        target_path,
+                    )
+
+        await db.delete(source_directory)
+        removed_directories.append(source_directory.dir_path)
+
+    for directory in directories:
+        directory.is_primary = directory.id == target_directory.id
+        if directory.id == target_directory.id:
+            directory.last_seen_at = datetime.utcnow()
+
+    await db.commit()
+    logger.info(
+        "Merged author directories: author_id=%s author=%r kept=%s removed=%s moved_items=%s",
+        author.id,
+        author.name,
+        target_directory.dir_path,
+        removed_directories,
+        moved_items,
+    )
+
+    return AuthorDirectoryMergeResponse(
+        status="ok",
+        message="Author folders merged",
+        kept_directory=target_directory.dir_path,
+        removed_directories=removed_directories,
+        moved_items=moved_items,
+    )
 
 
 @router.get("", response_model=list[AuthorSummary])

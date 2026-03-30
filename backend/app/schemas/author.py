@@ -75,6 +75,18 @@ class AuthorAddRequest(BaseModel):
     hardcover_id: int
 
 
+class AuthorDirectoryMergeRequest(BaseModel):
+    target_directory_id: int
+
+
+class AuthorDirectoryMergeResponse(BaseModel):
+    status: str
+    message: str
+    kept_directory: str
+    removed_directories: list[str]
+    moved_items: int
+
+
 class LocalBookFile(BaseModel):
     id: int
     file_path: str
