@@ -191,9 +191,15 @@ export default function IrcSearchDialog({
               </div>
 
               {(results ?? []).length === 0 ? (
-                <div className="text-sm text-slate-400">
-                  No parsed results yet. Once a DCC result archive arrives and is parsed, the lines will appear here.
-                </div>
+                job?.status === "failed" ? (
+                  <div className="text-sm text-rose-300">
+                    {job.error_message || "The IRC search did not return any results."}
+                  </div>
+                ) : (
+                  <div className="text-sm text-slate-400">
+                    No parsed results yet. Once a DCC result archive arrives and is parsed, the lines will appear here.
+                  </div>
+                )
               ) : (
                 <div className="divide-y divide-slate-700 overflow-hidden rounded-lg border border-slate-700 bg-slate-900/40">
                   {results?.map((result) => (

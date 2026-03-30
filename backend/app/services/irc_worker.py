@@ -60,6 +60,8 @@ class IrcRuntimeState:
 
 
 _runtime = IrcRuntimeState()
+_IRC_COLOR_RE = re.compile(r"\x03(?:\d{1,2}(?:,\d{1,2})?)?")
+_IRC_FORMAT_RE = re.compile(r"[\x02\x0f\x16\x1d\x1f]")
 
 
 def get_runtime_status() -> IrcRuntimeState:
@@ -459,6 +461,36 @@ async def _fail_active_channel_job(error_message: str):
             )
 
 
+async def _fail_active_search_job(error_message: str):
+    async with async_session() as db:
+        active_search_result = await db.execute(
+            select(IrcSearchJob).where(
+                IrcSearchJob.status.in_(["sent", "waiting_dcc", "downloading_results"])
+            ).order_by(IrcSearchJob.updated_at.asc())
+        )
+        active_search_job = active_search_result.scalars().first()
+        if active_search_job is None:
+            return
+
+        active_search_job.status = "failed"
+        active_search_job.error_message = error_message
+        active_search_job.updated_at = datetime.utcnow()
+        active_search_job.completed_at = datetime.utcnow()
+        await db.commit()
+        logger.info(
+            "IRC search job %s completed early with a server notice: %s",
+            active_search_job.id,
+            error_message,
+        )
+
+
+def _normalize_irc_notice_text(line: str) -> str:
+    cleaned = _IRC_COLOR_RE.sub("", line)
+    cleaned = _IRC_FORMAT_RE.sub("", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
 async def _handle_dcc_offer(offer: dict[str, Any]):
     global _archive_task, _book_download_task
 
@@ -528,6 +560,14 @@ async def _handle_dcc_offer(offer: dict[str, Any]):
 
 
 async def _handle_server_line(line: str):
+    normalized_line = _normalize_irc_notice_text(line)
+
+    if " NOTICE " in line and "SearchBot" in normalized_line and "returned no matches" in normalized_line.lower():
+        _runtime.last_message = "SearchBot reported no matches for the active query"
+        logger.info("IRC SearchBot notice indicates no matches: %s", normalized_line)
+        await _fail_active_search_job("Search returned no matches")
+        return
+
     if " 001 " in line:
         logger.info("IRC registration completed; requesting channel join for %s", _runtime.channel)
         await _join_configured_channel()
