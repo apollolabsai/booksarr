@@ -1,14 +1,24 @@
 # Booksarr
 
-Booksarr is a Docker-based ebook library manager inspired by Radarr/Sonarr. It scans your local ebook collection, matches files against full author catalogs, enriches metadata from multiple sources, and gives you tools to review hidden books, override covers, refresh individual titles, search IRC for missing books, and track scan outcomes.
+Booksarr is a Docker-based ebook library manager inspired by Radarr/Sonarr. It scans your local ebook collection, matches files against full author catalogs, and gives you visibility into all the books an author has written, not just the ones you already own. It highlights owned titles inside that larger catalog, enriches metadata from multiple sources, and gives you tools to review hidden books, override covers, refresh individual titles, search IRC for missing books, and track scan outcomes.
+
+## Screenshots
+
+![Authors view](media/authorpng.png)
+
+![Author detail view](media/authordetail.png)
+
+![Books view](media/books.png)
 
 ## Features
 
 - **Local library scanning** — Discovers EPUBs from your mounted library, reads sidecar `metadata.opf` when present, and falls back to internal EPUB metadata and filename parsing.
+- **Full author catalog visibility** — Shows the broader author bibliography alongside your collection so you can see what you own, what is missing, and where you are complete.
 - **Multi-source metadata** — Uses [Hardcover](https://hardcover.app), Google Books, Open Library, and Wikimedia where appropriate for books, covers, publish dates, ISBNs, and author portraits.
 - **Configurable visibility profiles** — Control which books are shown with profile rules such as non-English, upcoming releases, pending Hardcover records, likely collections, and valid ISBN requirements.
 - **Hidden books review** — Dedicated hidden-books page shows every hidden title and every rule that hid it, with support for manual hide/unhide overrides.
 - **Series-aware browsing** — Author pages group books by series and preserve reading-order positions.
+- **Owned-book highlighting** — Marks which books you own inside the full visible catalog, including duplicate copy counts when the same title exists more than once locally.
 - **Poster and portrait management** — Manually choose a book poster or author portrait from available candidates and keep that choice through future refreshes.
 - **Per-book actions** — Refresh one book from scratch, download its local file, hide it, or launch an IRC search from either table or grid view.
 - **IRC book acquisition workflow** — Search for a missing book from the book UI, get parsed results back in the app, download a selection over DCC, extract supported archives, and optionally move the result straight into your library.
