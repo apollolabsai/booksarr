@@ -1,10 +1,12 @@
 import { useState, useCallback } from "react";
 import { useBooks } from "../api/books";
+import MobileBookList from "../components/MobileBookList";
 import SortControls from "../components/SortControls";
 import SearchBar from "../components/SearchBar";
 import ViewToggle from "../components/ViewToggle";
 import BookTable from "../components/BookTable";
 import BookCard from "../components/BookCard";
+import { useIsMobile } from "../hooks/useIsMobile";
 
 const SORT_OPTIONS = [
   { value: "title", label: "Title A-Z" },
@@ -27,6 +29,7 @@ export default function BooksPage() {
   const [view, setView] = useState<"grid" | "table">("grid");
   const owned = filter === "owned" ? true : filter === "missing" ? false : undefined;
   const { data: books, isLoading } = useBooks(sort, owned, search);
+  const isMobile = useIsMobile();
 
   const handleSearch = useCallback((v: string) => setSearch(v), []);
 
@@ -40,9 +43,9 @@ export default function BooksPage() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold">Books</h2>
-        <div className="flex items-center gap-3">
+      <div className={`mb-6 ${isMobile ? "space-y-3" : "flex items-center justify-between"}`}>
+        <h2 className={`${isMobile ? "text-xl" : "text-2xl"} font-bold`}>Books</h2>
+        <div className={`flex ${isMobile ? "flex-col gap-2" : "items-center gap-3"}`}>
           <SearchBar value={search} onChange={handleSearch} placeholder="Search books..." />
           <select
             value={filter}
@@ -53,8 +56,22 @@ export default function BooksPage() {
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
           </select>
-          <SortControls options={SORT_OPTIONS} value={sort} onChange={setSort} />
-          <ViewToggle view={view} onChange={setView} />
+          {isMobile ? (
+            <select
+              value={sort}
+              onChange={(e) => setSort(e.target.value)}
+              className="bg-slate-700 border border-slate-600 text-slate-200 text-sm rounded-lg px-3 py-2"
+            >
+              {SORT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          ) : (
+            <>
+              <SortControls options={SORT_OPTIONS} value={sort} onChange={setSort} />
+              <ViewToggle view={view} onChange={setView} />
+            </>
+          )}
         </div>
       </div>
 
@@ -62,6 +79,8 @@ export default function BooksPage() {
         <div className="text-center py-16">
           <p className="text-slate-400 text-lg">No books found</p>
         </div>
+      ) : isMobile ? (
+        <MobileBookList books={books} showAuthor={true} />
       ) : view === "table" ? (
         <BookTable books={books} showAuthor={true} />
       ) : (

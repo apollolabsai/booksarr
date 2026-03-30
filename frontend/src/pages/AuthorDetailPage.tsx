@@ -5,11 +5,13 @@ import { getImageUrl } from "../types";
 import type { BookInAuthor, SeriesInAuthor } from "../types";
 import BookCard from "../components/BookCard";
 import BookTable from "../components/BookTable";
+import MobileBookList from "../components/MobileBookList";
 import SeriesGroup from "../components/SeriesGroup";
 import SortControls from "../components/SortControls";
 import ViewToggle from "../components/ViewToggle";
 import SearchBar from "../components/SearchBar";
 import AuthorPortraitPickerDialog from "../components/AuthorPortraitPickerDialog";
+import { useIsMobile } from "../hooks/useIsMobile";
 
 const SORT_OPTIONS = [
   { value: "series", label: "By Series" },
@@ -24,6 +26,7 @@ export default function AuthorDetailPage() {
   const { data: author, isLoading } = useAuthor(Number(id));
   const refreshAuthor = useRefreshAuthor();
   const mergeAuthorDirectories = useMergeAuthorDirectories();
+  const isMobile = useIsMobile();
   const [sort, setSort] = useState("series");
   const [view, setView] = useState<"grid" | "table">("grid");
   const [search, setSearch] = useState("");
@@ -105,6 +108,10 @@ export default function AuthorDetailPage() {
   const displayBio = bioExpanded ? author.bio : author.bio?.substring(0, 400);
 
   const renderBooks = () => {
+    if (isMobile) {
+      return <MobileBookList books={sortedBooks} showAuthor={false} />;
+    }
+
     if (view === "table") {
       if (sort === "series") {
         return (
@@ -183,10 +190,10 @@ export default function AuthorDetailPage() {
       </Link>
 
       {/* Hero Section */}
-      <div className="flex gap-6 mb-8 mt-4">
+      <div className={`${isMobile ? "mt-2 mb-6 block" : "mt-4 mb-8 flex gap-6"}`}>
         <div
           ref={portraitMenuRef}
-          className="group relative w-40 h-52 flex-shrink-0 rounded-lg overflow-hidden bg-slate-700"
+          className={`group relative overflow-hidden rounded-lg bg-slate-700 ${isMobile ? "mx-auto mb-4 h-40 w-32" : "h-52 w-40 flex-shrink-0"}`}
         >
           {imgUrl ? (
             <img src={imgUrl} alt={author.name} className="w-full h-full object-cover" />
@@ -195,45 +202,47 @@ export default function AuthorDetailPage() {
               {author.name.charAt(0)}
             </div>
           )}
-          <div className="absolute bottom-2 left-2 right-2">
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setPortraitMenuOpen((current) => !current);
-              }}
-              className="rounded-md border border-slate-500/60 bg-slate-900/70 px-1.5 py-1 text-slate-100 opacity-0 transition-opacity hover:bg-slate-800/90 group-hover:opacity-100"
-              title="Author actions"
-            >
-              <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
-                <circle cx="5" cy="12" r="1.75" />
-                <circle cx="12" cy="12" r="1.75" />
-                <circle cx="19" cy="12" r="1.75" />
-              </svg>
-            </button>
-            {portraitMenuOpen && (
-              <div
-                className="absolute bottom-9 left-0 right-0 z-20 rounded-lg border border-slate-600 bg-slate-900/95 p-1 shadow-xl"
-                onClick={(e) => e.stopPropagation()}
+          {!isMobile && (
+            <div className="absolute bottom-2 left-2 right-2">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPortraitMenuOpen((current) => !current);
+                }}
+                className="rounded-md border border-slate-500/60 bg-slate-900/70 px-1.5 py-1 text-slate-100 opacity-0 transition-opacity hover:bg-slate-800/90 group-hover:opacity-100"
+                title="Author actions"
               >
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPortraitMenuOpen(false);
-                    setPortraitPickerOpen(true);
-                  }}
-                  className="flex w-full items-center rounded-md px-2.5 py-1.5 text-xs text-slate-200 transition-colors hover:bg-slate-800"
+                <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
+                  <circle cx="5" cy="12" r="1.75" />
+                  <circle cx="12" cy="12" r="1.75" />
+                  <circle cx="19" cy="12" r="1.75" />
+                </svg>
+              </button>
+              {portraitMenuOpen && (
+                <div
+                  className="absolute bottom-9 left-0 right-0 z-20 rounded-lg border border-slate-600 bg-slate-900/95 p-1 shadow-xl"
+                  onClick={(e) => e.stopPropagation()}
                 >
-                  Choose Portrait
-                </button>
-              </div>
-            )}
-          </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPortraitMenuOpen(false);
+                      setPortraitPickerOpen(true);
+                    }}
+                    className="flex w-full items-center rounded-md px-2.5 py-1.5 text-xs text-slate-200 transition-colors hover:bg-slate-800"
+                  >
+                    Choose Portrait
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
         <div className="flex-1 min-w-0">
           <div className="mb-2">
-            <div className="flex items-center gap-3">
-              <h1 className="text-3xl font-bold">{author.name}</h1>
+            <div className={`flex ${isMobile ? "flex-col items-start gap-2" : "items-center gap-3"}`}>
+              <h1 className={`${isMobile ? "text-2xl" : "text-3xl"} font-bold`}>{author.name}</h1>
               <button
                 type="button"
                 onClick={() => refreshAuthor.mutate(author.id)}
@@ -371,12 +380,26 @@ export default function AuthorDetailPage() {
       </div>
 
       {/* Sort + View Controls */}
-      <div className="flex items-center justify-between mb-6">
+      <div className={`mb-6 ${isMobile ? "space-y-3" : "flex items-center justify-between"}`}>
         <h2 className="text-xl font-semibold">Books</h2>
-        <div className="flex items-center gap-3">
+        <div className={`flex ${isMobile ? "flex-col gap-2" : "items-center gap-3"}`}>
           <SearchBar value={search} onChange={handleSearch} placeholder="Search this author..." />
-          <SortControls options={SORT_OPTIONS} value={sort} onChange={setSort} />
-          <ViewToggle view={view} onChange={setView} />
+          {isMobile ? (
+            <select
+              value={sort}
+              onChange={(e) => setSort(e.target.value)}
+              className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-200"
+            >
+              {SORT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          ) : (
+            <>
+              <SortControls options={SORT_OPTIONS} value={sort} onChange={setSort} />
+              <ViewToggle view={view} onChange={setView} />
+            </>
+          )}
         </div>
       </div>
 

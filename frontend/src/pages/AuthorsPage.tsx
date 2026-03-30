@@ -1,11 +1,13 @@
 import { useState, useCallback } from "react";
 import { useAuthors } from "../api/authors";
 import AuthorCard from "../components/AuthorCard";
+import MobileAuthorList from "../components/MobileAuthorList";
 import AuthorTable from "../components/AuthorTable";
 import SortControls from "../components/SortControls";
 import SearchBar from "../components/SearchBar";
 import ViewToggle from "../components/ViewToggle";
 import AddAuthorDialog from "../components/AddAuthorDialog";
+import { useIsMobile } from "../hooks/useIsMobile";
 
 const SORT_OPTIONS = [
   { value: "name", label: "Name A-Z" },
@@ -20,6 +22,7 @@ export default function AuthorsPage() {
   const [view, setView] = useState<"grid" | "table">("grid");
   const [addAuthorOpen, setAddAuthorOpen] = useState(false);
   const { data: authors, isLoading } = useAuthors(sort, search);
+  const isMobile = useIsMobile();
 
   const handleSearch = useCallback((v: string) => setSearch(v), []);
   const authorCount = authors?.length ?? 0;
@@ -36,16 +39,16 @@ export default function AuthorsPage() {
 
   return (
     <div>
-      <div className="mb-6 flex items-start justify-between gap-4">
+      <div className={`mb-6 ${isMobile ? "space-y-4" : "flex items-start justify-between gap-4"}`}>
         <div>
-          <h2 className="text-2xl font-bold">Authors</h2>
+          <h2 className={`${isMobile ? "text-xl" : "text-2xl"} font-bold`}>Authors</h2>
           <div className="mt-2 flex flex-wrap gap-4 text-sm text-slate-400">
             <span><span className="font-semibold text-slate-200">{authorCount}</span> authors</span>
             <span><span className="font-semibold text-emerald-400">{ownedBookCount}</span> books owned</span>
             <span><span className="font-semibold text-slate-200">{visibleBookCount}</span> books total</span>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className={`flex ${isMobile ? "flex-col items-stretch gap-2" : "items-center gap-3"}`}>
           <button
             type="button"
             onClick={() => setAddAuthorOpen(true)}
@@ -54,8 +57,22 @@ export default function AuthorsPage() {
             Add Author
           </button>
           <SearchBar value={search} onChange={handleSearch} placeholder="Search authors..." />
-          <SortControls options={SORT_OPTIONS} value={sort} onChange={setSort} />
-          <ViewToggle view={view} onChange={setView} />
+          {isMobile ? (
+            <select
+              value={sort}
+              onChange={(e) => setSort(e.target.value)}
+              className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-200"
+            >
+              {SORT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          ) : (
+            <>
+              <SortControls options={SORT_OPTIONS} value={sort} onChange={setSort} />
+              <ViewToggle view={view} onChange={setView} />
+            </>
+          )}
         </div>
       </div>
 
@@ -69,6 +86,8 @@ export default function AuthorsPage() {
             Go to <a href="/settings" className="text-emerald-400 hover:underline">Settings</a> to configure your API key and scan your library.
           </p>
         </div>
+      ) : isMobile ? (
+        <MobileAuthorList authors={authors} />
       ) : view === "table" ? (
         <AuthorTable authors={authors} />
       ) : (
