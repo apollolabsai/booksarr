@@ -798,14 +798,15 @@ async def _sync_author_hardcover_catalog(
     db: AsyncSession,
     author: Author,
     client: HardcoverClient,
-) -> int:
+) -> tuple[int, int]:
     books_added = 0
+    books_removed = 0
 
     if not author.hardcover_id:
         hc_author = await client.search_author(author.name)
         if not hc_author:
             logger.info("No Hardcover author match found during author refresh: %s", author.name)
-            return 0
+            return 0, 0
         author.hardcover_id = hc_author.id
         author.hardcover_slug = hc_author.slug
         author.bio = hc_author.bio
@@ -816,7 +817,44 @@ async def _sync_author_hardcover_catalog(
     canonical_books = [b for b in hc_books if b.is_canonical]
     valid_books = [b for b in canonical_books if _is_valid_title(b.title)]
     eligible_books = _deduplicate_books(valid_books)
+    eligible_hardcover_ids = {book.id for book in eligible_books}
     author.book_count_total = len(eligible_books)
+
+    existing_author_books_result = await db.execute(
+        select(Book)
+        .where(Book.author_id == author.id, Book.hardcover_id.is_not(None))
+        .options(selectinload(Book.files), selectinload(Book.book_series))
+    )
+    existing_author_books = existing_author_books_result.scalars().all()
+    stale_books = [
+        book for book in existing_author_books
+        if book.hardcover_id and book.hardcover_id not in eligible_hardcover_ids
+    ]
+
+    for stale_book in stale_books:
+        if stale_book.files or stale_book.is_owned:
+            logger.warning(
+                "Skipping stale Hardcover book cleanup because the book has local ownership data: book_id=%s title=%r author=%r files=%s is_owned=%s hardcover_id=%s",
+                stale_book.id,
+                stale_book.title,
+                author.name,
+                len(stale_book.files),
+                stale_book.is_owned,
+                stale_book.hardcover_id,
+            )
+            continue
+
+        for book_series in list(stale_book.book_series):
+            await db.delete(book_series)
+        await db.delete(stale_book)
+        books_removed += 1
+        logger.info(
+            "Removed stale Hardcover book from author during refresh: book_id=%s title=%r author=%r hardcover_id=%s",
+            stale_book.id,
+            stale_book.title,
+            author.name,
+            stale_book.hardcover_id,
+        )
 
     for hc_book in eligible_books:
         existing = await db.execute(select(Book).where(Book.hardcover_id == hc_book.id))
@@ -885,7 +923,7 @@ async def _sync_author_hardcover_catalog(
                 ))
 
     author.last_synced_at = datetime.utcnow()
-    return books_added
+    return books_added, books_removed
 
 
 class ScanStatus:
@@ -2302,10 +2340,11 @@ async def refresh_single_author(author_id: int):
 
             api_key = await get_api_key(db)
             books_added = 0
+            books_removed = 0
             if api_key:
                 client = HardcoverClient(api_key)
                 try:
-                    books_added = await _sync_author_hardcover_catalog(db, author, client)
+                    books_added, books_removed = await _sync_author_hardcover_catalog(db, author, client)
                 finally:
                     await client.close()
 
@@ -2322,10 +2361,11 @@ async def refresh_single_author(author_id: int):
 
             await db.commit()
             logger.info(
-                "Author refresh complete: author_id=%s name=%r books_added=%d matched=%d repaired=%d",
+                "Author refresh complete: author_id=%s name=%r books_added=%d books_removed=%d matched=%d repaired=%d",
                 author.id,
                 author.name,
                 books_added,
+                books_removed,
                 matched_count,
                 repaired_count,
             )
