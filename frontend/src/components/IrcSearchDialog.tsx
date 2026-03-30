@@ -207,6 +207,9 @@ export default function IrcSearchDialog({
                             {result.download_command}
                           </div>
                         </div>
+                        <div className="shrink-0 rounded border border-slate-600 bg-slate-800 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-300">
+                          {result.file_format || "unknown"}
+                        </div>
                         <div className="shrink-0 text-xs text-slate-400">
                           {result.file_size_text || "Unknown size"}
                         </div>
