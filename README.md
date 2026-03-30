@@ -1,6 +1,6 @@
 # Booksarr
 
-Booksarr is a Docker-based ebook library manager inspired by Radarr/Sonarr. It scans your local ebook collection, matches files against full author catalogs, enriches metadata from multiple sources, and gives you tools to review hidden books, override covers, refresh individual titles, and track scan outcomes.
+Booksarr is a Docker-based ebook library manager inspired by Radarr/Sonarr. It scans your local ebook collection, matches files against full author catalogs, enriches metadata from multiple sources, and gives you tools to review hidden books, override covers, refresh individual titles, search IRC for missing books, and track scan outcomes.
 
 ## Features
 
@@ -11,9 +11,9 @@ Booksarr is a Docker-based ebook library manager inspired by Radarr/Sonarr. It s
 - **Series-aware browsing** — Author pages group books by series and preserve reading-order positions.
 - **Poster and portrait management** — Manually choose a book poster or author portrait from available candidates and keep that choice through future refreshes.
 - **Per-book actions** — Refresh one book from scratch, download its local file, hide it, or launch an IRC search from either table or grid view.
+- **IRC book acquisition workflow** — Search for a missing book from the book UI, get parsed results back in the app, download a selection over DCC, extract supported archives, and optionally move the result straight into your library.
 - **API usage and scan summaries** — Settings shows daily API call counts plus a persisted last-run dashboard with counts for owned books found, authors added, books added, hidden books, and lookup failures.
 - **Grid and table views** — Browse books in poster view or compact table view, with badges for owned copies, ISBN validity, and Google/Open Library matches.
-- **IRC search and download workflow** — Optional IRC integration can search a configured channel, parse DCC-delivered result archives, download selected files, and optionally move them into your library.
 
 ## Quick Start
 
@@ -75,6 +75,7 @@ Booksarr expects ebooks under your `/books` mount, typically organized by author
 3. Open **Settings > Profiles** and adjust **Book Visibility** rules.
 4. Open **Settings > Metadata Refreshes** and run **Scan Library** or **Full Refresh**.
 5. Optionally configure **Settings > IRC** if you want IRC search/download support.
+6. Use the magnifying-glass **IRC Search** action on any book to search your configured IRC channel and download a match directly from the app.
 
 ## Configuration
 
@@ -106,17 +107,20 @@ Booksarr expects ebooks under your `/books` mount, typically organized by author
 - **Manual portrait selection** — On author pages, use the hover menu on the portrait to choose a replacement author image.
 - **Single-book refresh** — Refresh one book from scratch to re-parse local metadata, clear imported metadata, and rerun external lookups and cover selection.
 - **Book download** — Download an owned local file directly from table view or from the grid action menu.
-- **IRC search** — Launch a book search from the book actions, inspect parsed results, and monitor download status in the dialog.
+- **IRC search and import** — Launch a book search from the magnifying-glass action, review parsed results inside the dialog, watch live download/import status, and let Booksarr mark the title owned after import.
 
 ## IRC Integration
 
 Booksarr supports one IRC profile at a time from **Settings > IRC**.
 
+- Search any visible book directly from the grid or table view with the **IRC Search** action.
 - Sends `@search {query}` to the configured public channel.
 - Waits for a DCC-delivered `.zip` archive containing a single `.txt` result file.
 - Parses each downloadable result line and stores the exact command needed to request that file.
+- Shows live status updates in the UI while a selection is downloading, extracting, importing, and refreshing library state.
 - Receives the selected book via DCC into `/downloads`.
-- Optionally moves completed downloads into `/books` and triggers a library scan.
+- Automatically extracts supported archives when possible and can keep the original download in `/downloads` if auto-move is disabled.
+- Optionally moves completed downloads into `/books` and triggers a targeted library refresh so the book becomes owned in the UI quickly.
 
 For auto-move to work, your `/books` mount must be writable.
 
