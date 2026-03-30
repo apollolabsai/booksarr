@@ -160,26 +160,23 @@ export default function IrcSearchDialog({
                 </div>
               )}
             </div>
+            {job && (
+              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+                <div>
+                  {job.created_at ? new Date(job.created_at).toLocaleString() : "Queued just now"}
+                </div>
+                <div>
+                  {job.expected_result_filename || "Waiting for expected result filename"}
+                </div>
+              </div>
+            )}
+            {job?.error_message && (
+              <div className="mt-3 text-sm text-rose-300">{job.error_message}</div>
+            )}
             {createSearchJob.isError && (
               <div className="mt-3 text-sm text-rose-300">Failed to queue IRC search.</div>
             )}
           </div>
-
-          {job && (
-            <div className="mt-5 rounded-xl border border-slate-700 bg-slate-800 p-4">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <div className="text-sm font-medium text-slate-100">Latest Job State</div>
-                  <div className="mt-1 text-sm text-slate-300">{job.status}</div>
-                </div>
-                <div className="text-right text-xs text-slate-500">
-                  <div>{job.created_at ? new Date(job.created_at).toLocaleString() : "Queued just now"}</div>
-                  <div>{job.expected_result_filename || "Waiting for expected result filename"}</div>
-                </div>
-              </div>
-              {job.error_message && <div className="mt-3 text-sm text-rose-300">{job.error_message}</div>}
-            </div>
-          )}
 
           {jobId != null && (
             <div className="mt-5 rounded-xl border border-slate-700 bg-slate-800 p-4">
