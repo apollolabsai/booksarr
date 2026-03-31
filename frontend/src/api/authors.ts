@@ -4,6 +4,7 @@ import type {
   Author,
   AuthorDetail,
   AuthorDirectoryMergeResponse,
+  AuthorPortraitSearchResponse,
   AuthorPortraitOptionsResponse,
   AuthorSearchResponse,
 } from "../types";
@@ -36,6 +37,14 @@ export function useAuthorPortraitOptions(authorId: number | null, enabled: boole
   });
 }
 
+export function useAuthorPortraitSearch(authorId: number | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ["authorPortraitSearch", authorId],
+    queryFn: () => fetchApi<AuthorPortraitSearchResponse>(`/authors/${authorId}/portrait-search`),
+    enabled: enabled && !!authorId,
+  });
+}
+
 export function useSetAuthorPortrait() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -58,6 +67,7 @@ export function useSetAuthorPortrait() {
       queryClient.invalidateQueries({ queryKey: ["authors"] });
       queryClient.invalidateQueries({ queryKey: ["authors", variables.authorId] });
       queryClient.invalidateQueries({ queryKey: ["authorPortraitOptions", variables.authorId] });
+      queryClient.invalidateQueries({ queryKey: ["authorPortraitSearch", variables.authorId] });
     },
   });
 }

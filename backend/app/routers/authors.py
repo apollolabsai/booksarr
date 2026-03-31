@@ -17,10 +17,12 @@ from backend.app.schemas.author import (
     AuthorSummary, AuthorDetail, BookInAuthor, SeriesPositionInfo,
     SeriesInAuthor, SeriesBookEntry,
     AuthorPortraitOption, AuthorPortraitOptionsResponse, AuthorPortraitSelectionRequest,
+    AuthorPortraitSearchResponse, AuthorPortraitSearchResult,
     AuthorSearchCandidate, AuthorSearchResponse, AuthorAddRequest, LocalBookFile, AuthorDirectoryEntry,
     AuthorDirectoryMergeRequest, AuthorDirectoryMergeResponse,
 )
 from backend.app.services.hardcover import HardcoverClient, HardcoverLookupError
+from backend.app.services.google_image_search import search_author_portraits
 from backend.app.utils.book_visibility import get_book_visibility_settings, is_book_visible
 from backend.app.utils.isbn import has_any_valid_isbn
 from backend.app.services.image_cache import get_cached_cover_aspect_ratio
@@ -677,6 +679,32 @@ async def set_author_portrait_selection_route(
 
     await db.commit()
     return {"status": "ok", "message": "Author portrait updated"}
+
+
+@router.get("/{author_id}/portrait-search", response_model=AuthorPortraitSearchResponse)
+async def search_author_portraits_route(author_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Author).where(Author.id == author_id))
+    author = result.scalar_one_or_none()
+    if not author:
+        raise HTTPException(status_code=404, detail="Author not found")
+
+    query = f"{author.name} author portrait".strip()
+    results = await search_author_portraits(author.name)
+    return AuthorPortraitSearchResponse(
+        author_id=author.id,
+        query=query,
+        results=[
+            AuthorPortraitSearchResult(
+                url=item.url,
+                thumbnail_url=item.thumbnail_url,
+                width=item.width,
+                height=item.height,
+                title=item.title,
+                source_url=item.source_url,
+            )
+            for item in results
+        ],
+    )
 
 
 def _sanitize_author_folder_name(value: str) -> str:

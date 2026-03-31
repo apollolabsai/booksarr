@@ -1,6 +1,14 @@
 import { useEffect, useState } from "react";
 import { getImageUrl } from "../types";
-import { useAuthorPortraitOptions, useSetAuthorPortrait } from "../api/authors";
+import { useAuthorPortraitOptions, useAuthorPortraitSearch, useSetAuthorPortrait } from "../api/authors";
+
+function getDomain(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
 
 export default function AuthorPortraitPickerDialog({
   authorId,
@@ -14,9 +22,12 @@ export default function AuthorPortraitPickerDialog({
   onClose: () => void;
 }) {
   const { data, isLoading, isError } = useAuthorPortraitOptions(authorId, open);
+  const { data: searchData, isLoading: searchLoading, isError: searchError } = useAuthorPortraitSearch(authorId, open);
   const setAuthorPortrait = useSetAuthorPortrait();
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [selectedSearchUrl, setSelectedSearchUrl] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [failedImages, setFailedImages] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!data) return;
@@ -26,28 +37,40 @@ export default function AuthorPortraitPickerDialog({
       ?? data.options[0]?.key
       ?? null;
     setSelectedKey(preferredKey);
+    setSelectedSearchUrl(null);
   }, [data]);
 
   useEffect(() => {
     if (!open) {
       setSaveError(null);
+      setFailedImages(new Set());
     }
   }, [open]);
 
   if (!open || !authorId) return null;
 
   const selectedOption = data?.options.find((option) => option.key === selectedKey) ?? null;
+  const visibleResults = searchData?.results.filter((result) => !failedImages.has(result.url)) ?? [];
 
   const handleSave = async () => {
-    if (!selectedOption?.image_url) return;
     setSaveError(null);
     try {
-      await setAuthorPortrait.mutateAsync({
-        authorId,
-        source: selectedOption.source,
-        image_url: selectedOption.image_url,
-        page_url: selectedOption.page_url,
-      });
+      if (selectedSearchUrl) {
+        await setAuthorPortrait.mutateAsync({
+          authorId,
+          source: "google_image",
+          image_url: selectedSearchUrl,
+        });
+      } else if (selectedOption?.image_url) {
+        await setAuthorPortrait.mutateAsync({
+          authorId,
+          source: selectedOption.source,
+          image_url: selectedOption.image_url,
+          page_url: selectedOption.page_url,
+        });
+      } else {
+        return;
+      }
       onClose();
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "Failed to save portrait.");
@@ -74,7 +97,7 @@ export default function AuthorPortraitPickerDialog({
         <div className="max-h-[calc(90vh-140px)] overflow-y-auto px-6 py-5">
           {isLoading && <p className="text-sm text-slate-400">Finding portrait options...</p>}
           {isError && <p className="text-sm text-rose-300">Failed to load portrait options.</p>}
-          {!isLoading && !isError && data?.options.length === 0 && (
+          {!isLoading && !isError && data?.options.length === 0 && !searchLoading && visibleResults.length === 0 && (
             <p className="text-sm text-slate-400">No portrait options are available for this author yet.</p>
           )}
 
@@ -87,7 +110,10 @@ export default function AuthorPortraitPickerDialog({
                   <button
                     key={option.key}
                     type="button"
-                    onClick={() => setSelectedKey(option.key)}
+                    onClick={() => {
+                      setSelectedKey(option.key);
+                      setSelectedSearchUrl(null);
+                    }}
                     className={`rounded-xl border p-3 text-left transition-colors ${
                       isSelected
                         ? "border-emerald-500 bg-emerald-500/10"
@@ -141,6 +167,58 @@ export default function AuthorPortraitPickerDialog({
               })}
             </div>
           )}
+
+          <div className="mt-6">
+            <h3 className="mb-3 text-sm font-medium text-slate-300">Image Search</h3>
+            {searchLoading && <p className="text-sm text-slate-400">Searching for portraits...</p>}
+            {searchError && <p className="text-sm text-rose-300">Image search failed.</p>}
+            {!searchLoading && !searchError && visibleResults.length === 0 && (
+              <p className="text-sm text-slate-400">No results found.</p>
+            )}
+            {visibleResults.length > 0 && (
+              <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5">
+                {visibleResults.map((result) => {
+                  const isSelected = selectedSearchUrl === result.url;
+                  const domain = getDomain(result.source_url || result.url);
+                  return (
+                    <button
+                      key={result.url}
+                      type="button"
+                      onClick={() => {
+                        setSelectedKey(null);
+                        setSelectedSearchUrl(result.url);
+                      }}
+                      className={`rounded-xl border p-3 text-left transition-colors ${
+                        isSelected
+                          ? "border-emerald-500 bg-emerald-500/10"
+                          : "border-slate-700 bg-slate-800 hover:border-slate-500"
+                      }`}
+                    >
+                      <div className="mb-3">
+                        <span className="truncate text-sm font-medium text-slate-100" title={domain}>
+                          {domain}
+                        </span>
+                      </div>
+                      <div className="flex aspect-[3/4] items-center justify-center rounded-lg bg-black p-2">
+                        <img
+                          src={result.thumbnail_url}
+                          alt={result.title || "Portrait search result"}
+                          className="h-full w-full object-contain"
+                          referrerPolicy="no-referrer"
+                          onError={() => setFailedImages((prev) => new Set(prev).add(result.url))}
+                        />
+                      </div>
+                      {result.width && result.height && (
+                        <div className="mt-3 text-xs text-slate-400">
+                          {result.width} x {result.height}
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="flex items-center justify-end gap-3 border-t border-slate-700 px-6 py-4">
@@ -159,7 +237,7 @@ export default function AuthorPortraitPickerDialog({
           <button
             type="button"
             onClick={handleSave}
-            disabled={!selectedOption?.image_url || setAuthorPortrait.isPending}
+            disabled={(!selectedSearchUrl && !selectedOption?.image_url) || setAuthorPortrait.isPending}
             className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {setAuthorPortrait.isPending ? "Saving..." : "Save Portrait"}
