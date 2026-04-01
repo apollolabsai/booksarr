@@ -9,6 +9,8 @@ const LEVEL_COLORS: Record<string, string> = {
   CRITICAL: "text-red-500 font-bold",
 };
 
+const IPV4_TOKEN_RE = /\b\d{1,3}(?:\.\d{1,3}){3}\b/g;
+
 export default function LogsPage() {
   const [category, setCategory] = useState("");
   const [level, setLevel] = useState("");
@@ -88,7 +90,7 @@ export default function LogsPage() {
                   {entry.level}
                 </span>
                 <span className="text-emerald-600 flex-shrink-0 w-40 truncate">{entry.category}</span>
-                <span className="text-slate-300">{entry.message}</span>
+                <span className="text-slate-300">{renderLogMessage(entry.message)}</span>
               </div>
             ))
           )}
@@ -100,4 +102,22 @@ export default function LogsPage() {
       </div>
     </div>
   );
+}
+
+function renderLogMessage(message: string) {
+  const parts = message.split(IPV4_TOKEN_RE);
+  const matches = message.match(IPV4_TOKEN_RE) ?? [];
+
+  return parts.flatMap((part, index) => {
+    const segment = [<span key={`text-${index}`}>{part}</span>];
+    const ip = matches[index];
+    if (ip) {
+      segment.push(
+        <span key={`ip-${index}`} className="text-amber-300">
+          {ip}
+        </span>,
+      );
+    }
+    return segment;
+  });
 }

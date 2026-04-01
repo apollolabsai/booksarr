@@ -1,13 +1,21 @@
 import asyncio
+import http.client
+import json
 import logging
 import os
 import shutil
+import ssl
 import subprocess
+import re
 
 logger = logging.getLogger("booksarr.vpn")
 
 _openvpn_process: subprocess.Popen | None = None
 _vpn_interface_ip: str | None = None
+_vpn_public_ip: str | None = None
+_vpn_region: str | None = None
+
+_IPV4_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
 
 PIA_CA_CERT = """\
 -----BEGIN CERTIFICATE-----
@@ -198,6 +206,60 @@ def _setup_policy_routing(tun_ip: str):
         logger.warning("Failed to set up VPN policy routing: %s", exc)
 
 
+def _fetch_public_ip_for_bind_ip(bind_ip: str) -> str | None:
+    endpoints = [
+        ("api.ipify.org", "/?format=json", "json"),
+        ("ifconfig.me", "/ip", "text"),
+    ]
+
+    for host, path, response_kind in endpoints:
+        conn: http.client.HTTPSConnection | None = None
+        try:
+            conn = http.client.HTTPSConnection(
+                host,
+                443,
+                timeout=5,
+                source_address=(bind_ip, 0),
+                context=ssl.create_default_context(),
+            )
+            conn.request(
+                "GET",
+                path,
+                headers={
+                    "Accept": "application/json, text/plain;q=0.9, */*;q=0.1",
+                    "User-Agent": "booksarr",
+                },
+            )
+            response = conn.getresponse()
+            body = response.read().decode("utf-8", errors="ignore").strip()
+            if response.status >= 400 or not body:
+                continue
+
+            if response_kind == "json":
+                candidate = str(json.loads(body).get("ip", "")).strip()
+            else:
+                candidate = body.splitlines()[0].strip()
+
+            if _IPV4_RE.fullmatch(candidate):
+                return candidate
+        except Exception as exc:
+            logger.debug(
+                "Failed to determine public VPN IP via %s%s bound to %s: %s",
+                host,
+                path,
+                bind_ip,
+                exc,
+            )
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    return None
+
+
 def _cleanup_policy_routing():
     try:
         subprocess.run(["ip", "rule", "del", "table", "100"], check=False, timeout=5)
@@ -231,7 +293,7 @@ def _collect_openvpn_output(*, stop_process: bool = False) -> str:
 
 
 async def start_vpn(username: str, password: str, region: str) -> str:
-    global _openvpn_process, _vpn_interface_ip
+    global _openvpn_process, _vpn_interface_ip, _vpn_public_ip, _vpn_region
 
     if _openvpn_process and _openvpn_process.poll() is None:
         logger.info("VPN already running (pid %d), stopping first", _openvpn_process.pid)
@@ -275,13 +337,23 @@ async def start_vpn(username: str, password: str, region: str) -> str:
         if tun_ip:
             _vpn_interface_ip = tun_ip
             _setup_policy_routing(tun_ip)
-            logger.info("VPN connected: tun0 IP = %s (took %ds)", tun_ip, attempt + 1)
+            _vpn_public_ip = await asyncio.to_thread(_fetch_public_ip_for_bind_ip, tun_ip)
+            _vpn_region = region
+            logger.info(
+                "VPN connected: region=%s tunnel_ip=%s public_ip=%s (took %ds)",
+                region,
+                tun_ip,
+                _vpn_public_ip or "unknown",
+                attempt + 1,
+            )
             return tun_ip
 
     openvpn_output = _collect_openvpn_output(stop_process=True)
     _openvpn_process = None
     _cleanup_policy_routing()
     _vpn_interface_ip = None
+    _vpn_public_ip = None
+    _vpn_region = None
     if openvpn_output:
         logger.warning("OpenVPN did not bring up tun0 within 30s. Recent output: %s", openvpn_output[-1000:].strip())
     if openvpn_output:
@@ -290,9 +362,11 @@ async def start_vpn(username: str, password: str, region: str) -> str:
 
 
 async def stop_vpn():
-    global _openvpn_process, _vpn_interface_ip
+    global _openvpn_process, _vpn_interface_ip, _vpn_public_ip, _vpn_region
     _cleanup_policy_routing()
     _vpn_interface_ip = None
+    _vpn_public_ip = None
+    _vpn_region = None
     if _openvpn_process:
         logger.info("Stopping OpenVPN (pid %d)", _openvpn_process.pid)
         _openvpn_process.terminate()
@@ -311,10 +385,24 @@ def get_vpn_status() -> dict:
     return {
         "running": running,
         "tun_ip": tun_ip,
+        "public_ip": _vpn_public_ip if running else None,
+        "region": _vpn_region if running else None,
     }
 
 
 def get_vpn_interface_ip() -> str | None:
     if _openvpn_process and _openvpn_process.poll() is None:
         return _vpn_interface_ip
+    return None
+
+
+def get_vpn_public_ip() -> str | None:
+    if _openvpn_process and _openvpn_process.poll() is None:
+        return _vpn_public_ip
+    return None
+
+
+def get_vpn_region() -> str | None:
+    if _openvpn_process and _openvpn_process.poll() is None:
+        return _vpn_region
     return None

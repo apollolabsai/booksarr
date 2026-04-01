@@ -107,8 +107,29 @@ async def request_connect():
 
 
 async def request_disconnect():
+    global _vpn_bind_ip
     _runtime.desired_connection = False
     await _close_connection("Disconnect requested from UI")
+    try:
+        from backend.app.services.vpn_manager import (
+            get_vpn_interface_ip,
+            get_vpn_public_ip,
+            get_vpn_region,
+            stop_vpn,
+        )
+
+        tunnel_ip = get_vpn_interface_ip()
+        if tunnel_ip:
+            logger.info(
+                "Stopping VPN after IRC disconnect: region=%s tunnel_ip=%s public_ip=%s",
+                get_vpn_region() or "unknown",
+                tunnel_ip,
+                get_vpn_public_ip() or "unknown",
+            )
+            await stop_vpn()
+    except Exception as exc:
+        logger.warning("Failed to stop VPN during IRC disconnect: %s", exc)
+    _vpn_bind_ip = None
     _runtime.state = "idle"
     _runtime.last_message = "Disconnected on request"
     logger.info("IRC disconnect requested")
@@ -138,7 +159,7 @@ async def _worker_loop():
                 continue
 
             if not _runtime.desired_connection:
-                if _runtime.state not in {"connect_failed", "invalid_config"}:
+                if _runtime.state not in {"idle", "connect_failed", "invalid_config"}:
                     _runtime.state = "idle"
                     _runtime.last_message = "Waiting for user to connect"
                     logger.info("IRC worker idle: waiting for connect request")
@@ -206,7 +227,12 @@ async def _attempt_connection(settings: dict[str, object]):
 
     bind_ip: str | None = None
     if settings["vpn_enabled"]:
-        from backend.app.services.vpn_manager import get_vpn_interface_ip, start_vpn
+        from backend.app.services.vpn_manager import (
+            get_vpn_interface_ip,
+            get_vpn_public_ip,
+            get_vpn_region,
+            start_vpn,
+        )
 
         _runtime.last_message = f"Starting VPN ({settings['vpn_region']}) before connecting to {server}:{port}"
         logger.info(
@@ -215,16 +241,32 @@ async def _attempt_connection(settings: dict[str, object]):
             server,
             port,
         )
+        requested_region = str(settings["vpn_region"])
         existing_ip = get_vpn_interface_ip()
-        if existing_ip:
+        existing_region = get_vpn_region()
+        existing_public_ip = get_vpn_public_ip()
+        if existing_ip and existing_region == requested_region:
             bind_ip = existing_ip
-            logger.info("VPN already running with tun0 IP %s, reusing", bind_ip)
+            logger.info(
+                "VPN already running, reusing: region=%s tunnel_ip=%s public_ip=%s",
+                existing_region or "unknown",
+                bind_ip,
+                existing_public_ip or "unknown",
+            )
         else:
+            if existing_ip:
+                logger.info(
+                    "VPN region changed, restarting tunnel: current_region=%s requested_region=%s tunnel_ip=%s public_ip=%s",
+                    existing_region or "unknown",
+                    requested_region,
+                    existing_ip,
+                    existing_public_ip or "unknown",
+                )
             try:
                 bind_ip = await start_vpn(
                     username=str(settings["vpn_username"]),
                     password=str(settings["vpn_password"]),
-                    region=str(settings["vpn_region"]),
+                    region=requested_region,
                 )
             except Exception as vpn_exc:
                 _runtime.state = "connect_failed"
@@ -233,7 +275,14 @@ async def _attempt_connection(settings: dict[str, object]):
                 _runtime.desired_connection = False
                 logger.warning("VPN start failed: %s", vpn_exc)
                 return
+        vpn_public_ip = get_vpn_public_ip()
         _vpn_bind_ip = bind_ip
+        logger.info(
+            "VPN ready for IRC connect: region=%s tunnel_ip=%s public_ip=%s",
+            requested_region,
+            bind_ip,
+            vpn_public_ip or "unknown",
+        )
         _runtime.last_message = f"VPN connected ({bind_ip}), connecting to {server}:{port}"
 
     logger.info(
