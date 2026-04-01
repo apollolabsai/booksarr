@@ -28,6 +28,10 @@ export function useUpdateIrcSettings() {
       real_name?: string;
       channel?: string;
       channel_password?: string;
+      vpn_enabled?: boolean;
+      vpn_region?: string;
+      vpn_username?: string;
+      vpn_password?: string;
       auto_move_to_library?: boolean;
     }) => fetchApi("/irc/settings", { method: "PUT", body: JSON.stringify(body) }),
     onSuccess: () => {

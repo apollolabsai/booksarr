@@ -9,4 +9,6 @@ useradd -o -u "$PUID" -g "$PGID" -d /config -s /bin/bash booksarr 2>/dev/null ||
 
 chown -R "$PUID:$PGID" /config
 
-exec gosu booksarr "$@"
+# OpenVPN and policy routing need NET_ADMIN-capable root inside the container.
+# Run the app as root so the in-process VPN manager can create tun0 and install routes.
+exec "$@"

@@ -2,6 +2,10 @@ services:
   booksarr:
     build: .
     container_name: booksarr
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
     environment:
       - PUID=1000
       - PGID=1000

@@ -4,7 +4,6 @@ import re
 import shutil
 import ssl
 import struct
-import subprocess
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -31,7 +30,7 @@ from backend.app.utils.opf_parser import parse_epub_opf
 logger = logging.getLogger("booksarr.irc")
 
 IRC_MAX_TIMEOUT_SECONDS = 60
-IRC_CONNECT_TIMEOUT_SECONDS = 15
+IRC_CONNECT_TIMEOUT_SECONDS = 30
 IRC_DCC_CONNECT_TIMEOUT_SECONDS = 15
 IRC_DCC_WAIT_TIMEOUT_SECONDS = 60
 IRC_DCC_CHUNK_TIMEOUT_SECONDS = 10
@@ -65,6 +64,7 @@ class IrcRuntimeState:
 _runtime = IrcRuntimeState()
 _IRC_COLOR_RE = re.compile(r"\x03(?:\d{1,2}(?:,\d{1,2})?)?")
 _IRC_FORMAT_RE = re.compile(r"[\x02\x0f\x16\x1d\x1f]")
+_vpn_bind_ip: str | None = None
 
 
 def get_runtime_status() -> IrcRuntimeState:
@@ -138,7 +138,7 @@ async def _worker_loop():
                 continue
 
             if not _runtime.desired_connection:
-                if _runtime.state != "idle":
+                if _runtime.state not in {"connect_failed", "invalid_config"}:
                     _runtime.state = "idle"
                     _runtime.last_message = "Waiting for user to connect"
                     logger.info("IRC worker idle: waiting for connect request")
@@ -151,6 +151,20 @@ async def _worker_loop():
                 _runtime.last_error = "Server, nickname, and channel are required"
                 logger.warning("IRC worker cannot connect: missing server, nickname, or channel")
                 await _close_connection("Missing IRC configuration")
+                await asyncio.sleep(5)
+                continue
+
+            if (
+                settings["vpn_enabled"]
+                and (
+                    not str(settings["vpn_username"]).strip()
+                    or not str(settings["vpn_password"]).strip()
+                )
+            ):
+                _runtime.state = "invalid_config"
+                _runtime.last_error = "VPN username and password are required when VPN is enabled"
+                logger.warning("IRC worker cannot connect: incomplete VPN configuration")
+                await _close_connection("Missing VPN configuration")
                 await asyncio.sleep(5)
                 continue
 
@@ -178,7 +192,7 @@ async def _worker_loop():
 
 
 async def _attempt_connection(settings: dict[str, object]):
-    global _reader_task, _writer
+    global _reader_task, _writer, _vpn_bind_ip
     server = str(settings["server"])
     port = int(settings["port"])
     use_tls = bool(settings["use_tls"])
@@ -189,15 +203,61 @@ async def _attempt_connection(settings: dict[str, object]):
 
     _runtime.state = "connecting"
     _runtime.last_message = f"Connecting to {server}:{port}"
+
+    bind_ip: str | None = None
+    if settings["vpn_enabled"]:
+        from backend.app.services.vpn_manager import get_vpn_interface_ip, start_vpn
+
+        _runtime.last_message = f"Starting VPN ({settings['vpn_region']}) before connecting to {server}:{port}"
+        logger.info(
+            "IRC connect attempt: starting VPN region=%s before connecting to server=%s port=%s",
+            settings["vpn_region"],
+            server,
+            port,
+        )
+        existing_ip = get_vpn_interface_ip()
+        if existing_ip:
+            bind_ip = existing_ip
+            logger.info("VPN already running with tun0 IP %s, reusing", bind_ip)
+        else:
+            try:
+                bind_ip = await start_vpn(
+                    username=str(settings["vpn_username"]),
+                    password=str(settings["vpn_password"]),
+                    region=str(settings["vpn_region"]),
+                )
+            except Exception as vpn_exc:
+                _runtime.state = "connect_failed"
+                _runtime.last_error = f"VPN failed: {vpn_exc}"
+                _runtime.last_message = f"VPN connection failed: {vpn_exc}"
+                _runtime.desired_connection = False
+                logger.warning("VPN start failed: %s", vpn_exc)
+                return
+        _vpn_bind_ip = bind_ip
+        _runtime.last_message = f"VPN connected ({bind_ip}), connecting to {server}:{port}"
+
     logger.info(
-        "IRC connect attempt: server=%s port=%s tls=%s nick=%s channel=%s",
-        server, port, use_tls, nickname, channel,
+        "IRC connect attempt: server=%s port=%s tls=%s nick=%s channel=%s vpn=%s bind_ip=%s",
+        server,
+        port,
+        use_tls,
+        nickname,
+        channel,
+        settings["vpn_enabled"],
+        bind_ip,
     )
 
     try:
         ssl_context = ssl.create_default_context() if use_tls else None
         reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(server, port, ssl=ssl_context),
+            _open_tcp_connection(
+                server,
+                port,
+                ssl_context=ssl_context,
+                server_hostname=server if use_tls else None,
+                bind_ip=bind_ip,
+                log_prefix="IRC control connection",
+            ),
             timeout=IRC_CONNECT_TIMEOUT_SECONDS,
         )
         _writer = writer
@@ -213,10 +273,11 @@ async def _attempt_connection(settings: dict[str, object]):
         logger.info("IRC TCP connection established to %s; waiting for server registration", server)
     except Exception as exc:
         await _close_connection(f"Connection failed: {exc}")
+        raw_message = str(exc).strip() or exc.__class__.__name__
         _runtime.state = "connect_failed"
-        _runtime.last_error = str(exc)
-        _runtime.last_message = f"Connection failed: {exc}"
-        logger.warning("IRC connection failed: %s", exc)
+        _runtime.last_error = raw_message
+        _runtime.last_message = f"Connection failed: {raw_message}"
+        logger.warning("IRC connection failed: %s", raw_message)
 
 
 async def _process_next_search_job(settings: dict[str, object]):
@@ -706,7 +767,12 @@ async def _download_search_result_archive(job_id: int, offer: dict[str, Any]):
         extract_dir.mkdir(parents=True, exist_ok=True)
 
         reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port),
+            _open_tcp_connection(
+                host,
+                port,
+                bind_ip=_vpn_bind_ip,
+                log_prefix=f"IRC search job {job_id} DCC archive",
+            ),
             timeout=IRC_DCC_CONNECT_TIMEOUT_SECONDS,
         )
         logger.info(
@@ -819,7 +885,12 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
     try:
         downloads_dir.mkdir(parents=True, exist_ok=True)
         reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port),
+            _open_tcp_connection(
+                host,
+                port,
+                bind_ip=_vpn_bind_ip,
+                log_prefix=f"IRC download job {job_id} DCC book",
+            ),
             timeout=IRC_DCC_CONNECT_TIMEOUT_SECONDS,
         )
         logger.info(
@@ -1567,8 +1638,37 @@ async def _load_irc_settings() -> dict[str, object]:
         "real_name": settings.get("irc_real_name", ""),
         "channel": settings.get("irc_channel", ""),
         "channel_password": settings.get("irc_channel_password", ""),
+        "vpn_enabled": settings.get("irc_vpn_enabled", "false").lower() == "true",
+        "vpn_region": settings.get("irc_vpn_region", "Netherlands"),
+        "vpn_username": settings.get("irc_vpn_username", ""),
+        "vpn_password": settings.get("irc_vpn_password", ""),
         "auto_move_to_library": settings.get("irc_auto_move_to_library", "true").lower() == "true",
     }
+
+
+async def _open_tcp_connection(
+    host: str,
+    port: int,
+    *,
+    ssl_context: ssl.SSLContext | None = None,
+    server_hostname: str | None = None,
+    bind_ip: str | None = None,
+    log_prefix: str = "TCP connection",
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    if bind_ip:
+        logger.info("%s opening TCP connection to %s:%s bound to VPN IP %s", log_prefix, host, port, bind_ip)
+        local_addr = (bind_ip, 0)
+    else:
+        logger.info("%s opening direct TCP connection to %s:%s", log_prefix, host, port)
+        local_addr = None
+
+    return await asyncio.open_connection(
+        host,
+        port,
+        ssl=ssl_context,
+        server_hostname=server_hostname,
+        local_addr=local_addr,
+    )
 
 
 async def _get_queue_counts() -> tuple[int, int]:
