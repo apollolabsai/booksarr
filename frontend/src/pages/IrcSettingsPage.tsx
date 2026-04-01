@@ -13,7 +13,6 @@ import {
 const PIA_VPN_REGIONS = [
   "Netherlands",
   "US East",
-  "US West",
   "US California",
   "US New York",
   "US Chicago",

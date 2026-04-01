@@ -17,6 +17,10 @@ _vpn_region: str | None = None
 
 _IPV4_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
 
+PIA_REGION_ALIASES: dict[str, str] = {
+    "US West": "US California",
+}
+
 PIA_CA_CERT = """\
 -----BEGIN CERTIFICATE-----
 MIIFqzCCBJOgAwIBAgIJAKZ7D5Yv87qDMA0GCSqGSIb3DQEBDQUAMIHoMQswCQYD
@@ -56,7 +60,6 @@ YDQ8z9v+DMO6iwyIDRiU
 PIA_REGIONS: dict[str, str] = {
     "Netherlands": "nl-amsterdam.privacy.network",
     "US East": "us3.privacy.network",
-    "US West": "us-west.privacy.network",
     "US California": "us-california.privacy.network",
     "US New York": "us-newyorkcity.privacy.network",
     "US Chicago": "us-chicago.privacy.network",
@@ -89,6 +92,13 @@ PIA_REGIONS: dict[str, str] = {
 }
 
 _CONFIG_DIR = "/config/vpn"
+
+
+def normalize_pia_region(region: str | None) -> str:
+    cleaned = (region or "").strip()
+    if not cleaned:
+        return "Netherlands"
+    return PIA_REGION_ALIASES.get(cleaned, cleaned)
 
 
 def _write_openvpn_config(region_host: str, username: str, password: str) -> str:
@@ -139,6 +149,7 @@ def _get_tun_ip() -> str | None:
             ["ip", "-4", "addr", "show", "dev", "tun0"],
             text=True,
             timeout=5,
+            stderr=subprocess.DEVNULL,
         )
         for line in output.splitlines():
             line = line.strip()
@@ -175,11 +186,15 @@ def _setup_policy_routing(tun_ip: str):
             ["ip", "rule", "del", "from", tun_ip, "table", "100"],
             check=False,
             timeout=5,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
         subprocess.run(
             ["ip", "route", "flush", "table", "100"],
             check=False,
             timeout=5,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
 
         subprocess.run(
@@ -193,6 +208,8 @@ def _setup_policy_routing(tun_ip: str):
                 ["ip", "route", "add", "default", "via", gateway, "dev", "tun0", "table", "100"],
                 check=True,
                 timeout=5,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
             logger.info("VPN policy routing configured: %s via %s on table 100", tun_ip, gateway)
         else:
@@ -200,6 +217,8 @@ def _setup_policy_routing(tun_ip: str):
                 ["ip", "route", "add", "default", "dev", "tun0", "table", "100"],
                 check=True,
                 timeout=5,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
             logger.info("VPN policy routing configured: %s via tun0 on table 100", tun_ip)
     except Exception as exc:
@@ -262,8 +281,20 @@ def _fetch_public_ip_for_bind_ip(bind_ip: str) -> str | None:
 
 def _cleanup_policy_routing():
     try:
-        subprocess.run(["ip", "rule", "del", "table", "100"], check=False, timeout=5)
-        subprocess.run(["ip", "route", "flush", "table", "100"], check=False, timeout=5)
+        subprocess.run(
+            ["ip", "rule", "del", "table", "100"],
+            check=False,
+            timeout=5,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        subprocess.run(
+            ["ip", "route", "flush", "table", "100"],
+            check=False,
+            timeout=5,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
     except Exception:
         pass
 
@@ -294,6 +325,8 @@ def _collect_openvpn_output(*, stop_process: bool = False) -> str:
 
 async def start_vpn(username: str, password: str, region: str) -> str:
     global _openvpn_process, _vpn_interface_ip, _vpn_public_ip, _vpn_region
+
+    region = normalize_pia_region(region)
 
     if _openvpn_process and _openvpn_process.poll() is None:
         logger.info("VPN already running (pid %d), stopping first", _openvpn_process.pid)

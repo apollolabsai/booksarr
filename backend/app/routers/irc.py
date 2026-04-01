@@ -19,6 +19,7 @@ from backend.app.schemas.irc import (
     IrcSettingsUpdate,
     IrcWorkerStatusResponse,
 )
+from backend.app.services.vpn_manager import normalize_pia_region
 from backend.app.services.irc_parser import (
     build_expected_result_filename,
     build_search_command,
@@ -71,7 +72,7 @@ async def update_irc_settings(body: IrcSettingsUpdate, db: AsyncSession = Depend
         "irc_channel": body.channel,
         "irc_channel_password": body.channel_password,
         "irc_vpn_enabled": _bool_to_text(body.vpn_enabled) if body.vpn_enabled is not None else None,
-        "irc_vpn_region": body.vpn_region,
+        "irc_vpn_region": normalize_pia_region(body.vpn_region) if body.vpn_region is not None else None,
         "irc_vpn_username": body.vpn_username,
         "irc_vpn_password": body.vpn_password,
         "irc_auto_move_to_library": _bool_to_text(body.auto_move_to_library) if body.auto_move_to_library is not None else None,
@@ -331,7 +332,7 @@ async def _load_settings(db: AsyncSession) -> dict[str, object]:
         "channel": settings.get("irc_channel", ""),
         "channel_password": settings.get("irc_channel_password", ""),
         "vpn_enabled": settings.get("irc_vpn_enabled", "false").lower() == "true",
-        "vpn_region": settings.get("irc_vpn_region", "Netherlands"),
+        "vpn_region": normalize_pia_region(settings.get("irc_vpn_region", "Netherlands")),
         "vpn_username": settings.get("irc_vpn_username", ""),
         "vpn_password": settings.get("irc_vpn_password", ""),
         "auto_move_to_library": settings.get("irc_auto_move_to_library", "true").lower() == "true",

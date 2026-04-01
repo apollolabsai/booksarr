@@ -475,8 +475,11 @@ async def _reader_loop(reader: asyncio.StreamReader):
                 return
 
             line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
-            _runtime.last_message = f"IRC traffic received: {line[:180]}"
-            logger.info("IRC <<< %s", line)
+            _runtime.last_message = _summarize_runtime_irc_line(line)
+            if _should_log_raw_irc_line(line):
+                logger.info("IRC <<< %s", line)
+            else:
+                logger.debug("IRC <<< %s", line)
 
             if line.startswith("PING "):
                 payload = line.split(" ", 1)[1]
@@ -602,6 +605,28 @@ async def _fail_active_search_job(error_message: str):
             active_search_job.id,
             error_message,
         )
+
+
+def _should_log_raw_irc_line(line: str) -> bool:
+    upper_line = line.upper()
+    if upper_line.startswith("PING "):
+        return False
+    if "DCC SEND " in upper_line:
+        return False
+    if " PRIVMSG " in upper_line:
+        return False
+    return True
+
+
+def _summarize_runtime_irc_line(line: str) -> str:
+    upper_line = line.upper()
+    if upper_line.startswith("PING "):
+        return "IRC heartbeat received"
+    if "DCC SEND " in upper_line:
+        return "IRC DCC offer received"
+    if " PRIVMSG " in upper_line:
+        return "IRC channel activity received"
+    return f"IRC traffic received: {line[:180]}"
 
 
 def _normalize_irc_notice_text(line: str) -> str:
@@ -1688,6 +1713,8 @@ async def _get_download_job_book_id(job_id: int) -> int | None:
 
 
 async def _load_irc_settings() -> dict[str, object]:
+    from backend.app.services.vpn_manager import normalize_pia_region
+
     async with async_session() as db:
         result = await db.execute(select(Setting).where(Setting.key.like("irc_%")))
         settings = {row.key: row.value for row in result.scalars().all()}
@@ -1703,7 +1730,7 @@ async def _load_irc_settings() -> dict[str, object]:
         "channel": settings.get("irc_channel", ""),
         "channel_password": settings.get("irc_channel_password", ""),
         "vpn_enabled": settings.get("irc_vpn_enabled", "false").lower() == "true",
-        "vpn_region": settings.get("irc_vpn_region", "Netherlands"),
+        "vpn_region": normalize_pia_region(settings.get("irc_vpn_region", "Netherlands")),
         "vpn_username": settings.get("irc_vpn_username", ""),
         "vpn_password": settings.get("irc_vpn_password", ""),
         "auto_move_to_library": settings.get("irc_auto_move_to_library", "true").lower() == "true",
