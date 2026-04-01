@@ -602,6 +602,7 @@ async def _repair_local_file_links(
     db: AsyncSession,
     author: Author | None = None,
     file_paths: set[str] | None = None,
+    expected_book_ids: dict[str, int] | None = None,
 ) -> tuple[int, int, int]:
     result = await db.execute(
         select(BookFile).options(selectinload(BookFile.book))
@@ -652,28 +653,48 @@ async def _repair_local_file_links(
             bf.opf_publisher = opf.publisher or None
             bf.opf_description = opf.description or None
 
+        matched_book = None
+        expected_book_id = expected_book_ids.get(bf.file_path) if expected_book_ids else None
+
+        if expected_book_id is not None:
+            expected_book_result = await db.execute(select(Book).where(Book.id == expected_book_id))
+            matched_book = expected_book_result.scalar_one_or_none()
+            if matched_book is None:
+                logger.warning(
+                    "Expected imported file match points to missing book: file=%s expected_book_id=%s",
+                    bf.file_path,
+                    expected_book_id,
+                )
+            else:
+                logger.info(
+                    "Using expected imported file match: file=%s expected_book_id=%s title=%r",
+                    bf.file_path,
+                    matched_book.id,
+                    matched_book.title,
+                )
+
         author_result = await db.execute(
             select(Author).where(Author.name == bf.opf_author)
         )
         author = author_result.scalar_one_or_none()
-        if not author:
+        if not author and not matched_book:
             continue
 
-        books_result = await db.execute(
-            select(Book).where(Book.author_id == author.id)
-        )
-        author_books = sorted(
-            books_result.scalars().all(),
-            key=lambda candidate: (candidate.hardcover_id is None, candidate.id),
-        )
-        candidate_books = [
-            book for book in author_books
-            if not current_book or book.id != current_book.id
-        ]
+        candidate_books: list[Book] = []
+        if author:
+            books_result = await db.execute(
+                select(Book).where(Book.author_id == author.id)
+            )
+            author_books = sorted(
+                books_result.scalars().all(),
+                key=lambda candidate: (candidate.hardcover_id is None, candidate.id),
+            )
+            candidate_books = [
+                book for book in author_books
+                if not current_book or book.id != current_book.id
+            ]
 
-        matched_book = None
-
-        if bf.opf_isbn:
+        if not matched_book and bf.opf_isbn:
             target_isbn = normalize_isbn(bf.opf_isbn)
             for book in candidate_books:
                 book_isbns = (
@@ -725,14 +746,14 @@ async def _repair_local_file_links(
                     if (remaining.scalar() or 0) == 0:
                         await db.delete(previous_book)
         else:
-            if current_book and not current_book.hardcover_id:
+            if current_book and not current_book.hardcover_id and author:
                 current_book.title = bf.opf_title or current_book.title
                 current_book.author_id = author.id
                 current_book.isbn = bf.opf_isbn or current_book.isbn
                 current_book.publisher = bf.opf_publisher or current_book.publisher
                 current_book.description = bf.opf_description or current_book.description
                 current_book.is_owned = True
-            else:
+            elif author:
                 local_book = Book(
                     title=bf.opf_title or bf.file_name,
                     author_id=author.id,
@@ -757,7 +778,7 @@ async def _repair_local_file_links(
     return matched_count, repaired_count, books_added
 
 
-async def refresh_imported_library_file(moved_path) -> bool:
+async def refresh_imported_library_file(moved_path, expected_book_id: int | None = None) -> bool:
     try:
         relative_path = str(moved_path.relative_to(BOOKS_DIR))
     except Exception:
@@ -769,6 +790,7 @@ async def refresh_imported_library_file(moved_path) -> bool:
         matched_count, repaired_count, books_added = await _repair_local_file_links(
             db,
             file_paths={relative_path},
+            expected_book_ids={relative_path: expected_book_id} if expected_book_id is not None else None,
         )
 
         result = await db.execute(
@@ -783,8 +805,9 @@ async def refresh_imported_library_file(moved_path) -> bool:
 
         linked_book = book_file.book
         logger.info(
-            "Targeted import refresh complete: file=%s matched=%d repaired=%d local_books_added=%d linked_book_id=%s owned=%s",
+            "Targeted import refresh complete: file=%s expected_book_id=%s matched=%d repaired=%d local_books_added=%d linked_book_id=%s owned=%s",
             relative_path,
+            expected_book_id,
             matched_count,
             repaired_count,
             books_added,

@@ -34,7 +34,7 @@ export default function IrcSearchDialog({
   const { data: ircStatus, isLoading: ircStatusLoading } = useIrcStatus(open);
   const { data: job } = useIrcSearchJob(jobId, open);
   const { data: results, isLoading: resultsLoading } = useIrcSearchResults(jobId, open);
-  const { data: downloadJob } = useIrcDownloadJob(downloadJobId, open);
+  const { data: downloadJob } = useIrcDownloadJob(downloadJobId, downloadJobId != null);
 
   useEffect(() => {
     if (!open) return;
@@ -55,6 +55,11 @@ export default function IrcSearchDialog({
     queryClient.invalidateQueries({ queryKey: ["authors"] });
     queryClient.invalidateQueries({ queryKey: ["hiddenBooks"] });
   }, [downloadJob, queryClient]);
+
+  useEffect(() => {
+    if (!downloadJob || !isTerminalDownloadStatus(downloadJob.status)) return;
+    setDownloadJobId((current) => (current === downloadJob.id ? null : current));
+  }, [downloadJob]);
 
   if (!open || !bookId) return null;
 
@@ -310,4 +315,8 @@ function formatDownloadStatus(status: string): string {
     default:
       return status;
   }
+}
+
+function isTerminalDownloadStatus(status: string | null): boolean {
+  return status === "moved" || status === "failed" || status === "cancelled";
 }

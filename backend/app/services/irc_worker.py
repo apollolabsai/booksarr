@@ -1004,7 +1004,7 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
             )
             _runtime.last_message = f"Refreshing library state for download job {job_id}"
             logger.info("IRC download job %s refreshing library state after import: %s", job_id, moved_path)
-            await _trigger_library_scan_after_irc_import(moved_path)
+            await _trigger_library_scan_after_irc_import(moved_path, job_id=job_id)
             await _update_download_job(
                 job_id,
                 status="moved",
@@ -1594,7 +1594,7 @@ def _normalize_author_key(author_name: str) -> str:
     return cleaned
 
 
-async def _trigger_library_scan_after_irc_import(moved_path: Path):
+async def _trigger_library_scan_after_irc_import(moved_path: Path, job_id: int | None = None):
     try:
         from backend.app.services.library_sync import refresh_imported_library_file, run_full_sync, scan_status
     except Exception as exc:
@@ -1608,9 +1608,18 @@ async def _trigger_library_scan_after_irc_import(moved_path: Path):
         )
         return
 
-    logger.info("Triggering targeted refresh after IRC import: %s", moved_path)
+    expected_book_id = await _get_download_job_book_id(job_id) if job_id is not None else None
+    logger.info(
+        "Triggering targeted refresh after IRC import: path=%s job_id=%s expected_book_id=%s",
+        moved_path,
+        job_id,
+        expected_book_id,
+    )
     try:
-        imported_and_matched = await refresh_imported_library_file(moved_path)
+        imported_and_matched = await refresh_imported_library_file(
+            moved_path,
+            expected_book_id=expected_book_id,
+        )
     except Exception as exc:
         logger.warning("Targeted refresh after IRC import failed for %s: %s", moved_path, exc)
         imported_and_matched = False
@@ -1621,6 +1630,12 @@ async def _trigger_library_scan_after_irc_import(moved_path: Path):
 
     logger.info("Targeted IRC import refresh did not fully resolve ownership; falling back to library scan: %s", moved_path)
     asyncio.create_task(run_full_sync(force=False))
+
+
+async def _get_download_job_book_id(job_id: int) -> int | None:
+    async with async_session() as db:
+        result = await db.execute(select(IrcDownloadJob.book_id).where(IrcDownloadJob.id == job_id))
+        return result.scalar_one_or_none()
 
 
 async def _load_irc_settings() -> dict[str, object]:

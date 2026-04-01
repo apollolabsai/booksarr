@@ -115,6 +115,9 @@ verb 2
 reneg-sec 0
 disable-occ
 route-nopull
+pull-filter ignore "redirect-gateway"
+pull-filter ignore "route-ipv6"
+pull-filter ignore "dhcp-option"
 script-security 2
 """
     with open(config_path, "w") as f:
@@ -240,6 +243,11 @@ async def start_vpn(username: str, password: str, region: str) -> str:
 
     if not shutil.which("openvpn"):
         raise RuntimeError("openvpn is not installed in the container")
+    if not os.path.exists("/dev/net/tun"):
+        raise RuntimeError(
+            "VPN requires /dev/net/tun inside the container. "
+            "On the host, enable the TUN device and mount it into Docker with NET_ADMIN."
+        )
 
     config_path = _write_openvpn_config(region_host, username, password)
     logger.info("Starting OpenVPN: region=%s host=%s", region, region_host)
@@ -257,6 +265,11 @@ async def start_vpn(username: str, password: str, region: str) -> str:
             _openvpn_process = None
             if "AUTH_FAILED" in stdout:
                 raise RuntimeError("VPN authentication failed. Check your PIA username and password.")
+            if "Cannot open TUN/TAP dev /dev/net/tun" in stdout:
+                raise RuntimeError(
+                    "VPN tunnel device /dev/net/tun is unavailable inside the container. "
+                    "The remote host must expose /dev/net/tun to Docker and allow NET_ADMIN."
+                )
             raise RuntimeError(f"OpenVPN exited unexpectedly: {stdout[-500:]}")
         tun_ip = _get_tun_ip()
         if tun_ip:
