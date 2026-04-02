@@ -136,7 +136,7 @@ async def set_author_portrait_selection(
     if not image_url.startswith(("http://", "https://")):
         return False
 
-    cached = await cache_author_image(author.id, image_url, source=source)
+    cached = await cache_author_image(author.id, image_url, source=source, overwrite=True)
     if not cached:
         return False
 
