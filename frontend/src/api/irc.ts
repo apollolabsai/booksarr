@@ -109,11 +109,12 @@ export function useIrcSearchResults(jobId: number | null, enabled: boolean = tru
   });
 }
 
-export function useIrcDownloadJobs() {
+export function useIrcDownloadJobs(enabled: boolean = true) {
   return useQuery({
     queryKey: ["ircDownloadJobs"],
     queryFn: () => fetchApi<IrcDownloadJob[]>("/irc/download-jobs"),
-    refetchInterval: 3000,
+    enabled,
+    refetchInterval: enabled ? 3000 : false,
     refetchIntervalInBackground: true,
   });
 }
@@ -134,7 +135,9 @@ export function useCreateIrcDownloadJob() {
     mutationFn: (body: { search_result_id: number }) =>
       fetchApi<IrcDownloadJob>("/irc/download", { method: "POST", body: JSON.stringify(body) }),
     onSuccess: (job) => {
+      queryClient.setQueryData(["ircDownloadJob", job.id], job);
       queryClient.invalidateQueries({ queryKey: ["ircDownloadJobs"] });
+      queryClient.invalidateQueries({ queryKey: ["ircDownloadJob", job.id] });
       queryClient.invalidateQueries({ queryKey: ["ircStatus"] });
       if (job.search_job_id != null) {
         queryClient.invalidateQueries({ queryKey: ["ircSearchResults", job.search_job_id] });
