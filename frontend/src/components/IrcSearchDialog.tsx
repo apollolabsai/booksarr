@@ -202,38 +202,6 @@ export default function IrcSearchDialog({
 
           {jobId != null && (
             <div className="mt-5 rounded-xl border border-slate-700 bg-slate-800 p-4">
-              {(currentDownloadJob || queuedDownloadJob) && (
-                <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-sm font-medium text-emerald-100">Active Download</div>
-                    <div className="text-xs text-emerald-200">
-                      {formatDownloadStatus((currentDownloadJob ?? queuedDownloadJob)?.status ?? "queued")}
-                    </div>
-                  </div>
-                  <div className="mt-2">
-                    <DownloadStageList status={(currentDownloadJob ?? queuedDownloadJob)?.status ?? "queued"} />
-                  </div>
-                  {(currentDownloadJob ?? queuedDownloadJob)?.dcc_filename && (
-                    <div className="mt-2 text-xs text-slate-300">
-                      File: <span className="text-slate-100">{(currentDownloadJob ?? queuedDownloadJob)?.dcc_filename}</span>
-                    </div>
-                  )}
-                  {(currentDownloadJob ?? queuedDownloadJob)?.saved_path && (
-                    <div className="mt-1 text-xs text-slate-400">
-                      Downloaded to: <span className="text-slate-200">{(currentDownloadJob ?? queuedDownloadJob)?.saved_path}</span>
-                    </div>
-                  )}
-                  {(currentDownloadJob ?? queuedDownloadJob)?.moved_to_library_path && (
-                    <div className="mt-1 text-xs text-emerald-200">
-                      Imported to: <span className="text-emerald-100">{(currentDownloadJob ?? queuedDownloadJob)?.moved_to_library_path}</span>
-                    </div>
-                  )}
-                  {(currentDownloadJob ?? queuedDownloadJob)?.error_message && (
-                    <div className="mt-1 text-xs text-rose-300">{(currentDownloadJob ?? queuedDownloadJob)?.error_message}</div>
-                  )}
-                </div>
-              )}
-
               <div className="mb-3 flex items-center justify-between">
                 <div className="text-sm font-medium text-slate-100">Parsed Results</div>
                 <div className="text-xs text-slate-500">
@@ -281,44 +249,27 @@ export default function IrcSearchDialog({
                           {createDownloadJob.isPending && activeResultId === result.id ? "Queueing..." : "Download"}
                         </button>
                       </div>
-                      {(activeResultId === result.id || result.selected || currentDownloadJob?.search_result_id === result.id) && (
+                      {(() => {
+                        const rowDownloadJob =
+                          currentDownloadJob?.search_result_id === result.id
+                            ? currentDownloadJob
+                            : queuedDownloadJob?.search_result_id === result.id
+                              ? queuedDownloadJob
+                              : null;
+                        const showRowState = activeResultId === result.id || result.selected || rowDownloadJob !== null;
+
+                        if (!showRowState) return null;
+
+                        return (
                         <div className="mt-2 rounded-md bg-slate-950/60 px-3 py-2 text-xs">
-                          <div className="text-emerald-300">
-                            {currentDownloadJob?.search_result_id === result.id
-                              ? `Selected for download. Status: ${formatDownloadStatus(currentDownloadJob.status)}`
-                              : currentDownloadJob
-                                ? "Selected for download. Tracking active download status above..."
-                                : queuedDownloadJob
-                                  ? "Selected for download. Waiting for live status to attach..."
-                                  : "Selected for download. Waiting for download job confirmation..."}
-                          </div>
-                          {currentDownloadJob?.search_result_id === result.id && (
-                            <>
-                              <div className="mt-2">
-                                <DownloadStageList status={currentDownloadJob.status} />
-                              </div>
-                              {currentDownloadJob.dcc_filename && (
-                                <div className="mt-1 text-slate-400">
-                                  File: <span className="text-slate-300">{currentDownloadJob.dcc_filename}</span>
-                                </div>
-                              )}
-                              {currentDownloadJob.saved_path && (
-                                <div className="mt-1 text-slate-400">
-                                  Downloaded to: <span className="text-slate-300">{currentDownloadJob.saved_path}</span>
-                                </div>
-                              )}
-                              {currentDownloadJob.moved_to_library_path && (
-                                <div className="mt-1 text-emerald-300">
-                                  Imported to: <span className="text-emerald-200">{currentDownloadJob.moved_to_library_path}</span>
-                                </div>
-                              )}
-                              {currentDownloadJob.error_message && (
-                                <div className="mt-1 text-rose-300">{currentDownloadJob.error_message}</div>
-                              )}
-                            </>
-                          )}
+                          <DownloadStageList
+                            status={rowDownloadJob?.status ?? "queued"}
+                            movedToLibraryPath={rowDownloadJob?.moved_to_library_path ?? null}
+                            errorMessage={rowDownloadJob?.error_message ?? null}
+                          />
                         </div>
-                      )}
+                        );
+                      })()}
                     </div>
                   ))}
                 </div>
@@ -343,42 +294,19 @@ export default function IrcSearchDialog({
   );
 }
 
-function formatDownloadStatus(status: string): string {
-  switch (status) {
-    case "queued":
-      return "queued";
-    case "sent":
-      return "request sent";
-    case "waiting_dcc":
-      return "waiting on download";
-    case "downloading":
-      return "downloading";
-    case "extracting":
-      return "extracting archive";
-    case "extracted":
-      return "archive extracted";
-    case "importing":
-      return "importing to library";
-    case "refreshing_library":
-      return "refreshing library";
-    case "downloaded":
-      return "downloaded";
-    case "moved":
-      return "imported";
-    case "failed":
-      return "failed";
-    case "cancelled":
-      return "cancelled";
-    default:
-      return status;
-  }
-}
-
 function isTerminalDownloadStatus(status: string | null): boolean {
   return status === "moved" || status === "failed" || status === "cancelled";
 }
 
-function DownloadStageList({ status }: { status: string }) {
+function DownloadStageList({
+  status,
+  movedToLibraryPath,
+  errorMessage,
+}: {
+  status: string;
+  movedToLibraryPath: string | null;
+  errorMessage: string | null;
+}) {
   const stages = [
     { label: "Queued", statuses: ["queued"] },
     { label: "Request Sent", statuses: ["sent", "waiting_dcc"] },
@@ -392,25 +320,30 @@ function DownloadStageList({ status }: { status: string }) {
   const activeIndex = stages.findIndex((stage) => stage.statuses.includes(status));
 
   return (
-    <div className="grid gap-1.5 sm:grid-cols-3">
+    <div className="space-y-1">
       {stages.map((stage, index) => {
         const isDone = activeIndex > index;
         const isActive = stage.statuses.includes(status);
-        const tone = isActive
-          ? stage.label === "Error"
-            ? "border-rose-500/60 bg-rose-500/10 text-rose-200"
-            : "border-emerald-500/60 bg-emerald-500/10 text-emerald-200"
-          : isDone
-            ? "border-slate-600 bg-slate-900/80 text-slate-300"
-            : "border-slate-700 bg-slate-900/40 text-slate-500";
-        const marker = isActive ? "-" : isDone ? "✓" : " ";
+        const isErrorStage = stage.label === "Error";
+        const tone = isErrorStage && isActive
+          ? "text-rose-300"
+          : isDone || isActive
+            ? "text-emerald-300"
+            : "text-slate-500";
+        const marker = isActive ? "->" : isDone ? "✓" : " ";
 
         return (
-          <div key={stage.label} className={`rounded-md border px-2 py-1.5 ${tone}`}>
-            <div className="flex items-center gap-2 font-medium">
-              <span className="inline-block w-3 text-center">{marker}</span>
+          <div key={stage.label} className={tone}>
+            <div className="flex items-start gap-2">
+              <span className="inline-block w-4 shrink-0 text-left font-medium">{marker}</span>
               <span>{stage.label}</span>
             </div>
+            {stage.label === "Importing" && movedToLibraryPath && (
+              <div className="ml-6 break-all text-[11px] text-emerald-200/90">{movedToLibraryPath}</div>
+            )}
+            {stage.label === "Error" && isActive && errorMessage && (
+              <div className="ml-6 break-all text-[11px] text-rose-200/90">{errorMessage}</div>
+            )}
           </div>
         );
       })}
