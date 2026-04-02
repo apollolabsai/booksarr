@@ -264,6 +264,8 @@ export default function IrcSearchDialog({
                         <div className="mt-2 rounded-md bg-slate-950/60 px-3 py-2 text-xs">
                           <DownloadStageList
                             status={rowDownloadJob?.status ?? "queued"}
+                            savedPath={rowDownloadJob?.saved_path ?? null}
+                            dccFilename={rowDownloadJob?.dcc_filename ?? null}
                             movedToLibraryPath={rowDownloadJob?.moved_to_library_path ?? null}
                             errorMessage={rowDownloadJob?.error_message ?? null}
                           />
@@ -300,10 +302,14 @@ function isTerminalDownloadStatus(status: string | null): boolean {
 
 function DownloadStageList({
   status,
+  savedPath,
+  dccFilename,
   movedToLibraryPath,
   errorMessage,
 }: {
   status: string;
+  savedPath: string | null;
+  dccFilename: string | null;
   movedToLibraryPath: string | null;
   errorMessage: string | null;
 }) {
@@ -318,15 +324,31 @@ function DownloadStageList({
   ];
 
   const activeIndex = stages.findIndex((stage) => stage.statuses.includes(status));
+  const isErrorState = status === "failed" || status === "cancelled";
+  const originalWasArchive = (dccFilename ?? "").toLowerCase().endsWith(".rar");
+  const extractedArtifactReady = Boolean(
+    originalWasArchive
+      && savedPath
+      && !savedPath.toLowerCase().endsWith(".rar"),
+  );
 
   return (
     <div className="space-y-1">
       {stages.map((stage, index) => {
-        const isDone = activeIndex > index;
+        const isDone = isErrorState
+          ? didStageCompleteBeforeError({
+              label: stage.label,
+              savedPath,
+              movedToLibraryPath,
+              extractedArtifactReady,
+            })
+          : activeIndex > index;
         const isActive = stage.statuses.includes(status);
         const isErrorStage = stage.label === "Error";
         const tone = isErrorStage && isActive
           ? "text-rose-300"
+          : isErrorState && !isDone
+            ? "text-rose-300"
           : isDone || isActive
             ? "text-emerald-300"
             : "text-slate-500";
@@ -349,4 +371,35 @@ function DownloadStageList({
       })}
     </div>
   );
+}
+
+function didStageCompleteBeforeError({
+  label,
+  savedPath,
+  movedToLibraryPath,
+  extractedArtifactReady,
+}: {
+  label: string;
+  savedPath: string | null;
+  movedToLibraryPath: string | null;
+  extractedArtifactReady: boolean;
+}): boolean {
+  switch (label) {
+    case "Queued":
+      return true;
+    case "Request Sent":
+      return true;
+    case "Downloading":
+      return Boolean(savedPath);
+    case "Extracting":
+      return extractedArtifactReady || Boolean(movedToLibraryPath);
+    case "Importing":
+      return Boolean(movedToLibraryPath);
+    case "Done":
+      return false;
+    case "Error":
+      return false;
+    default:
+      return false;
+  }
 }
