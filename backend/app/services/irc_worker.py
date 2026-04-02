@@ -1110,9 +1110,13 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
             _runtime.last_message = f"Download job {job_id} completed and stayed in /downloads"
     except Exception as exc:
         logger.exception("IRC download job %s failed during DCC book handling: %s", job_id, exc)
-        _runtime.last_error = str(exc)
+        if isinstance(exc, TimeoutError):
+            error_message = "Timed out waiting for more DCC data while downloading the book"
+        else:
+            error_message = str(exc).strip() or exc.__class__.__name__
+        _runtime.last_error = error_message
         _runtime.last_message = f"Download job {job_id} failed during DCC book handling"
-        await _mark_download_job_failed(job_id, str(exc))
+        await _mark_download_job_failed(job_id, error_message)
         try:
             if download_path.exists() and not download_completed:
                 download_path.unlink()
