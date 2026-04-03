@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import type { Dispatch, SetStateAction } from "react";
 import { useLogs } from "../api/logs";
 
 const LEVEL_COLORS: Record<string, string> = {
@@ -10,13 +11,18 @@ const LEVEL_COLORS: Record<string, string> = {
 };
 
 const IPV4_TOKEN_RE = /\b\d{1,3}(?:\.\d{1,3}){3}\b/g;
+const LEVEL_OPTIONS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"];
 
 export default function LogsPage() {
-  const [category, setCategory] = useState("");
-  const [level, setLevel] = useState("");
+  const [categories, setCategories] = useState<string[]>([]);
+  const [levels, setLevels] = useState<string[]>([]);
   const [autoScroll, setAutoScroll] = useState(true);
-  const { data } = useLogs(category || undefined, level || undefined);
+  const [categoryMenuOpen, setCategoryMenuOpen] = useState(false);
+  const [levelMenuOpen, setLevelMenuOpen] = useState(false);
+  const { data } = useLogs(categories, levels);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const categoryMenuRef = useRef<HTMLDivElement>(null);
+  const levelMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (autoScroll && bottomRef.current) {
@@ -24,11 +30,38 @@ export default function LogsPage() {
     }
   }, [data?.entries.length, autoScroll]);
 
+  useEffect(() => {
+    const handlePointerDown = (event: MouseEvent) => {
+      if (categoryMenuRef.current && !categoryMenuRef.current.contains(event.target as Node)) {
+        setCategoryMenuOpen(false);
+      }
+      if (levelMenuRef.current && !levelMenuRef.current.contains(event.target as Node)) {
+        setLevelMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, []);
+
   const handleDownload = () => {
     const params = new URLSearchParams();
-    if (category) params.set("category", category);
+    for (const category of categories) params.append("category", category);
+    for (const level of levels) params.append("level", level);
     const qs = params.toString();
     window.open(`/api/logs/download${qs ? `?${qs}` : ""}`, "_blank");
+  };
+
+  const toggleValue = (
+    value: string,
+    selected: string[],
+    setSelected: Dispatch<SetStateAction<string[]>>,
+  ) => {
+    setSelected((current) => (
+      current.includes(value)
+        ? current.filter((item) => item !== value)
+        : [...current, value]
+    ));
   };
 
   return (
@@ -36,27 +69,26 @@ export default function LogsPage() {
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-2xl font-bold">Logs</h2>
         <div className="flex items-center gap-3">
-          <select
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            className="bg-slate-700 border border-slate-600 text-slate-200 text-sm rounded-lg px-3 py-2"
-          >
-            <option value="">All Categories</option>
-            {data?.categories.map((cat) => (
-              <option key={cat} value={cat}>{cat}</option>
-            ))}
-          </select>
-          <select
-            value={level}
-            onChange={(e) => setLevel(e.target.value)}
-            className="bg-slate-700 border border-slate-600 text-slate-200 text-sm rounded-lg px-3 py-2"
-          >
-            <option value="">All Levels</option>
-            <option value="DEBUG">DEBUG</option>
-            <option value="INFO">INFO</option>
-            <option value="WARNING">WARNING</option>
-            <option value="ERROR">ERROR</option>
-          </select>
+          <MultiSelectFilter
+            label={getFilterLabel("All Categories", categories, "Categories")}
+            options={data?.categories ?? []}
+            selected={categories}
+            open={categoryMenuOpen}
+            onToggleOpen={() => setCategoryMenuOpen((current) => !current)}
+            onToggleValue={(value) => toggleValue(value, categories, setCategories)}
+            onClear={() => setCategories([])}
+            menuRef={categoryMenuRef}
+          />
+          <MultiSelectFilter
+            label={getFilterLabel("All Levels", levels, "Levels")}
+            options={LEVEL_OPTIONS}
+            selected={levels}
+            open={levelMenuOpen}
+            onToggleOpen={() => setLevelMenuOpen((current) => !current)}
+            onToggleValue={(value) => toggleValue(value, levels, setLevels)}
+            onClear={() => setLevels([])}
+            menuRef={levelMenuRef}
+          />
           <label className="flex items-center gap-1.5 text-sm text-slate-400 cursor-pointer">
             <input
               type="checkbox"
@@ -120,4 +152,80 @@ function renderLogMessage(message: string) {
     }
     return segment;
   });
+}
+
+function getFilterLabel(defaultLabel: string, selected: string[], pluralLabel: string) {
+  if (selected.length === 0) return defaultLabel;
+  if (selected.length === 1) return selected[0];
+  return `${selected.length} ${pluralLabel}`;
+}
+
+function MultiSelectFilter({
+  label,
+  options,
+  selected,
+  open,
+  onToggleOpen,
+  onToggleValue,
+  onClear,
+  menuRef,
+}: {
+  label: string;
+  options: string[];
+  selected: string[];
+  open: boolean;
+  onToggleOpen: () => void;
+  onToggleValue: (value: string) => void;
+  onClear: () => void;
+  menuRef: { current: HTMLDivElement | null };
+}) {
+  return (
+    <div ref={(node) => { menuRef.current = node; }} className="relative">
+      <button
+        type="button"
+        onClick={onToggleOpen}
+        className="min-w-[164px] bg-slate-700 border border-slate-600 text-slate-200 text-sm rounded-lg px-3 py-2 flex items-center justify-between gap-3"
+      >
+        <span className="truncate">{label}</span>
+        <svg className="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute right-0 z-20 mt-2 w-72 rounded-lg border border-slate-600 bg-slate-800 p-2 shadow-xl">
+          <div className="mb-2 flex items-center justify-between px-1">
+            <span className="text-xs font-medium text-slate-400">
+              {selected.length === 0 ? "All selected" : `${selected.length} selected`}
+            </span>
+            <button
+              type="button"
+              onClick={onClear}
+              className="text-xs text-emerald-400 hover:text-emerald-300"
+            >
+              Clear
+            </button>
+          </div>
+          <div className="max-h-64 space-y-1 overflow-y-auto">
+            {options.map((option) => (
+              <label
+                key={option}
+                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm text-slate-200 hover:bg-slate-700"
+              >
+                <input
+                  type="checkbox"
+                  checked={selected.includes(option)}
+                  onChange={() => onToggleValue(option)}
+                  className="rounded bg-slate-700 border-slate-600 text-emerald-500 focus:ring-emerald-500"
+                />
+                <span className="truncate">{option}</span>
+              </label>
+            ))}
+            {options.length === 0 && (
+              <div className="px-2 py-1.5 text-sm text-slate-500">No options yet.</div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
