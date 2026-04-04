@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useAuthor, useMergeAuthorDirectories, useRefreshAuthor } from "../api/authors";
 import { getImageUrl } from "../types";
@@ -11,6 +11,7 @@ import SortControls from "../components/SortControls";
 import ViewToggle from "../components/ViewToggle";
 import SearchBar from "../components/SearchBar";
 import AuthorPortraitPickerDialog from "../components/AuthorPortraitPickerDialog";
+import BulkIrcDialog from "../components/BulkIrcDialog";
 import { useIsMobile } from "../hooks/useIsMobile";
 
 const SORT_OPTIONS = [
@@ -35,6 +36,8 @@ export default function AuthorDetailPage() {
   const [portraitMenuOpen, setPortraitMenuOpen] = useState(false);
   const [mergeFoldersOpen, setMergeFoldersOpen] = useState(false);
   const [mergeTargetDirectoryId, setMergeTargetDirectoryId] = useState<number | null>(null);
+  const [selectedBookIds, setSelectedBookIds] = useState<Set<number>>(new Set());
+  const [bulkIrcOpen, setBulkIrcOpen] = useState(false);
   const portraitMenuRef = useRef<HTMLDivElement | null>(null);
   const handleSearch = useCallback((value: string) => setSearch(value), []);
 
@@ -59,21 +62,12 @@ export default function AuthorDetailPage() {
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [portraitMenuOpen]);
-
-  if (isLoading || !author) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-slate-400">Loading...</div>
-      </div>
-    );
-  }
-
-  const imgUrl = getImageUrl(author.image_cached_path, author.image_url);
+  const imgUrl = author ? getImageUrl(author.image_cached_path, author.image_url) : "";
 
   const searchNormalized = search.trim().toLowerCase();
   const filteredBooks = searchNormalized
-    ? author.books.filter((book) => book.title.toLowerCase().includes(searchNormalized))
-    : author.books;
+    ? (author?.books ?? []).filter((book) => book.title.toLowerCase().includes(searchNormalized))
+    : (author?.books ?? []);
 
   // Sort books
   const sortedBooks = [...filteredBooks].sort((a, b) => {
@@ -92,7 +86,7 @@ export default function AuthorDetailPage() {
   });
 
   const filteredBookIds = new Set(sortedBooks.map((book) => book.id));
-  const filteredSeries: SeriesInAuthor[] = author.series
+  const filteredSeries: SeriesInAuthor[] = (author?.series ?? [])
     .map((series) => ({
       ...series,
       books: series.books.filter((book) => filteredBookIds.has(book.book_id)),
@@ -103,9 +97,59 @@ export default function AuthorDetailPage() {
   const booksInSeries = new Set<number>();
   filteredSeries.forEach((s) => s.books.forEach((b) => booksInSeries.add(b.book_id)));
   const standaloneBooks = sortedBooks.filter((b) => !booksInSeries.has(b.id));
+  const showBulkIrcControls = !isMobile && view === "table";
+  const selectedBooks = useMemo(
+    () => sortedBooks.filter((book) => selectedBookIds.has(book.id)),
+    [selectedBookIds, sortedBooks],
+  );
 
-  const bioTruncated = author.bio && author.bio.length > 400;
-  const displayBio = bioExpanded ? author.bio : author.bio?.substring(0, 400);
+  const bioTruncated = Boolean(author?.bio && author.bio.length > 400);
+  const displayBio = bioExpanded ? author?.bio : author?.bio?.substring(0, 400);
+
+  useEffect(() => {
+    if (showBulkIrcControls) return;
+    setSelectedBookIds((current) => (current.size === 0 ? current : new Set()));
+  }, [showBulkIrcControls]);
+
+  useEffect(() => {
+    const visibleIds = new Set(sortedBooks.map((book) => book.id));
+    setSelectedBookIds((current) => {
+      const next = new Set(Array.from(current).filter((bookId) => visibleIds.has(bookId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [sortedBooks]);
+
+  const toggleBookSelection = useCallback((bookId: number) => {
+    setSelectedBookIds((current) => {
+      const next = new Set(current);
+      if (next.has(bookId)) {
+        next.delete(bookId);
+      } else {
+        next.add(bookId);
+      }
+      return next;
+    });
+  }, []);
+
+  const selectVisibleBooks = useCallback(() => {
+    setSelectedBookIds(new Set(sortedBooks.map((book) => book.id)));
+  }, [sortedBooks]);
+
+  const selectMissingBooks = useCallback(() => {
+    setSelectedBookIds(new Set(sortedBooks.filter((book) => !book.is_owned).map((book) => book.id)));
+  }, [sortedBooks]);
+
+  const clearSelectedBooks = useCallback(() => {
+    setSelectedBookIds(new Set());
+  }, []);
+
+  if (isLoading || !author) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-slate-400">Loading...</div>
+      </div>
+    );
+  }
 
   const renderBooks = () => {
     if (isMobile) {
@@ -134,20 +178,40 @@ export default function AuthorDetailPage() {
                       <span className="text-emerald-400">{ownedCount}</span> / {s.books.length} books
                     </span>
                   </div>
-                  <BookTable books={seriesFullBooks} showAuthor={false} authorName={author.name} />
+                  <BookTable
+                    books={seriesFullBooks}
+                    showAuthor={false}
+                    authorName={author.name}
+                    selectedBookIds={showBulkIrcControls ? selectedBookIds : undefined}
+                    onToggleSelected={showBulkIrcControls ? toggleBookSelection : undefined}
+                  />
                 </div>
               );
             })}
             {standaloneBooks.length > 0 && (
               <div className="mb-6">
                 <h3 className="text-lg font-semibold text-slate-200 mb-3">Standalone</h3>
-                <BookTable books={standaloneBooks} showAuthor={false} authorName={author.name} />
+                <BookTable
+                  books={standaloneBooks}
+                  showAuthor={false}
+                  authorName={author.name}
+                  selectedBookIds={showBulkIrcControls ? selectedBookIds : undefined}
+                  onToggleSelected={showBulkIrcControls ? toggleBookSelection : undefined}
+                />
               </div>
             )}
           </>
         );
       }
-      return <BookTable books={sortedBooks} showAuthor={false} authorName={author.name} />;
+      return (
+        <BookTable
+          books={sortedBooks}
+          showAuthor={false}
+          authorName={author.name}
+          selectedBookIds={showBulkIrcControls ? selectedBookIds : undefined}
+          onToggleSelected={showBulkIrcControls ? toggleBookSelection : undefined}
+        />
+      );
     }
 
     // Grid view
@@ -403,6 +467,53 @@ export default function AuthorDetailPage() {
         </div>
       </div>
 
+      {showBulkIrcControls && sortedBooks.length > 0 && (
+        <div className="mb-6 rounded-xl border border-slate-700 bg-slate-800/80 p-4">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex flex-wrap items-center gap-2 text-sm text-slate-300">
+              <span className="rounded-full bg-slate-700 px-3 py-1">
+                {selectedBooks.length} selected
+              </span>
+              <span className="rounded-full bg-slate-700 px-3 py-1">
+                {sortedBooks.filter((book) => !book.is_owned).length} missing in view
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={selectVisibleBooks}
+                className="rounded-md border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-slate-100 hover:bg-slate-600"
+              >
+                Select Visible
+              </button>
+              <button
+                type="button"
+                onClick={selectMissingBooks}
+                className="rounded-md border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-slate-100 hover:bg-slate-600"
+              >
+                Select Missing
+              </button>
+              <button
+                type="button"
+                onClick={clearSelectedBooks}
+                disabled={selectedBooks.length === 0}
+                className="rounded-md border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-slate-100 hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Clear
+              </button>
+              <button
+                type="button"
+                onClick={() => setBulkIrcOpen(true)}
+                disabled={selectedBooks.length === 0}
+                className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Download Selected From IRC
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {sortedBooks.length === 0 ? (
         <div className="text-center py-16">
           <p className="text-slate-400 text-lg">No matching books found</p>
@@ -415,6 +526,16 @@ export default function AuthorDetailPage() {
         authorName={author.name}
         open={portraitPickerOpen}
         onClose={() => setPortraitPickerOpen(false)}
+      />
+      <BulkIrcDialog
+        open={bulkIrcOpen}
+        books={selectedBooks.map((book) => ({
+          ...book,
+          author_id: author.id,
+          author_name: author.name,
+        }))}
+        onClose={() => setBulkIrcOpen(false)}
+        onQueued={() => undefined}
       />
     </div>
   );

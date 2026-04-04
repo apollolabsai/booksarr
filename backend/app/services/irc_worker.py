@@ -15,11 +15,21 @@ from sqlalchemy.orm import selectinload
 
 from backend.app.config import BOOKS_DIR, DOWNLOADS_DIR, IRC_STATE_DIR
 from backend.app.database import async_session
-from backend.app.models import Author, Book, IrcDownloadJob, IrcSearchJob, IrcSearchResult, Setting
+from backend.app.models import (
+    Author,
+    Book,
+    IrcBulkDownloadBatch,
+    IrcBulkDownloadItem,
+    IrcDownloadJob,
+    IrcSearchJob,
+    IrcSearchResult,
+    Setting,
+)
 from backend.app.services.irc_parser import (
     build_expected_result_filename,
     build_search_command,
     command_matches_filename,
+    normalize_query_key,
     normalize_query_text,
     parse_search_results_archive,
     result_archive_matches_query,
@@ -36,6 +46,25 @@ IRC_DCC_WAIT_TIMEOUT_SECONDS = 60
 IRC_DCC_CHUNK_TIMEOUT_SECONDS = 10
 IRC_DCC_TRAILING_READ_TIMEOUT_SECONDS = 1.0
 IRC_DCC_MAX_TRAILING_BYTES = 1024 * 1024
+
+BULK_BATCH_ACTIVE_STATUSES = {"queued", "running"}
+BULK_ITEM_ACTIVE_STATUSES = {
+    "searching",
+    "downloading_search_results",
+    "choosing_best_option",
+    "downloading_book",
+    "extracting",
+    "importing",
+}
+_AUDIO_FORMATS = {"mp3", "m4b", "m4a", "aac", "flac", "ogg", "opus", "aax", "aa", "wav"}
+_AUDIO_TOKENS = {
+    "audiobook",
+    "audio book",
+    "audible",
+    "unabridged",
+    "abridged",
+    "narrated",
+}
 
 _worker_task: asyncio.Task | None = None
 _stop_event: asyncio.Event | None = None
@@ -194,6 +223,7 @@ async def _worker_loop():
             else:
                 await _expire_stale_search_jobs()
                 await _expire_stale_download_jobs()
+                await _process_bulk_batches()
                 _runtime.state = "connected"
                 _runtime.last_message = (
                     f"Connected and monitoring jobs ({queued_searches} search, {queued_downloads} download queued)"
@@ -329,11 +359,451 @@ async def _attempt_connection(settings: dict[str, object]):
         logger.warning("IRC connection failed: %s", raw_message)
 
 
+async def _process_bulk_batches():
+    async with async_session() as db:
+        batch_result = await db.execute(
+            select(IrcBulkDownloadBatch)
+            .options(
+                selectinload(IrcBulkDownloadBatch.items).selectinload(IrcBulkDownloadItem.book).selectinload(Book.author),
+                selectinload(IrcBulkDownloadBatch.items).selectinload(IrcBulkDownloadItem.search_job).selectinload(IrcSearchJob.results),
+                selectinload(IrcBulkDownloadBatch.items).selectinload(IrcBulkDownloadItem.download_job),
+                selectinload(IrcBulkDownloadBatch.items).selectinload(IrcBulkDownloadItem.selected_search_result),
+            )
+            .where(IrcBulkDownloadBatch.status.in_(BULK_BATCH_ACTIVE_STATUSES))
+            .order_by(IrcBulkDownloadBatch.created_at.asc())
+        )
+        batches = batch_result.scalars().all()
+        if not batches:
+            return
+
+        now = datetime.utcnow()
+        updated_anything = False
+
+        for batch in batches:
+            items = sorted(batch.items, key=lambda item: item.position)
+
+            active_item = next((item for item in items if item.status in BULK_ITEM_ACTIVE_STATUSES), None)
+            if active_item is not None:
+                changed = await _advance_bulk_item(batch, active_item, now, db)
+                updated_anything = updated_anything or changed
+                break
+
+            queued_item = next((item for item in items if item.status == "queued"), None)
+            if queued_item is not None:
+                if batch.status != "running":
+                    batch.status = "running"
+                    batch.updated_at = now
+                await _queue_bulk_item_search(batch, queued_item, now, db)
+                updated_anything = True
+                break
+
+            if batch.status != "completed":
+                batch.status = "completed"
+                batch.updated_at = now
+                batch.completed_at = now
+                logger.info(
+                    "IRC bulk batch %s completed: total=%s completed=%s failed=%s",
+                    batch.request_id,
+                    len(items),
+                    sum(1 for item in items if item.status == "completed"),
+                    sum(1 for item in items if item.status == "failed"),
+                )
+                updated_anything = True
+
+        if updated_anything:
+            await db.commit()
+
+
+async def _advance_bulk_item(
+    batch: IrcBulkDownloadBatch,
+    item: IrcBulkDownloadItem,
+    now: datetime,
+    db,
+) -> bool:
+    if item.download_job is not None:
+        download_status = item.download_job.status
+        if download_status in {"queued", "sent", "waiting_dcc", "downloading", "downloaded"} and item.status != "downloading_book":
+            item.status = "downloading_book"
+            item.updated_at = now
+            return True
+        if download_status in {"extracting", "extracted"} and item.status != "extracting":
+            item.status = "extracting"
+            item.updated_at = now
+            return True
+        if download_status in {"importing", "refreshing_library"} and item.status != "importing":
+            item.status = "importing"
+            item.updated_at = now
+            return True
+        if download_status == "moved":
+            item.status = "completed"
+            item.error_message = None
+            item.updated_at = now
+            item.completed_at = now
+            logger.info(
+                "IRC bulk item %s completed: batch=%s book_id=%s selected=%r",
+                item.id,
+                batch.request_id,
+                item.book_id,
+                item.selected_result_label,
+            )
+            return True
+        if download_status == "failed":
+            can_retry = _has_next_bulk_result_candidate(item)
+            if can_retry:
+                item.status = "choosing_best_option"
+                item.error_message = item.download_job.error_message
+                item.updated_at = now
+                logger.info(
+                    "IRC bulk item %s retrying after download failure: batch=%s book_id=%s error=%s",
+                    item.id,
+                    batch.request_id,
+                    item.book_id,
+                    item.download_job.error_message,
+                )
+            else:
+                item.status = "failed"
+                item.error_message = item.download_job.error_message or "Download failed"
+                item.updated_at = now
+                item.completed_at = now
+                logger.warning(
+                    "IRC bulk item %s failed after exhausting candidates: batch=%s book_id=%s error=%s",
+                    item.id,
+                    batch.request_id,
+                    item.book_id,
+                    item.error_message,
+                )
+            return True
+
+    if item.search_job is not None:
+        if item.search_job.status == "downloading_results" and item.status != "downloading_search_results":
+            item.status = "downloading_search_results"
+            item.updated_at = now
+            return True
+        if item.search_job.status == "failed":
+            item.status = "failed"
+            item.error_message = item.search_job.error_message or "Search failed"
+            item.updated_at = now
+            item.completed_at = now
+            logger.warning(
+                "IRC bulk item %s failed during search: batch=%s book_id=%s error=%s",
+                item.id,
+                batch.request_id,
+                item.book_id,
+                item.error_message,
+            )
+            return True
+        if (
+            item.search_job.status == "results_ready"
+            and item.download_job is None
+            and item.status != "choosing_best_option"
+        ):
+            item.status = "choosing_best_option"
+            item.updated_at = now
+            return True
+
+    if item.status == "choosing_best_option":
+        return await _queue_best_download_for_bulk_item(batch, item, now, db)
+
+    return False
+
+
+async def _queue_bulk_item_search(
+    batch: IrcBulkDownloadBatch,
+    item: IrcBulkDownloadItem,
+    now: datetime,
+    db,
+) -> None:
+    query_text = normalize_query_text(item.query_text or _bulk_query_for_book(item.book))
+    normalized_query = normalize_query_key(query_text)
+    if not query_text or not normalized_query:
+        item.status = "failed"
+        item.error_message = "Search query could not be built for this book"
+        item.updated_at = now
+        item.completed_at = now
+        logger.warning(
+            "IRC bulk item %s failed before search: batch=%s book_id=%s reason=invalid_query",
+            item.id,
+            batch.request_id,
+            item.book_id,
+        )
+        return
+
+    item.query_text = query_text
+    item.status = "searching"
+    item.error_message = None
+    item.selected_result_label = None
+    item.updated_at = now
+
+    job = IrcSearchJob(
+        book_id=item.book_id,
+        query_text=query_text,
+        normalized_query=normalized_query,
+        status="queued",
+        auto_download=False,
+        bulk_request_id=batch.request_id,
+        bulk_item_id=item.id,
+        request_message=build_search_command(query_text),
+        expected_result_filename=build_expected_result_filename(query_text),
+    )
+    db.add(job)
+    await db.flush()
+    item.search_job_id = job.id
+    item.search_job = job
+    logger.info(
+        "IRC bulk item %s queued search: batch=%s book_id=%s position=%s query=%r",
+        item.id,
+        batch.request_id,
+        item.book_id,
+        item.position,
+        query_text,
+    )
+
+
+async def _queue_best_download_for_bulk_item(
+    batch: IrcBulkDownloadBatch,
+    item: IrcBulkDownloadItem,
+    now: datetime,
+    db,
+) -> bool:
+    if item.search_job is None or not item.search_job.results:
+        item.status = "failed"
+        item.error_message = "Search returned no parsed results"
+        item.updated_at = now
+        item.completed_at = now
+        logger.warning(
+            "IRC bulk item %s failed: batch=%s book_id=%s reason=no_parsed_results",
+            item.id,
+            batch.request_id,
+            item.book_id,
+        )
+        return True
+
+    attempted_ids = _parse_attempted_ids(item.attempted_result_ids)
+    previous_result = next(
+        (result for result in item.search_job.results if result.id == item.selected_search_result_id),
+        None,
+    )
+    prefer_different_bot = bool(item.error_message and "timed out" in item.error_message.lower())
+    selected_result = _choose_best_bulk_result(
+        book=item.book,
+        results=item.search_job.results,
+        attempted_ids=attempted_ids,
+        previous_result=previous_result,
+        prefer_different_bot=prefer_different_bot,
+    )
+    if selected_result is None:
+        item.status = "failed"
+        item.error_message = item.error_message or "No suitable ebook result remained after filtering"
+        item.updated_at = now
+        item.completed_at = now
+        logger.warning(
+            "IRC bulk item %s failed: batch=%s book_id=%s reason=no_suitable_result",
+            item.id,
+            batch.request_id,
+            item.book_id,
+        )
+        return True
+
+    for row in item.search_job.results:
+        row.selected = row.id == selected_result.id
+
+    attempted_ids.append(selected_result.id)
+    item.attempted_result_ids = ",".join(str(value) for value in attempted_ids)
+    item.selected_search_result_id = selected_result.id
+    item.selected_result_label = selected_result.display_name
+    item.error_message = None
+    item.status = "downloading_book"
+    item.updated_at = now
+
+    download_job = IrcDownloadJob(
+        book_id=item.book_id,
+        search_job_id=item.search_job_id,
+        search_result_id=selected_result.id,
+        status="queued",
+        bulk_request_id=batch.request_id,
+        bulk_item_id=item.id,
+        request_message=selected_result.download_command,
+        dcc_filename=selected_result.display_name,
+    )
+    db.add(download_job)
+    await db.flush()
+    item.download_job_id = download_job.id
+    item.download_job = download_job
+
+    logger.info(
+        "IRC bulk item %s chose search result: batch=%s book_id=%s result_id=%s bot=%r label=%r attempts=%s",
+        item.id,
+        batch.request_id,
+        item.book_id,
+        selected_result.id,
+        selected_result.bot_name,
+        selected_result.display_name,
+        len(attempted_ids),
+    )
+    return True
+
+
+def _bulk_query_for_book(book: Book | None) -> str:
+    if book is None:
+        return ""
+    author_name = book.author.name if book.author else ""
+    return " ".join(part for part in [author_name, book.title] if part).strip()
+
+
+def _parse_attempted_ids(value: str | None) -> list[int]:
+    if not value:
+        return []
+    parsed: list[int] = []
+    for chunk in value.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        try:
+            parsed.append(int(chunk))
+        except ValueError:
+            continue
+    return parsed
+
+
+def _has_next_bulk_result_candidate(item: IrcBulkDownloadItem) -> bool:
+    if item.search_job is None or not item.search_job.results:
+        return False
+    attempted_ids = _parse_attempted_ids(item.attempted_result_ids)
+    previous_result = next(
+        (result for result in item.search_job.results if result.id == item.selected_search_result_id),
+        None,
+    )
+    return _choose_best_bulk_result(
+        book=item.book,
+        results=item.search_job.results,
+        attempted_ids=attempted_ids,
+        previous_result=previous_result,
+        prefer_different_bot=True,
+    ) is not None
+
+
+def _choose_best_bulk_result(
+    *,
+    book: Book | None,
+    results: list[IrcSearchResult],
+    attempted_ids: list[int],
+    previous_result: IrcSearchResult | None,
+    prefer_different_bot: bool,
+) -> IrcSearchResult | None:
+    candidates = []
+    attempted_set = set(attempted_ids)
+    for result in results:
+        if result.id in attempted_set:
+            continue
+        score = _score_bulk_result(book, result)
+        if score <= -1000:
+            continue
+        candidates.append((score, result))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: (item[0], -item[1].result_index), reverse=True)
+    if prefer_different_bot and previous_result and previous_result.bot_name:
+        different_bot = [
+            (score, result) for score, result in candidates
+            if result.bot_name and result.bot_name != previous_result.bot_name
+        ]
+        if different_bot:
+            return different_bot[0][1]
+
+    return candidates[0][1]
+
+
+def _score_bulk_result(book: Book | None, result: IrcSearchResult) -> int:
+    display_name = (result.display_name or result.download_command or "").lower()
+    file_format = (result.file_format or Path(result.display_name or "").suffix.lstrip(".")).lower()
+    if file_format in _AUDIO_FORMATS:
+        return -5000
+    if any(token in display_name for token in _AUDIO_TOKENS):
+        return -5000
+    if file_format not in {"epub", "rar"}:
+        return -2000
+
+    score = 120 if file_format == "epub" else 80
+    if file_format == "rar":
+        score += 10
+
+    size_mb = _parse_size_to_megabytes(result.file_size_text)
+    if size_mb is not None:
+        if size_mb > 100:
+            score -= 250
+        elif size_mb > 25:
+            score -= 75
+        elif size_mb < 0.1:
+            score -= 75
+
+    if book is None:
+        return score
+
+    normalized_book_title = normalize_title(book.title or "")
+    normalized_result_title = normalize_title(result.normalized_title or result.display_name or "")
+    if normalized_book_title and normalized_result_title:
+        if normalized_book_title == normalized_result_title:
+            score += 120
+        else:
+            book_tokens = set(normalized_book_title.split())
+            result_tokens = set(normalized_result_title.split())
+            intersection = len(book_tokens & result_tokens)
+            score += min(90, intersection * 20)
+            if normalized_book_title in normalized_result_title or normalized_result_title in normalized_book_title:
+                score += 40
+
+    author_name = book.author.name if book and book.author else ""
+    normalized_author = normalize_title(author_name)
+    normalized_result_author = normalize_title(result.normalized_author or "")
+    if normalized_author and normalized_result_author:
+        if normalized_author == normalized_result_author:
+            score += 60
+        else:
+            author_tokens = set(normalized_author.split())
+            result_author_tokens = set(normalized_result_author.split())
+            score += min(40, len(author_tokens & result_author_tokens) * 12)
+
+    return score
+
+
+def _parse_size_to_megabytes(value: str | None) -> float | None:
+    if not value:
+        return None
+    match = re.search(r"(\d+(?:\.\d+)?)\s*([KMG])B?", value.strip(), re.IGNORECASE)
+    if not match:
+        return None
+    amount = float(match.group(1))
+    unit = match.group(2).upper()
+    if unit == "K":
+        return amount / 1024
+    if unit == "M":
+        return amount
+    if unit == "G":
+        return amount * 1024
+    return None
+
+
 async def _process_next_search_job(settings: dict[str, object]):
     if not _runtime.connected or not _runtime.joined_channel or _writer is None:
         return
 
     async with async_session() as db:
+        active_bulk_result = await db.execute(
+            select(IrcSearchJob).where(
+                IrcSearchJob.bulk_item_id.is_not(None),
+                IrcSearchJob.status.in_(["sent", "waiting_dcc", "downloading_results"]),
+            ).order_by(IrcSearchJob.created_at.asc())
+        )
+        active_job = active_bulk_result.scalars().first()
+        if active_job:
+            _runtime.active_search_job_id = active_job.id
+            _runtime.last_message = (
+                f"Search job {active_job.id} waiting for DCC result archive for '{active_job.query_text}'"
+            )
+            return
+
         active_result = await db.execute(
             select(IrcSearchJob).where(
                 IrcSearchJob.status.in_(["sent", "waiting_dcc", "downloading_results"])
@@ -347,10 +817,17 @@ async def _process_next_search_job(settings: dict[str, object]):
             )
             return
 
-        queued_result = await db.execute(
-            select(IrcSearchJob).where(IrcSearchJob.status == "queued").order_by(IrcSearchJob.created_at.asc())
+        queued_bulk_result = await db.execute(
+            select(IrcSearchJob)
+            .where(IrcSearchJob.bulk_item_id.is_not(None), IrcSearchJob.status == "queued")
+            .order_by(IrcSearchJob.created_at.asc())
         )
-        job = queued_result.scalars().first()
+        job = queued_bulk_result.scalars().first()
+        if job is None:
+            queued_result = await db.execute(
+            select(IrcSearchJob).where(IrcSearchJob.status == "queued").order_by(IrcSearchJob.created_at.asc())
+            )
+            job = queued_result.scalars().first()
         if job is None:
             _runtime.active_search_job_id = None
             return
@@ -363,8 +840,9 @@ async def _process_next_search_job(settings: dict[str, object]):
         _runtime.active_search_job_id = job.id
 
         logger.info(
-            "IRC search job %s dispatching: query='%s' expected_result='%s'",
+            "IRC search job %s dispatching: bulk_request_id=%s query='%s' expected_result='%s'",
             job.id,
+            job.bulk_request_id,
             job.query_text,
             job.expected_result_filename,
         )
@@ -379,9 +857,10 @@ async def _process_next_search_job(settings: dict[str, object]):
         )
         await db.commit()
         logger.info(
-            "IRC search job %s is now waiting for a DCC result archive that matches query '%s'",
+            "IRC search job %s is now waiting for a DCC result archive that matches query '%s' (bulk_request_id=%s)",
             job.id,
             job.query_text,
+            job.bulk_request_id,
         )
 
 
@@ -390,6 +869,16 @@ async def _process_next_download_job(settings: dict[str, object]):
         return
 
     async with async_session() as db:
+        active_bulk_search_result = await db.execute(
+            select(IrcSearchJob).where(
+                IrcSearchJob.bulk_item_id.is_not(None),
+                IrcSearchJob.status.in_(["sent", "waiting_dcc", "downloading_results"])
+            ).order_by(IrcSearchJob.created_at.asc())
+        )
+        active_search_job = active_bulk_search_result.scalars().first()
+        if active_search_job is not None:
+            return
+
         active_search_result = await db.execute(
             select(IrcSearchJob).where(
                 IrcSearchJob.status.in_(["sent", "waiting_dcc", "downloading_results"])
@@ -397,6 +886,27 @@ async def _process_next_download_job(settings: dict[str, object]):
         )
         active_search_job = active_search_result.scalars().first()
         if active_search_job is not None:
+            return
+
+        active_bulk_download_result = await db.execute(
+            select(IrcDownloadJob).where(
+                IrcDownloadJob.bulk_item_id.is_not(None),
+                IrcDownloadJob.status.in_([
+                    "sent",
+                    "waiting_dcc",
+                    "downloading",
+                    "extracting",
+                    "importing",
+                    "refreshing_library",
+                ])
+            ).order_by(IrcDownloadJob.created_at.asc())
+        )
+        active_download_job = active_bulk_download_result.scalars().first()
+        if active_download_job is not None:
+            _runtime.active_download_job_id = active_download_job.id
+            _runtime.last_message = (
+                f"Download job {active_download_job.id} waiting for DCC file offer"
+            )
             return
 
         active_download_result = await db.execute(
@@ -419,10 +929,17 @@ async def _process_next_download_job(settings: dict[str, object]):
             )
             return
 
-        queued_result = await db.execute(
-            select(IrcDownloadJob).where(IrcDownloadJob.status == "queued").order_by(IrcDownloadJob.created_at.asc())
+        queued_bulk_result = await db.execute(
+            select(IrcDownloadJob)
+            .where(IrcDownloadJob.bulk_item_id.is_not(None), IrcDownloadJob.status == "queued")
+            .order_by(IrcDownloadJob.created_at.asc())
         )
-        job = queued_result.scalars().first()
+        job = queued_bulk_result.scalars().first()
+        if job is None:
+            queued_result = await db.execute(
+                select(IrcDownloadJob).where(IrcDownloadJob.status == "queued").order_by(IrcDownloadJob.created_at.asc())
+            )
+            job = queued_result.scalars().first()
         if job is None:
             _runtime.active_download_job_id = None
             return
@@ -441,8 +958,9 @@ async def _process_next_download_job(settings: dict[str, object]):
         _runtime.active_download_job_id = job.id
 
         logger.info(
-            "IRC download job %s dispatching: search_job_id=%s search_result_id=%s command=%r",
+            "IRC download job %s dispatching: bulk_request_id=%s search_job_id=%s search_result_id=%s command=%r",
             job.id,
+            job.bulk_request_id,
             job.search_job_id,
             job.search_result_id,
             job.request_message,
@@ -458,8 +976,9 @@ async def _process_next_download_job(settings: dict[str, object]):
         )
         await db.commit()
         logger.info(
-            "IRC download job %s is now waiting for a DCC offer that matches its request command",
+            "IRC download job %s is now waiting for a DCC offer that matches its request command (bulk_request_id=%s)",
             job.id,
+            job.bulk_request_id,
         )
 
 
@@ -649,19 +1168,35 @@ async def _handle_dcc_offer(offer: dict[str, Any]):
     )
 
     async with async_session() as db:
-        active_search_result = await db.execute(
+        active_bulk_search_result = await db.execute(
             select(IrcSearchJob).where(
+                IrcSearchJob.bulk_item_id.is_not(None),
                 IrcSearchJob.status.in_(["waiting_dcc", "downloading_results"])
             ).order_by(IrcSearchJob.updated_at.asc())
         )
-        active_search_job = active_search_result.scalars().first()
+        active_search_job = active_bulk_search_result.scalars().first()
+        if active_search_job is None:
+            active_search_result = await db.execute(
+                select(IrcSearchJob).where(
+                    IrcSearchJob.status.in_(["waiting_dcc", "downloading_results"])
+                ).order_by(IrcSearchJob.updated_at.asc())
+            )
+            active_search_job = active_search_result.scalars().first()
 
-        active_download_result = await db.execute(
+        active_bulk_download_result = await db.execute(
             select(IrcDownloadJob).where(
+                IrcDownloadJob.bulk_item_id.is_not(None),
                 IrcDownloadJob.status.in_(["waiting_dcc", "downloading"])
             ).order_by(IrcDownloadJob.updated_at.asc())
         )
-        active_download_job = active_download_result.scalars().first()
+        active_download_job = active_bulk_download_result.scalars().first()
+        if active_download_job is None:
+            active_download_result = await db.execute(
+                select(IrcDownloadJob).where(
+                    IrcDownloadJob.status.in_(["waiting_dcc", "downloading"])
+                ).order_by(IrcDownloadJob.updated_at.asc())
+            )
+            active_download_job = active_download_result.scalars().first()
 
     if active_search_job is not None and str(offer["filename"]).lower().endswith(".zip"):
         _runtime.active_search_job_id = active_search_job.id
@@ -1453,8 +1988,9 @@ async def _store_search_results(
 
         await db.execute(delete(IrcSearchResult).where(IrcSearchResult.search_job_id == job_id))
 
+        created_results: list[IrcSearchResult] = []
         for index, row in enumerate(parsed_results, start=1):
-            db.add(IrcSearchResult(
+            result_row = IrcSearchResult(
                 search_job_id=job_id,
                 result_index=index,
                 raw_line=str(row.get("raw_line") or ""),
@@ -1466,7 +2002,49 @@ async def _store_search_results(
                 file_size_text=row.get("file_size_text"),
                 download_command=str(row.get("download_command") or ""),
                 selected=False,
+            )
+            created_results.append(result_row)
+            db.add(result_row)
+
+        logger.info(
+            "IRC search job %s stored parsed results: bulk_request_id=%s result_count=%s auto_download=%s",
+            job_id,
+            job.bulk_request_id,
+            len(created_results),
+            job.auto_download,
+        )
+
+        if job.auto_download and len(created_results) == 1 and created_results[0].download_command:
+            selected_result = created_results[0]
+            selected_result.selected = True
+            db.add(IrcDownloadJob(
+                book_id=job.book_id,
+                search_job_id=job_id,
+                search_result=selected_result,
+                status="queued",
+                bulk_request_id=job.bulk_request_id,
+                request_message=selected_result.download_command,
+                dcc_filename=selected_result.display_name,
             ))
+            logger.info(
+                "IRC search job %s auto-queued download job for single parsed result: bulk_request_id=%s result=%s",
+                job_id,
+                job.bulk_request_id,
+                selected_result.display_name,
+            )
+        elif job.auto_download and len(created_results) != 1:
+            logger.info(
+                "IRC search job %s did not auto-queue a download: bulk_request_id=%s reason=result_count_%s",
+                job_id,
+                job.bulk_request_id,
+                len(created_results),
+            )
+        elif job.auto_download and len(created_results) == 1 and not created_results[0].download_command:
+            logger.warning(
+                "IRC search job %s did not auto-queue a download: bulk_request_id=%s reason=missing_download_command",
+                job_id,
+                job.bulk_request_id,
+            )
 
         job.result_archive_path = str(archive_path.relative_to(DOWNLOADS_DIR))
         job.result_text_path = str(text_path)

@@ -58,6 +58,8 @@ class IrcSearchJobSummary(BaseModel):
     book_id: int | None
     query_text: str
     status: str
+    auto_download: bool = False
+    bulk_request_id: str | None = None
     expected_result_filename: str | None
     result_count: int = 0
     error_message: str | None
@@ -85,6 +87,7 @@ class IrcDownloadJobSummary(BaseModel):
     search_job_id: int | None
     search_result_id: int | None
     status: str
+    bulk_request_id: str | None = None
     dcc_filename: str | None
     saved_path: str | None
     moved_to_library_path: str | None
@@ -94,9 +97,71 @@ class IrcDownloadJobSummary(BaseModel):
     completed_at: str | None = None
 
 
+class IrcBulkBatchCreateRequest(BaseModel):
+    book_ids: list[int] = Field(min_length=1, max_length=50)
+
+
+class IrcBulkDownloadItemSummary(BaseModel):
+    id: int
+    book_id: int
+    title: str
+    author_name: str | None
+    position: int
+    status: str
+    query_text: str | None = None
+    error_message: str | None = None
+    selected_result_label: str | None = None
+    attempt_count: int = 0
+    search_job: IrcSearchJobSummary | None = None
+    download_job: IrcDownloadJobSummary | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    completed_at: str | None = None
+
+
+class IrcBulkDownloadBatchSummary(BaseModel):
+    id: int
+    request_id: str
+    status: str
+    total_books: int
+    completed_books: int
+    failed_books: int
+    items: list[IrcBulkDownloadItemSummary]
+    created_at: str | None = None
+    updated_at: str | None = None
+    completed_at: str | None = None
+
+
 class IrcSearchRequest(BaseModel):
     book_id: int | None = None
     query_text: str = Field(min_length=1, max_length=300)
+    auto_download: bool = False
+
+
+class IrcBulkSearchRequest(BaseModel):
+    book_ids: list[int] = Field(min_length=1, max_length=50)
+    skip_owned: bool = True
+    auto_download_single_result: bool = True
+
+
+class IrcBulkSearchQueuedItem(BaseModel):
+    book_id: int
+    title: str
+    author_name: str | None
+    query_text: str
+    job: IrcSearchJobSummary
+
+
+class IrcBulkSearchSkippedItem(BaseModel):
+    book_id: int
+    title: str
+    author_name: str | None
+    reason: str
+
+
+class IrcBulkSearchResponse(BaseModel):
+    queued: list[IrcBulkSearchQueuedItem]
+    skipped: list[IrcBulkSearchSkippedItem]
 
 
 class IrcDownloadRequest(BaseModel):

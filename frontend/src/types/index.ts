@@ -349,9 +349,62 @@ export interface IrcSearchJob {
   book_id: number | null;
   query_text: string;
   status: string;
+  auto_download: boolean;
+  bulk_request_id: string | null;
   expected_result_filename: string | null;
   result_count: number;
   error_message: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  completed_at: string | null;
+}
+
+export interface IrcBulkSearchQueuedItem {
+  book_id: number;
+  title: string;
+  author_name: string | null;
+  query_text: string;
+  job: IrcSearchJob;
+}
+
+export interface IrcBulkSearchSkippedItem {
+  book_id: number;
+  title: string;
+  author_name: string | null;
+  reason: string;
+}
+
+export interface IrcBulkSearchResponse {
+  queued: IrcBulkSearchQueuedItem[];
+  skipped: IrcBulkSearchSkippedItem[];
+}
+
+export interface IrcBulkDownloadItem {
+  id: number;
+  book_id: number;
+  title: string;
+  author_name: string | null;
+  position: number;
+  status: string;
+  query_text: string | null;
+  error_message: string | null;
+  selected_result_label: string | null;
+  attempt_count: number;
+  search_job: IrcSearchJob | null;
+  download_job: IrcDownloadJob | null;
+  created_at: string | null;
+  updated_at: string | null;
+  completed_at: string | null;
+}
+
+export interface IrcBulkDownloadBatch {
+  id: number;
+  request_id: string;
+  status: string;
+  total_books: number;
+  completed_books: number;
+  failed_books: number;
+  items: IrcBulkDownloadItem[];
   created_at: string | null;
   updated_at: string | null;
   completed_at: string | null;
@@ -376,6 +429,7 @@ export interface IrcDownloadJob {
   search_job_id: number | null;
   search_result_id: number | null;
   status: string;
+  bulk_request_id: string | null;
   dcc_filename: string | null;
   saved_path: string | null;
   moved_to_library_path: string | null;

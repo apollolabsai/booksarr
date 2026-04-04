@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchApi } from "./client";
 import type {
+  IrcBulkDownloadBatch,
+  IrcBulkSearchResponse,
   IrcDownloadJob,
   IrcSearchJob,
   IrcSearchResult,
@@ -78,7 +80,7 @@ export function useIrcSearchJobs() {
 export function useCreateIrcSearchJob() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (body: { book_id?: number; query_text: string }) =>
+    mutationFn: (body: { book_id?: number; query_text: string; auto_download?: boolean }) =>
       fetchApi<IrcSearchJob>("/irc/search", { method: "POST", body: JSON.stringify(body) }),
     onSuccess: (job) => {
       queryClient.invalidateQueries({ queryKey: ["ircSearchJobs"] });
@@ -86,6 +88,50 @@ export function useCreateIrcSearchJob() {
       queryClient.invalidateQueries({ queryKey: ["ircSearchJob", job.id] });
       queryClient.invalidateQueries({ queryKey: ["ircSearchResults", job.id] });
     },
+  });
+}
+
+export function useCreateBulkIrcSearchJobs() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: {
+      book_ids: number[];
+      skip_owned?: boolean;
+      auto_download_single_result?: boolean;
+    }) => fetchApi<IrcBulkSearchResponse>("/irc/search/bulk", { method: "POST", body: JSON.stringify(body) }),
+    onSuccess: (response) => {
+      queryClient.invalidateQueries({ queryKey: ["ircSearchJobs"] });
+      queryClient.invalidateQueries({ queryKey: ["ircDownloadJobs"] });
+      queryClient.invalidateQueries({ queryKey: ["ircStatus"] });
+      for (const item of response.queued) {
+        queryClient.setQueryData(["ircSearchJob", item.job.id], item.job);
+        queryClient.invalidateQueries({ queryKey: ["ircSearchResults", item.job.id] });
+      }
+    },
+  });
+}
+
+export function useCreateIrcBulkBatch() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { book_ids: number[] }) =>
+      fetchApi<IrcBulkDownloadBatch>("/irc/bulk-batches", { method: "POST", body: JSON.stringify(body) }),
+    onSuccess: (batch) => {
+      queryClient.setQueryData(["ircBulkBatch", batch.id], batch);
+      queryClient.invalidateQueries({ queryKey: ["ircStatus"] });
+      queryClient.invalidateQueries({ queryKey: ["ircSearchJobs"] });
+      queryClient.invalidateQueries({ queryKey: ["ircDownloadJobs"] });
+    },
+  });
+}
+
+export function useIrcBulkBatch(batchId: number | null, enabled: boolean = true) {
+  return useQuery({
+    queryKey: ["ircBulkBatch", batchId],
+    queryFn: () => fetchApi<IrcBulkDownloadBatch>(`/irc/bulk-batches/${batchId}`),
+    enabled: enabled && batchId != null,
+    refetchInterval: enabled && batchId != null ? 3000 : false,
+    refetchIntervalInBackground: true,
   });
 }
 

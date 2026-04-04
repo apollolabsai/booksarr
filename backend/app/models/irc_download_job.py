@@ -14,6 +14,8 @@ class IrcDownloadJob(Base):
     search_job_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("irc_search_jobs.id"), nullable=True, index=True)
     search_result_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("irc_search_results.id"), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String, nullable=False, default="queued", index=True)
+    bulk_request_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    bulk_item_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("irc_bulk_download_items.id"), nullable=True, index=True)
     request_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     dcc_filename: Mapped[str | None] = mapped_column(String, nullable=True)
     saved_path: Mapped[str | None] = mapped_column(String, nullable=True)
