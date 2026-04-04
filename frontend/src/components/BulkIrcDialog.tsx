@@ -204,8 +204,13 @@ export default function BulkIrcDialog({
                       {activeItem.author_name || "Unknown author"} • {formatItemStatus(activeItem.status)}
                     </div>
                     {activeItem.selected_result_label && (
-                      <div className="mt-2 text-xs text-emerald-300">
-                        Selected: {activeItem.selected_result_label}
+                      <div className="mt-2 rounded-md border border-cyan-500/20 bg-cyan-500/10 px-3 py-2 text-[11px] text-cyan-200">
+                        <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-300/80">
+                          Selected Result
+                        </div>
+                        <div className="break-words font-mono">
+                          {activeItem.selected_result_label}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -283,7 +288,14 @@ function BulkBatchItemCard({ item }: { item: IrcBulkDownloadItem }) {
             <div className="mt-2 text-xs text-slate-500">Query: {item.query_text}</div>
           )}
           {item.selected_result_label && (
-            <div className="mt-1 text-xs text-emerald-300">Selected: {item.selected_result_label}</div>
+            <div className="mt-2 rounded-md border border-cyan-500/20 bg-cyan-500/10 px-3 py-2 text-[11px] text-cyan-200">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-300/80">
+                Selected Result
+              </div>
+              <div className="break-words font-mono">
+                {item.selected_result_label}
+              </div>
+            </div>
           )}
           {item.error_message && (
             <div className="mt-2 text-xs text-rose-300">{item.error_message}</div>

@@ -450,15 +450,20 @@ async def _advance_bulk_item(
         if download_status == "failed":
             can_retry = _has_next_bulk_result_candidate(item)
             if can_retry:
+                previous_download_job_id = item.download_job_id
+                error_message = item.download_job.error_message
                 item.status = "choosing_best_option"
-                item.error_message = item.download_job.error_message
+                item.error_message = error_message
+                item.download_job_id = None
+                item.download_job = None
                 item.updated_at = now
-                logger.info(
-                    "IRC bulk item %s retrying after download failure: batch=%s book_id=%s error=%s",
+                logger.warning(
+                    "IRC bulk item %s retrying after download failure: batch=%s book_id=%s previous_download_job_id=%s error=%s",
                     item.id,
                     batch.request_id,
                     item.book_id,
-                    item.download_job.error_message,
+                    previous_download_job_id,
+                    error_message,
                 )
             else:
                 item.status = "failed"
@@ -610,7 +615,7 @@ async def _queue_best_download_for_bulk_item(
     attempted_ids.append(selected_result.id)
     item.attempted_result_ids = ",".join(str(value) for value in attempted_ids)
     item.selected_search_result_id = selected_result.id
-    item.selected_result_label = selected_result.display_name
+    item.selected_result_label = selected_result.raw_line or selected_result.display_name
     item.error_message = None
     item.status = "downloading_book"
     item.updated_at = now
@@ -1004,7 +1009,7 @@ async def _reader_loop(reader: asyncio.StreamReader):
                 payload = line.split(" ", 1)[1]
                 if _writer is not None:
                     _send_raw_line(_writer, f"PONG {payload}")
-                    logger.info("IRC heartbeat reply sent for server ping")
+                    logger.debug("IRC heartbeat reply sent for server ping")
                 continue
 
             await _handle_server_line(line)
@@ -1133,6 +1138,10 @@ def _should_log_raw_irc_line(line: str) -> bool:
     if "DCC SEND " in upper_line:
         return False
     if " PRIVMSG " in upper_line:
+        return False
+    if line.startswith(":") and any(
+        token in upper_line for token in (" JOIN ", " PART ", " QUIT ", " KICK ", " NICK ")
+    ):
         return False
     return True
 
@@ -1287,7 +1296,7 @@ async def _handle_server_line(line: str):
 
     if " NOTICE " in line and "SearchBot" in normalized_line and "returned no matches" in normalized_line.lower():
         _runtime.last_message = "SearchBot reported no matches for the active query"
-        logger.info("IRC SearchBot notice indicates no matches: %s", normalized_line)
+        logger.warning("IRC SearchBot notice indicates no matches: %s", normalized_line)
         await _fail_active_search_job("Search returned no matches")
         return
 
@@ -1754,7 +1763,10 @@ async def _extract_epub_from_rar(archive_path: Path, job_id: int) -> Path:
 
 
 def _send_raw_line(writer: asyncio.StreamWriter, line: str):
-    logger.info("IRC >>> %s", line)
+    if line.upper().startswith("PONG "):
+        logger.debug("IRC >>> %s", line)
+    else:
+        logger.info("IRC >>> %s", line)
     writer.write(f"{line}\r\n".encode("utf-8", errors="ignore"))
 
 

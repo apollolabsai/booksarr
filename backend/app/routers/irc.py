@@ -667,6 +667,7 @@ async def _get_bulk_batch_summary(batch_id: int, db: AsyncSession) -> IrcBulkDow
             .selectinload(Book.author),
             selectinload(IrcBulkDownloadBatch.items).selectinload(IrcBulkDownloadItem.search_job).selectinload(IrcSearchJob.results),
             selectinload(IrcBulkDownloadBatch.items).selectinload(IrcBulkDownloadItem.download_job),
+            selectinload(IrcBulkDownloadBatch.items).selectinload(IrcBulkDownloadItem.selected_search_result),
         )
         .where(IrcBulkDownloadBatch.id == batch_id)
     )
@@ -697,6 +698,11 @@ def _bulk_item_summary(item: IrcBulkDownloadItem) -> IrcBulkDownloadItemSummary:
     title = book.title if book else f"Book {item.book_id}"
     author_name = book.author.name if book and book.author else None
     attempt_count = len(_parse_attempted_result_ids(item.attempted_result_ids))
+    selected_result_text = (
+        item.selected_search_result.raw_line
+        if item.selected_search_result is not None and item.selected_search_result.raw_line
+        else item.selected_result_label
+    )
     return IrcBulkDownloadItemSummary(
         id=item.id,
         book_id=item.book_id,
@@ -706,7 +712,7 @@ def _bulk_item_summary(item: IrcBulkDownloadItem) -> IrcBulkDownloadItemSummary:
         status=item.status,
         query_text=item.query_text,
         error_message=item.error_message,
-        selected_result_label=item.selected_result_label,
+        selected_result_label=selected_result_text,
         attempt_count=attempt_count,
         search_job=_search_job_summary(item.search_job) if item.search_job is not None else None,
         download_job=_download_job_summary(item.download_job) if item.download_job is not None else None,
