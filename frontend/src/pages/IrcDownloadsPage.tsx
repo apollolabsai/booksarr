@@ -419,6 +419,7 @@ export default function IrcDownloadsPage() {
 }
 
 function FocusedBatchRow({ item }: { item: IrcBulkDownloadItem }) {
+  const activeRetryError = item.status !== "failed" ? item.error_message : null;
   return (
     <div className="rounded-xl border border-slate-700 bg-slate-900/40 px-4 py-3">
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
@@ -446,7 +447,7 @@ function FocusedBatchRow({ item }: { item: IrcBulkDownloadItem }) {
           )}
         </div>
         <div className="lg:min-w-[320px]">
-          <CompactStageRail status={item.status} error={item.error_message} />
+          <CompactStageRail status={item.status} error={item.error_message} retryError={activeRetryError} />
         </div>
       </div>
     </div>
@@ -455,7 +456,11 @@ function FocusedBatchRow({ item }: { item: IrcBulkDownloadItem }) {
 
 function DownloadFeedCard({ entry, compact = false }: { entry: IrcDownloadFeedEntry; compact?: boolean }) {
   const timestamp = entry.completed_at ?? entry.updated_at ?? entry.created_at ?? entry.sort_timestamp;
-  const showInlineFinalResult = Boolean(entry.final_result_kind && entry.final_result_text);
+  const activeRetryError =
+    entry.active && entry.source === "bulk" && entry.final_result_kind === "error"
+      ? entry.final_result_text
+      : null;
+  const showInlineFinalResult = Boolean(!entry.active && entry.final_result_kind && entry.final_result_text);
   return (
     <article className="rounded-2xl border border-slate-700 bg-slate-800/70 px-4 py-3">
       <div className={`grid gap-3 ${compact ? "xl:grid-cols-[170px_minmax(0,1fr)]" : "xl:grid-cols-[170px_minmax(0,1fr)]"}`}>
@@ -498,7 +503,11 @@ function DownloadFeedCard({ entry, compact = false }: { entry: IrcDownloadFeedEn
             </div>
           )}
           <div className="mt-3 rounded-md bg-slate-950/60 px-3 py-2">
-            <CompactStageRail status={entry.status} error={entry.final_result_kind === "error" ? entry.final_result_text : null} />
+            <CompactStageRail
+              status={entry.status}
+              error={!entry.active && entry.final_result_kind === "error" ? entry.final_result_text : null}
+              retryError={activeRetryError}
+            />
           </div>
           {showInlineFinalResult && entry.final_result_text && (
             <div
@@ -533,7 +542,7 @@ function DownloadFeedCard({ entry, compact = false }: { entry: IrcDownloadFeedEn
           )}
           {!showInlineFinalResult && entry.active && (
             <div className="mt-3 rounded-xl border border-slate-700 bg-slate-900/50 px-4 py-3 text-sm text-slate-400">
-              Job still running.
+              {activeRetryError ? "Retrying after the last failure." : "Job still running."}
             </div>
           )}
         </div>
@@ -545,9 +554,11 @@ function DownloadFeedCard({ entry, compact = false }: { entry: IrcDownloadFeedEn
 function CompactStageRail({
   status,
   error,
+  retryError,
 }: {
   status: string;
   error?: string | null;
+  retryError?: string | null;
 }) {
   const stages = [
     { label: "Queued", key: "queued" },
@@ -593,6 +604,14 @@ function CompactStageRail({
       </div>
       {status === "failed" && error && (
         <div className="break-all text-[11px] text-rose-200/90">{error}</div>
+      )}
+      {status !== "failed" && retryError && (
+        <div className="rounded-md border border-rose-500/20 bg-rose-500/10 px-3 py-2">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-rose-300/80">
+            Latest Retry Error
+          </div>
+          <div className="mt-1 break-all text-[11px] text-rose-200/90">{retryError}</div>
+        </div>
       )}
     </div>
   );

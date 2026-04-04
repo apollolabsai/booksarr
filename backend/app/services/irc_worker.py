@@ -42,10 +42,11 @@ logger = logging.getLogger("booksarr.irc")
 IRC_MAX_TIMEOUT_SECONDS = 60
 IRC_CONNECT_TIMEOUT_SECONDS = 30
 IRC_DCC_CONNECT_TIMEOUT_SECONDS = 15
-IRC_DCC_WAIT_TIMEOUT_SECONDS = 60
+IRC_DCC_WAIT_TIMEOUT_SECONDS = 30
 IRC_DCC_CHUNK_TIMEOUT_SECONDS = 10
 IRC_DCC_TRAILING_READ_TIMEOUT_SECONDS = 1.0
 IRC_DCC_MAX_TRAILING_BYTES = 1024 * 1024
+BULK_MAX_DOWNLOAD_ATTEMPTS = 3
 
 BULK_BATCH_ACTIVE_STATUSES = {"queued", "running", "pausing", "cancelling"}
 BULK_ITEM_ACTIVE_STATUSES = {
@@ -482,7 +483,12 @@ async def _advance_bulk_item(
             )
             return True
         if download_status == "failed":
-            can_retry = _has_next_bulk_result_candidate(item)
+            attempted_ids = _parse_attempted_ids(item.attempted_result_ids)
+            attempts_used = len(attempted_ids)
+            can_retry = (
+                attempts_used < BULK_MAX_DOWNLOAD_ATTEMPTS
+                and _has_next_bulk_result_candidate(item)
+            )
             if can_retry:
                 previous_download_job_id = item.download_job_id
                 error_message = item.download_job.error_message
@@ -501,7 +507,14 @@ async def _advance_bulk_item(
                 )
             else:
                 item.status = "failed"
-                item.error_message = item.download_job.error_message or "Download failed"
+                last_error = item.download_job.error_message or "Download failed"
+                if attempts_used >= BULK_MAX_DOWNLOAD_ATTEMPTS:
+                    item.error_message = (
+                        f"Failed after {BULK_MAX_DOWNLOAD_ATTEMPTS} unsuccessful download attempts. "
+                        f"Last error: {last_error}"
+                    )
+                else:
+                    item.error_message = last_error
                 item.updated_at = now
                 item.completed_at = now
                 logger.warning(
@@ -650,7 +663,6 @@ async def _queue_best_download_for_bulk_item(
     item.attempted_result_ids = ",".join(str(value) for value in attempted_ids)
     item.selected_search_result_id = selected_result.id
     item.selected_result_label = selected_result.raw_line or selected_result.display_name
-    item.error_message = None
     item.status = "downloading_book"
     item.updated_at = now
 
@@ -1705,11 +1717,11 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
             pass
         raise
     except Exception as exc:
-        logger.exception("IRC download job %s failed during DCC book handling: %s", job_id, exc)
         if isinstance(exc, TimeoutError):
             error_message = "Timed out waiting for more DCC data while downloading the book"
         else:
             error_message = str(exc).strip() or exc.__class__.__name__
+        logger.exception("IRC download job %s failed during DCC book handling: %s", job_id, error_message)
         _runtime.last_error = error_message
         _runtime.last_message = f"Download job {job_id} failed during DCC book handling"
         await _mark_download_job_failed(job_id, error_message)
