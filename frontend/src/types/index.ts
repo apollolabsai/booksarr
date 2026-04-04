@@ -276,6 +276,7 @@ export interface Settings {
   last_scan_at: string | null;
   last_scan_summary: ScanSummary | null;
   scan_interval_hours: number;
+  log_level: string;
   visibility_categories: VisibilityCategories;
 }
 

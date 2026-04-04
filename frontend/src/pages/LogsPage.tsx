@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { useLogs } from "../api/logs";
+import { useSettings, useUpdateSettings } from "../api/settings";
 
 const LEVEL_COLORS: Record<string, string> = {
   DEBUG: "text-slate-500",
@@ -19,7 +20,10 @@ export default function LogsPage() {
   const [autoScroll, setAutoScroll] = useState(true);
   const [categoryMenuOpen, setCategoryMenuOpen] = useState(false);
   const [levelMenuOpen, setLevelMenuOpen] = useState(false);
+  const [logLevel, setLogLevel] = useState("INFO");
   const { data } = useLogs(categories, levels);
+  const { data: settings } = useSettings();
+  const updateSettings = useUpdateSettings();
   const bottomRef = useRef<HTMLDivElement>(null);
   const categoryMenuRef = useRef<HTMLDivElement>(null);
   const levelMenuRef = useRef<HTMLDivElement>(null);
@@ -44,6 +48,12 @@ export default function LogsPage() {
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, []);
 
+  useEffect(() => {
+    if (settings?.log_level) {
+      setLogLevel(settings.log_level);
+    }
+  }, [settings?.log_level]);
+
   const handleDownload = () => {
     const params = new URLSearchParams();
     for (const category of categories) params.append("category", category);
@@ -64,11 +74,41 @@ export default function LogsPage() {
     ));
   };
 
+  const handleLogLevelChange = (nextLogLevel: string) => {
+    setLogLevel(nextLogLevel);
+    updateSettings.mutate({ log_level: nextLogLevel });
+  };
+
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-2xl font-bold">Logs</h2>
-        <div className="flex items-center gap-3">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-2xl font-bold">Logs</h2>
+          <p className="mt-1 text-sm text-slate-400">
+            Runtime log level controls which new events are captured below.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2">
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+              Log Level
+            </span>
+            <select
+              value={logLevel}
+              onChange={(event) => handleLogLevelChange(event.target.value)}
+              disabled={updateSettings.isPending}
+              className="rounded-md border border-slate-600 bg-slate-700 px-2 py-1 text-sm text-slate-100 focus:border-emerald-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {LEVEL_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+            <span className="min-w-[72px] text-right text-xs text-slate-400">
+              {updateSettings.isPending ? "Saving..." : "Live"}
+            </span>
+          </div>
           <MultiSelectFilter
             label={getFilterLabel("All Categories", categories, "Categories")}
             options={data?.categories ?? []}

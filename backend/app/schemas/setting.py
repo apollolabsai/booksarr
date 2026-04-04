@@ -61,6 +61,7 @@ class SettingsResponse(BaseModel):
     last_scan_at: str | None
     last_scan_summary: ScanSummary | None = None
     scan_interval_hours: int
+    log_level: str
     visibility_categories: VisibilityCategories
 
 
@@ -68,6 +69,7 @@ class SettingsUpdate(BaseModel):
     hardcover_api_key: str | None = None
     google_books_api_key: str | None = None
     scan_interval_hours: int | None = None
+    log_level: str | None = None
     visibility_categories: VisibilityCategories | None = None
 
 

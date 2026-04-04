@@ -16,6 +16,7 @@ export function useUpdateSettings() {
       hardcover_api_key?: string;
       google_books_api_key?: string;
       scan_interval_hours?: number;
+      log_level?: string;
       visibility_categories?: VisibilityCategories;
     }) =>
       fetchApi("/settings", { method: "PUT", body: JSON.stringify(body) }),
