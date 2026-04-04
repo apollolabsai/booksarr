@@ -55,6 +55,7 @@ export default function IrcDownloadsPage() {
   const { data: batch, isLoading: batchLoading } = useIrcBulkBatch(batchId, batchId != null);
   const locationState = (location.state as IrcDownloadsLocationState | null) ?? null;
   const [pendingBooks, setPendingBooks] = useState<SelectedBook[]>(locationState?.selectedBooks ?? []);
+  const [dismissedBatchId, setDismissedBatchId] = useState<number | null>(null);
   const completedEntryIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -104,14 +105,44 @@ export default function IrcDownloadsPage() {
     : 0;
   const batchActionPending = pauseBatch.isPending || resumeBatch.isPending || cancelBatch.isPending;
 
+  const clearFocusedBatch = () => {
+    if (batchId == null) return;
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("batchId");
+    setSearchParams(nextParams, { replace: true });
+  };
+
   useEffect(() => {
-    if (batchId != null || latestActiveBulkBatchId == null) {
+    if (
+      batchId != null
+      || latestActiveBulkBatchId == null
+      || latestActiveBulkBatchId === dismissedBatchId
+    ) {
       return;
     }
     const nextParams = new URLSearchParams(searchParams);
     nextParams.set("batchId", String(latestActiveBulkBatchId));
     setSearchParams(nextParams, { replace: true });
-  }, [batchId, latestActiveBulkBatchId, searchParams, setSearchParams]);
+  }, [batchId, dismissedBatchId, latestActiveBulkBatchId, searchParams, setSearchParams]);
+
+  useEffect(() => {
+    if (dismissedBatchId == null) {
+      return;
+    }
+    if (latestActiveBulkBatchId == null || latestActiveBulkBatchId !== dismissedBatchId) {
+      setDismissedBatchId(null);
+    }
+  }, [dismissedBatchId, latestActiveBulkBatchId]);
+
+  useEffect(() => {
+    if (batchId == null || batch == null) {
+      return;
+    }
+    if (batch.status === "cancelling" || batch.status === "cancelled") {
+      setDismissedBatchId(batch.id);
+      clearFocusedBatch();
+    }
+  }, [batch, batchId]);
 
   const handleStartBatch = async () => {
     if (pendingBooks.length === 0) return;
@@ -135,9 +166,7 @@ export default function IrcDownloadsPage() {
     }
     await clearHistory.mutateAsync();
     if ((batch?.status === "completed" || batch?.status === "cancelled") && batchId != null) {
-      const nextParams = new URLSearchParams(searchParams);
-      nextParams.delete("batchId");
-      setSearchParams(nextParams, { replace: true });
+      clearFocusedBatch();
     }
   };
 
@@ -161,6 +190,8 @@ export default function IrcDownloadsPage() {
       return;
     }
     await cancelBatch.mutateAsync(batchId);
+    setDismissedBatchId(batchId);
+    clearFocusedBatch();
   };
 
   return (
