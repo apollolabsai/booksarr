@@ -410,6 +410,29 @@ export interface IrcBulkDownloadBatch {
   completed_at: string | null;
 }
 
+export interface IrcDownloadFeedEntry {
+  entry_id: string;
+  source: string;
+  batch_id: number | null;
+  bulk_request_id: string | null;
+  book_id: number | null;
+  title: string;
+  author_name: string | null;
+  status: string;
+  query_text: string | null;
+  selected_result_label: string | null;
+  attempt_count: number;
+  active: boolean;
+  final_result_kind: string | null;
+  final_result_text: string | null;
+  sort_timestamp: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  completed_at: string | null;
+  search_job: IrcSearchJob | null;
+  download_job: IrcDownloadJob | null;
+}
+
 export interface IrcSearchResult {
   id: number;
   search_job_id: number;

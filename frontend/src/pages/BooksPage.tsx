@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useBooks } from "../api/books";
 import MobileBookList from "../components/MobileBookList";
 import SortControls from "../components/SortControls";
@@ -6,7 +7,6 @@ import SearchBar from "../components/SearchBar";
 import ViewToggle from "../components/ViewToggle";
 import BookTable from "../components/BookTable";
 import BookCard from "../components/BookCard";
-import BulkIrcDialog from "../components/BulkIrcDialog";
 import { useIsMobile } from "../hooks/useIsMobile";
 
 const SORT_OPTIONS = [
@@ -24,12 +24,12 @@ const FILTER_OPTIONS = [
 ];
 
 export default function BooksPage() {
+  const navigate = useNavigate();
   const [sort, setSort] = useState("title");
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [view, setView] = useState<"grid" | "table">("grid");
   const [selectedBookIds, setSelectedBookIds] = useState<Set<number>>(new Set());
-  const [bulkIrcOpen, setBulkIrcOpen] = useState(false);
   const owned = filter === "owned" ? true : filter === "missing" ? false : undefined;
   const { data: books, isLoading } = useBooks(sort, owned, search);
   const isMobile = useIsMobile();
@@ -78,6 +78,20 @@ export default function BooksPage() {
   const clearSelectedBooks = useCallback(() => {
     setSelectedBookIds(new Set());
   }, []);
+
+  const openIrcDownloads = useCallback(() => {
+    if (selectedBooks.length === 0) return;
+    navigate("/irc-downloads", {
+      state: {
+        selectedBooks: selectedBooks.map((book) => ({
+          id: book.id,
+          title: book.title,
+          author_name: book.author_name,
+          is_owned: book.is_owned,
+        })),
+      },
+    });
+  }, [navigate, selectedBooks]);
 
   if (isLoading) {
     return (
@@ -157,7 +171,7 @@ export default function BooksPage() {
               </button>
               <button
                 type="button"
-                onClick={() => setBulkIrcOpen(true)}
+                onClick={openIrcDownloads}
                 disabled={selectedBooks.length === 0}
                 className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
               >
@@ -193,12 +207,6 @@ export default function BooksPage() {
           ))}
         </div>
       )}
-      <BulkIrcDialog
-        open={bulkIrcOpen}
-        books={selectedBooks}
-        onClose={() => setBulkIrcOpen(false)}
-        onQueued={() => undefined}
-      />
     </div>
   );
 }

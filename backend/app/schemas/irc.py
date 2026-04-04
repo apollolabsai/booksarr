@@ -132,6 +132,29 @@ class IrcBulkDownloadBatchSummary(BaseModel):
     completed_at: str | None = None
 
 
+class IrcDownloadFeedEntry(BaseModel):
+    entry_id: str
+    source: str
+    batch_id: int | None = None
+    bulk_request_id: str | None = None
+    book_id: int | None = None
+    title: str
+    author_name: str | None = None
+    status: str
+    query_text: str | None = None
+    selected_result_label: str | None = None
+    attempt_count: int = 0
+    active: bool = False
+    final_result_kind: str | None = None
+    final_result_text: str | None = None
+    sort_timestamp: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    completed_at: str | None = None
+    search_job: IrcSearchJobSummary | None = None
+    download_job: IrcDownloadJobSummary | None = None
+
+
 class IrcSearchRequest(BaseModel):
     book_id: int | None = None
     query_text: str = Field(min_length=1, max_length=300)

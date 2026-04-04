@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useNavigate } from "react-router-dom";
 import { useAuthor, useMergeAuthorDirectories, useRefreshAuthor } from "../api/authors";
 import { getImageUrl } from "../types";
 import type { BookInAuthor, SeriesInAuthor } from "../types";
@@ -11,7 +11,6 @@ import SortControls from "../components/SortControls";
 import ViewToggle from "../components/ViewToggle";
 import SearchBar from "../components/SearchBar";
 import AuthorPortraitPickerDialog from "../components/AuthorPortraitPickerDialog";
-import BulkIrcDialog from "../components/BulkIrcDialog";
 import { useIsMobile } from "../hooks/useIsMobile";
 
 const SORT_OPTIONS = [
@@ -23,6 +22,7 @@ const SORT_OPTIONS = [
 ];
 
 export default function AuthorDetailPage() {
+  const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const { data: author, isLoading } = useAuthor(Number(id));
   const refreshAuthor = useRefreshAuthor();
@@ -37,8 +37,8 @@ export default function AuthorDetailPage() {
   const [mergeFoldersOpen, setMergeFoldersOpen] = useState(false);
   const [mergeTargetDirectoryId, setMergeTargetDirectoryId] = useState<number | null>(null);
   const [selectedBookIds, setSelectedBookIds] = useState<Set<number>>(new Set());
-  const [bulkIrcOpen, setBulkIrcOpen] = useState(false);
   const portraitMenuRef = useRef<HTMLDivElement | null>(null);
+  const authorName = author?.name ?? "Unknown author";
   const handleSearch = useCallback((value: string) => setSearch(value), []);
 
   useEffect(() => {
@@ -142,6 +142,20 @@ export default function AuthorDetailPage() {
   const clearSelectedBooks = useCallback(() => {
     setSelectedBookIds(new Set());
   }, []);
+
+  const openIrcDownloads = useCallback(() => {
+    if (selectedBooks.length === 0) return;
+    navigate("/irc-downloads", {
+      state: {
+        selectedBooks: selectedBooks.map((book) => ({
+          id: book.id,
+          title: book.title,
+          author_name: authorName,
+          is_owned: book.is_owned,
+        })),
+      },
+    });
+  }, [authorName, navigate, selectedBooks]);
 
   if (isLoading || !author) {
     return (
@@ -503,7 +517,7 @@ export default function AuthorDetailPage() {
               </button>
               <button
                 type="button"
-                onClick={() => setBulkIrcOpen(true)}
+                onClick={openIrcDownloads}
                 disabled={selectedBooks.length === 0}
                 className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
               >
@@ -526,16 +540,6 @@ export default function AuthorDetailPage() {
         authorName={author.name}
         open={portraitPickerOpen}
         onClose={() => setPortraitPickerOpen(false)}
-      />
-      <BulkIrcDialog
-        open={bulkIrcOpen}
-        books={selectedBooks.map((book) => ({
-          ...book,
-          author_id: author.id,
-          author_name: author.name,
-        }))}
-        onClose={() => setBulkIrcOpen(false)}
-        onQueued={() => undefined}
       />
     </div>
   );

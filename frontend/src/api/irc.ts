@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchApi } from "./client";
 import type {
   IrcBulkDownloadBatch,
+  IrcDownloadFeedEntry,
   IrcBulkSearchResponse,
   IrcDownloadJob,
   IrcSearchJob,
@@ -85,6 +86,7 @@ export function useCreateIrcSearchJob() {
     onSuccess: (job) => {
       queryClient.invalidateQueries({ queryKey: ["ircSearchJobs"] });
       queryClient.invalidateQueries({ queryKey: ["ircStatus"] });
+      queryClient.invalidateQueries({ queryKey: ["ircDownloadsFeed"] });
       queryClient.invalidateQueries({ queryKey: ["ircSearchJob", job.id] });
       queryClient.invalidateQueries({ queryKey: ["ircSearchResults", job.id] });
     },
@@ -103,6 +105,7 @@ export function useCreateBulkIrcSearchJobs() {
       queryClient.invalidateQueries({ queryKey: ["ircSearchJobs"] });
       queryClient.invalidateQueries({ queryKey: ["ircDownloadJobs"] });
       queryClient.invalidateQueries({ queryKey: ["ircStatus"] });
+      queryClient.invalidateQueries({ queryKey: ["ircDownloadsFeed"] });
       for (const item of response.queued) {
         queryClient.setQueryData(["ircSearchJob", item.job.id], item.job);
         queryClient.invalidateQueries({ queryKey: ["ircSearchResults", item.job.id] });
@@ -121,6 +124,7 @@ export function useCreateIrcBulkBatch() {
       queryClient.invalidateQueries({ queryKey: ["ircStatus"] });
       queryClient.invalidateQueries({ queryKey: ["ircSearchJobs"] });
       queryClient.invalidateQueries({ queryKey: ["ircDownloadJobs"] });
+      queryClient.invalidateQueries({ queryKey: ["ircDownloadsFeed"] });
     },
   });
 }
@@ -132,6 +136,29 @@ export function useIrcBulkBatch(batchId: number | null, enabled: boolean = true)
     enabled: enabled && batchId != null,
     refetchInterval: enabled && batchId != null ? 3000 : false,
     refetchIntervalInBackground: true,
+  });
+}
+
+export function useIrcDownloadsFeed(enabled: boolean = true) {
+  return useQuery({
+    queryKey: ["ircDownloadsFeed"],
+    queryFn: () => fetchApi<IrcDownloadFeedEntry[]>("/irc/downloads-feed"),
+    enabled,
+    refetchInterval: enabled ? 3000 : false,
+    refetchIntervalInBackground: true,
+  });
+}
+
+export function useClearIrcDownloadsFeed() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => fetchApi("/irc/downloads-feed", { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ircDownloadsFeed"] });
+      queryClient.invalidateQueries({ queryKey: ["ircDownloadJobs"] });
+      queryClient.invalidateQueries({ queryKey: ["ircSearchJobs"] });
+      queryClient.invalidateQueries({ queryKey: ["ircStatus"] });
+    },
   });
 }
 
@@ -185,6 +212,7 @@ export function useCreateIrcDownloadJob() {
       queryClient.invalidateQueries({ queryKey: ["ircDownloadJobs"] });
       queryClient.invalidateQueries({ queryKey: ["ircDownloadJob", job.id] });
       queryClient.invalidateQueries({ queryKey: ["ircStatus"] });
+      queryClient.invalidateQueries({ queryKey: ["ircDownloadsFeed"] });
       if (job.search_job_id != null) {
         queryClient.invalidateQueries({ queryKey: ["ircSearchResults", job.search_job_id] });
       }

@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -22,6 +22,7 @@ from backend.app.schemas.irc import (
     IrcBulkBatchCreateRequest,
     IrcBulkDownloadBatchSummary,
     IrcBulkDownloadItemSummary,
+    IrcDownloadFeedEntry,
     IrcBulkSearchQueuedItem,
     IrcBulkSearchRequest,
     IrcBulkSearchResponse,
@@ -61,6 +62,15 @@ ACTIVE_DOWNLOAD_STATUSES = {
     "extracting",
     "importing",
     "refreshing_library",
+}
+ACTIVE_FEED_ITEM_STATUSES = {
+    "queued",
+    "searching",
+    "downloading_search_results",
+    "choosing_best_option",
+    "downloading_book",
+    "extracting",
+    "importing",
 }
 
 
@@ -193,6 +203,127 @@ async def create_bulk_batch(body: IrcBulkBatchCreateRequest, db: AsyncSession = 
 @router.get("/bulk-batches/{batch_id}", response_model=IrcBulkDownloadBatchSummary)
 async def get_bulk_batch(batch_id: int, db: AsyncSession = Depends(get_db)):
     return await _get_bulk_batch_summary(batch_id, db)
+
+
+@router.get("/downloads-feed", response_model=list[IrcDownloadFeedEntry])
+async def get_downloads_feed(db: AsyncSession = Depends(get_db)):
+    bulk_items_result = await db.execute(
+        select(IrcBulkDownloadItem)
+        .options(
+            selectinload(IrcBulkDownloadItem.batch),
+            selectinload(IrcBulkDownloadItem.book).selectinload(Book.author),
+            selectinload(IrcBulkDownloadItem.search_job).selectinload(IrcSearchJob.results),
+            selectinload(IrcBulkDownloadItem.download_job).selectinload(IrcDownloadJob.search_result),
+            selectinload(IrcBulkDownloadItem.selected_search_result),
+        )
+        .order_by(IrcBulkDownloadItem.created_at.desc())
+        .limit(100)
+    )
+    bulk_items = bulk_items_result.scalars().all()
+
+    single_search_result = await db.execute(
+        select(IrcSearchJob)
+        .options(
+            selectinload(IrcSearchJob.results),
+            selectinload(IrcSearchJob.download_jobs).selectinload(IrcDownloadJob.search_result),
+        )
+        .where(IrcSearchJob.bulk_item_id.is_(None))
+        .order_by(IrcSearchJob.created_at.desc())
+        .limit(100)
+    )
+    single_search_jobs = single_search_result.scalars().all()
+
+    single_book_ids = sorted({job.book_id for job in single_search_jobs if job.book_id is not None})
+    books_by_id: dict[int, Book] = {}
+    if single_book_ids:
+        books_result = await db.execute(
+            select(Book)
+            .options(selectinload(Book.author))
+            .where(Book.id.in_(single_book_ids))
+        )
+        books_by_id = {book.id: book for book in books_result.scalars().all()}
+
+    entries = [
+        *[_bulk_feed_entry(item) for item in bulk_items],
+        *[_single_search_feed_entry(job, books_by_id) for job in single_search_jobs],
+    ]
+    active_entries = [entry for entry in entries if entry.active]
+    inactive_entries = [entry for entry in entries if not entry.active]
+    active_entries.sort(key=lambda entry: (entry.sort_timestamp or "", entry.entry_id), reverse=True)
+    inactive_entries.sort(key=lambda entry: (entry.sort_timestamp or "", entry.entry_id), reverse=True)
+    return active_entries + inactive_entries
+
+
+@router.delete("/downloads-feed")
+async def clear_downloads_feed_history(db: AsyncSession = Depends(get_db)):
+    deleted_batches = 0
+    deleted_single_jobs = 0
+
+    completed_batch_result = await db.execute(
+        select(IrcBulkDownloadBatch)
+        .options(
+            selectinload(IrcBulkDownloadBatch.items)
+            .selectinload(IrcBulkDownloadItem.search_job)
+            .selectinload(IrcSearchJob.results),
+            selectinload(IrcBulkDownloadBatch.items)
+            .selectinload(IrcBulkDownloadItem.download_job),
+        )
+        .where(IrcBulkDownloadBatch.status == "completed")
+    )
+    completed_batches = completed_batch_result.scalars().all()
+
+    for batch in completed_batches:
+        for item in batch.items:
+            search_job = item.search_job
+            download_job = item.download_job
+            item.search_job = None
+            item.search_job_id = None
+            item.download_job = None
+            item.download_job_id = None
+            item.selected_search_result = None
+            item.selected_search_result_id = None
+            if download_job is not None:
+                await db.delete(download_job)
+            if search_job is not None:
+                await db.delete(search_job)
+        await db.flush()
+        await db.delete(batch)
+        deleted_batches += 1
+
+    single_search_result = await db.execute(
+        select(IrcSearchJob)
+        .options(
+            selectinload(IrcSearchJob.download_jobs),
+            selectinload(IrcSearchJob.results),
+        )
+        .where(IrcSearchJob.bulk_item_id.is_(None))
+    )
+    single_search_jobs = single_search_result.scalars().all()
+
+    for job in single_search_jobs:
+        latest_download_job = max(
+            job.download_jobs,
+            key=lambda row: (row.created_at or datetime.min, row.id),
+            default=None,
+        )
+        if _is_single_feed_active(job, latest_download_job):
+            continue
+        for download_job in job.download_jobs:
+            await db.delete(download_job)
+        await db.delete(job)
+        deleted_single_jobs += 1
+
+    await db.commit()
+    logger.info(
+        "IRC downloads history cleared: deleted_batches=%s deleted_single_jobs=%s",
+        deleted_batches,
+        deleted_single_jobs,
+    )
+    return {
+        "status": "ok",
+        "deleted_batches": deleted_batches,
+        "deleted_single_jobs": deleted_single_jobs,
+    }
 
 
 @router.get("/search-jobs", response_model=list[IrcSearchJobSummary])
@@ -638,7 +769,11 @@ def _bool_to_text(value: bool) -> str:
 
 
 def _iso(value: datetime | None) -> str | None:
-    return value.isoformat() if value else None
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.isoformat().replace("+00:00", "Z")
 
 
 def _search_job_summary(job: IrcSearchJob) -> IrcSearchJobSummary:
@@ -738,6 +873,148 @@ def _download_job_summary(job: IrcDownloadJob) -> IrcDownloadJobSummary:
         updated_at=_iso(job.updated_at),
         completed_at=_iso(job.completed_at),
     )
+
+
+def _bulk_feed_entry(item: IrcBulkDownloadItem) -> IrcDownloadFeedEntry:
+    status = item.status
+    final_result_kind = None
+    final_result_text = None
+    if item.download_job is not None and item.download_job.moved_to_library_path:
+        final_result_kind = "imported"
+        final_result_text = item.download_job.moved_to_library_path
+    elif item.error_message:
+        final_result_kind = "error"
+        final_result_text = item.error_message
+    elif item.download_job is not None and item.download_job.error_message:
+        final_result_kind = "error"
+        final_result_text = item.download_job.error_message
+
+    return IrcDownloadFeedEntry(
+        entry_id=f"bulk-{item.id}",
+        source="bulk",
+        batch_id=item.batch_id,
+        bulk_request_id=item.batch.request_id if item.batch is not None else None,
+        book_id=item.book_id,
+        title=item.book.title if item.book is not None else f"Book {item.book_id}",
+        author_name=item.book.author.name if item.book is not None and item.book.author is not None else None,
+        status=status,
+        query_text=item.query_text,
+        selected_result_label=(
+            item.selected_search_result.raw_line
+            if item.selected_search_result is not None and item.selected_search_result.raw_line
+            else item.selected_result_label
+        ),
+        attempt_count=len(_parse_attempted_result_ids(item.attempted_result_ids)),
+        active=status in ACTIVE_FEED_ITEM_STATUSES,
+        final_result_kind=final_result_kind,
+        final_result_text=final_result_text,
+        sort_timestamp=_iso(item.completed_at or item.updated_at or item.created_at),
+        created_at=_iso(item.created_at),
+        updated_at=_iso(item.updated_at),
+        completed_at=_iso(item.completed_at),
+        search_job=_search_job_summary(item.search_job) if item.search_job is not None else None,
+        download_job=_download_job_summary(item.download_job) if item.download_job is not None else None,
+    )
+
+
+def _single_search_feed_entry(job: IrcSearchJob, books_by_id: dict[int, Book]) -> IrcDownloadFeedEntry:
+    book = books_by_id.get(job.book_id) if job.book_id is not None else None
+    latest_download_job = max(
+        job.download_jobs,
+        key=lambda row: (row.created_at or datetime.min, row.id),
+        default=None,
+    )
+    status = _single_feed_status(job, latest_download_job)
+    active = _is_single_feed_active(job, latest_download_job)
+    final_result_kind = None
+    final_result_text = None
+    if latest_download_job is not None and latest_download_job.moved_to_library_path:
+        final_result_kind = "imported"
+        final_result_text = latest_download_job.moved_to_library_path
+    elif latest_download_job is not None and latest_download_job.error_message:
+        final_result_kind = "error"
+        final_result_text = latest_download_job.error_message
+    elif job.error_message:
+        final_result_kind = "error"
+        final_result_text = job.error_message
+
+    selected_result_label = None
+    if latest_download_job is not None and latest_download_job.search_result is not None:
+        selected_result_label = latest_download_job.search_result.raw_line or latest_download_job.search_result.display_name
+
+    return IrcDownloadFeedEntry(
+        entry_id=f"single-search-{job.id}",
+        source="single",
+        batch_id=None,
+        bulk_request_id=job.bulk_request_id,
+        book_id=job.book_id,
+        title=book.title if book is not None else job.query_text,
+        author_name=book.author.name if book is not None and book.author is not None else None,
+        status=status,
+        query_text=job.query_text,
+        selected_result_label=selected_result_label,
+        attempt_count=len(job.download_jobs),
+        active=active,
+        final_result_kind=final_result_kind,
+        final_result_text=final_result_text,
+        sort_timestamp=_iso(
+            (latest_download_job.completed_at if latest_download_job is not None else None)
+            or (latest_download_job.updated_at if latest_download_job is not None else None)
+            or job.completed_at
+            or job.updated_at
+            or job.created_at
+        ),
+        created_at=_iso(job.created_at),
+        updated_at=_iso(
+            (latest_download_job.updated_at if latest_download_job is not None else None)
+            or job.updated_at
+        ),
+        completed_at=_iso(
+            (latest_download_job.completed_at if latest_download_job is not None else None)
+            or job.completed_at
+        ),
+        search_job=_search_job_summary(job),
+        download_job=_download_job_summary(latest_download_job) if latest_download_job is not None else None,
+    )
+
+
+def _single_feed_status(job: IrcSearchJob, latest_download_job: IrcDownloadJob | None) -> str:
+    if latest_download_job is not None:
+        if latest_download_job.status in {"queued", "sent", "waiting_dcc", "downloading", "downloaded"}:
+            return "downloading_book"
+        if latest_download_job.status in {"extracting", "extracted"}:
+            return "extracting"
+        if latest_download_job.status in {"importing", "refreshing_library"}:
+            return "importing"
+        if latest_download_job.status == "moved":
+            return "completed"
+        if latest_download_job.status == "failed":
+            return "failed"
+    if job.status in {"queued", "sent", "waiting_dcc"}:
+        return "searching"
+    if job.status == "downloading_results":
+        return "downloading_search_results"
+    if job.status == "results_ready":
+        return "choosing_best_option"
+    if job.status == "failed":
+        return "failed"
+    return job.status
+
+
+def _is_single_feed_active(job: IrcSearchJob, latest_download_job: IrcDownloadJob | None) -> bool:
+    if latest_download_job is not None:
+        return latest_download_job.status in {
+            "queued",
+            "sent",
+            "waiting_dcc",
+            "downloading",
+            "downloaded",
+            "extracting",
+            "extracted",
+            "importing",
+            "refreshing_library",
+        }
+    return job.status in {"queued", "sent", "waiting_dcc", "downloading_results"}
 
 
 def _parse_attempted_result_ids(value: str | None) -> list[int]:
