@@ -87,6 +87,14 @@ export default function IrcDownloadsPage() {
     () => (feedEntries ?? []).filter((entry) => !entry.active),
     [feedEntries],
   );
+  const latestActiveBulkBatchId = useMemo(() => {
+    for (const entry of feedEntries ?? []) {
+      if (entry.active && entry.source === "bulk" && entry.batch_id != null) {
+        return entry.batch_id;
+      }
+    }
+    return null;
+  }, [feedEntries]);
   const selectedMissingCount = useMemo(
     () => pendingBooks.filter((book) => !book.is_owned).length,
     [pendingBooks],
@@ -95,6 +103,15 @@ export default function IrcDownloadsPage() {
     ? Math.max(0, batch.total_books - batch.completed_books - batch.failed_books - batch.cancelled_books)
     : 0;
   const batchActionPending = pauseBatch.isPending || resumeBatch.isPending || cancelBatch.isPending;
+
+  useEffect(() => {
+    if (batchId != null || latestActiveBulkBatchId == null) {
+      return;
+    }
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set("batchId", String(latestActiveBulkBatchId));
+    setSearchParams(nextParams, { replace: true });
+  }, [batchId, latestActiveBulkBatchId, searchParams, setSearchParams]);
 
   const handleStartBatch = async () => {
     if (pendingBooks.length === 0) return;
