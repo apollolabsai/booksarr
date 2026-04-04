@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useCancelIrcBulkBatch,
@@ -19,15 +19,6 @@ type IrcDownloadsLocationState = {
   selectedBooks?: SelectedBook[];
 };
 
-const ACTIVE_ITEM_STATUSES = new Set([
-  "searching",
-  "downloading_search_results",
-  "choosing_best_option",
-  "downloading_book",
-  "extracting",
-  "importing",
-]);
-
 const ITEM_PROGRESS_ORDER = [
   "queued",
   "searching",
@@ -40,22 +31,15 @@ const ITEM_PROGRESS_ORDER = [
 ] as const;
 
 export default function IrcDownloadsPage() {
-  const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
-  const [searchParams, setSearchParams] = useSearchParams();
   const createBatch = useCreateIrcBulkBatch();
   const clearHistory = useClearIrcDownloadsFeed();
-  const pauseBatch = usePauseIrcBulkBatch();
-  const resumeBatch = useResumeIrcBulkBatch();
-  const cancelBatch = useCancelIrcBulkBatch();
   const { data: ircStatus, isLoading: ircStatusLoading } = useIrcStatus(true);
   const { data: feedEntries, isLoading: feedLoading } = useIrcDownloadsFeed(true);
-  const batchId = Number(searchParams.get("batchId") || "") || null;
-  const { data: batch, isLoading: batchLoading } = useIrcBulkBatch(batchId, batchId != null);
   const locationState = (location.state as IrcDownloadsLocationState | null) ?? null;
   const [pendingBooks, setPendingBooks] = useState<SelectedBook[]>(locationState?.selectedBooks ?? []);
-  const [dismissedBatchId, setDismissedBatchId] = useState<number | null>(null);
+  const [dismissedBatchIds, setDismissedBatchIds] = useState<number[]>([]);
   const completedEntryIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -84,77 +68,41 @@ export default function IrcDownloadsPage() {
     () => (feedEntries ?? []).filter((entry) => entry.active),
     [feedEntries],
   );
+  const activeSingleEntries = useMemo(
+    () => activeEntries.filter((entry) => entry.source !== "bulk"),
+    [activeEntries],
+  );
+  const activeBulkBatchIds = useMemo(() => {
+    const ids: number[] = [];
+    const seen = new Set<number>();
+    for (const entry of activeEntries) {
+      if (entry.source !== "bulk" || entry.batch_id == null || dismissedBatchIds.includes(entry.batch_id)) {
+        continue;
+      }
+      if (seen.has(entry.batch_id)) {
+        continue;
+      }
+      seen.add(entry.batch_id);
+      ids.push(entry.batch_id);
+    }
+    return ids;
+  }, [activeEntries, dismissedBatchIds]);
   const historyEntries = useMemo(
     () => (feedEntries ?? []).filter((entry) => !entry.active),
     [feedEntries],
   );
-  const latestActiveBulkBatchId = useMemo(() => {
-    for (const entry of feedEntries ?? []) {
-      if (entry.active && entry.source === "bulk" && entry.batch_id != null) {
-        return entry.batch_id;
-      }
-    }
-    return null;
-  }, [feedEntries]);
   const selectedMissingCount = useMemo(
     () => pendingBooks.filter((book) => !book.is_owned).length,
     [pendingBooks],
   );
-  const remainingBatchBooks = batch
-    ? Math.max(0, batch.total_books - batch.completed_books - batch.failed_books - batch.cancelled_books)
-    : 0;
-  const batchActionPending = pauseBatch.isPending || resumeBatch.isPending || cancelBatch.isPending;
-
-  const clearFocusedBatch = () => {
-    if (batchId == null) return;
-    const nextParams = new URLSearchParams(searchParams);
-    nextParams.delete("batchId");
-    setSearchParams(nextParams, { replace: true });
-  };
-
-  useEffect(() => {
-    if (
-      batchId != null
-      || latestActiveBulkBatchId == null
-      || latestActiveBulkBatchId === dismissedBatchId
-    ) {
-      return;
-    }
-    const nextParams = new URLSearchParams(searchParams);
-    nextParams.set("batchId", String(latestActiveBulkBatchId));
-    setSearchParams(nextParams, { replace: true });
-  }, [batchId, dismissedBatchId, latestActiveBulkBatchId, searchParams, setSearchParams]);
-
-  useEffect(() => {
-    if (dismissedBatchId == null) {
-      return;
-    }
-    if (latestActiveBulkBatchId == null || latestActiveBulkBatchId !== dismissedBatchId) {
-      setDismissedBatchId(null);
-    }
-  }, [dismissedBatchId, latestActiveBulkBatchId]);
-
-  useEffect(() => {
-    if (batchId == null || batch == null) {
-      return;
-    }
-    if (batch.status === "cancelling" || batch.status === "cancelled") {
-      setDismissedBatchId(batch.id);
-      clearFocusedBatch();
-    }
-  }, [batch, batchId]);
 
   const handleStartBatch = async () => {
     if (pendingBooks.length === 0) return;
     try {
-      const createdBatch = await createBatch.mutateAsync({
+      await createBatch.mutateAsync({
         book_ids: pendingBooks.map((book) => book.id),
       });
-      const nextParams = new URLSearchParams(searchParams);
-      nextParams.set("batchId", String(createdBatch.id));
-      setSearchParams(nextParams, { replace: true });
       setPendingBooks([]);
-      navigate({ pathname: "/irc-downloads", search: nextParams.toString() }, { replace: true });
     } catch {
       // Mutation state is rendered below.
     }
@@ -165,33 +113,6 @@ export default function IrcDownloadsPage() {
       return;
     }
     await clearHistory.mutateAsync();
-    if ((batch?.status === "completed" || batch?.status === "cancelled") && batchId != null) {
-      clearFocusedBatch();
-    }
-  };
-
-  const handlePauseBatch = async () => {
-    if (batchId == null) return;
-    await pauseBatch.mutateAsync(batchId);
-  };
-
-  const handleResumeBatch = async () => {
-    if (batchId == null) return;
-    await resumeBatch.mutateAsync(batchId);
-  };
-
-  const handleCancelBatch = async () => {
-    if (batchId == null) return;
-    const message =
-      batch?.status === "paused"
-        ? "Cancel this paused batch and remove the remaining queued books from the list?"
-        : "Cancel this batch after the current book finishes? Remaining queued books will be removed from the list.";
-    if (!window.confirm(message)) {
-      return;
-    }
-    await cancelBatch.mutateAsync(batchId);
-    setDismissedBatchId(batchId);
-    clearFocusedBatch();
   };
 
   return (
@@ -293,113 +214,26 @@ export default function IrcDownloadsPage() {
         </section>
       )}
 
-      {batchId != null && (
-        <section className="rounded-2xl border border-slate-700 bg-slate-800/80">
-          <div className="border-b border-slate-700 px-5 py-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="text-base font-semibold text-slate-100">Focused Batch</div>
-                <div className="mt-1 text-sm text-slate-400">
-                  Batch #{batchId}{batch?.created_at ? ` • ${formatLocalTimestamp(batch.created_at)}` : ""}
-                </div>
-              </div>
-              {batch?.status && (
-                <div className={`rounded-full px-3 py-1 text-xs font-medium ${batchStatusTone(batch.status)}`}>
-                  {formatBatchStatus(batch.status)}
-                </div>
-              )}
-            </div>
+      {activeBulkBatchIds.length > 0 && (
+        <section className="space-y-4">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-100">Active IRC Batches</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              Bulk runs are grouped here with pause, resume, and cancel controls per batch.
+            </p>
           </div>
-          <div className="space-y-4 px-5 py-4">
-            {batchLoading && !batch && (
-              <div className="text-sm text-slate-400">Loading batch status...</div>
-            )}
-            {batch && (
-              <>
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex flex-wrap items-center gap-2 text-sm text-slate-300">
-                    <span className="rounded-full bg-slate-700 px-3 py-1">{batch.completed_books} completed</span>
-                    <span className="rounded-full bg-slate-700 px-3 py-1">{batch.failed_books} failed</span>
-                    {batch.cancelled_books > 0 && (
-                      <span className="rounded-full bg-slate-700 px-3 py-1">{batch.cancelled_books} cancelled</span>
-                    )}
-                    <span className="rounded-full bg-slate-700 px-3 py-1">{remainingBatchBooks} remaining</span>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    {(batch.status === "queued" || batch.status === "running") && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={handlePauseBatch}
-                          disabled={batchActionPending}
-                          className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm font-medium text-amber-200 transition-colors hover:bg-amber-500/15 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {pauseBatch.isPending ? "Pausing..." : "Pause After Current"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleCancelBatch}
-                          disabled={batchActionPending}
-                          className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-200 transition-colors hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {cancelBatch.isPending ? "Cancelling..." : "Cancel After Current"}
-                        </button>
-                      </>
-                    )}
-                    {batch.status === "pausing" && (
-                      <>
-                        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm font-medium text-amber-200">
-                          Pausing after current book
-                        </div>
-                        <button
-                          type="button"
-                          onClick={handleCancelBatch}
-                          disabled={batchActionPending}
-                          className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-200 transition-colors hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {cancelBatch.isPending ? "Cancelling..." : "Cancel After Current"}
-                        </button>
-                      </>
-                    )}
-                    {batch.status === "paused" && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={handleResumeBatch}
-                          disabled={batchActionPending}
-                          className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {resumeBatch.isPending ? "Resuming..." : "Resume"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleCancelBatch}
-                          disabled={batchActionPending}
-                          className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-200 transition-colors hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {cancelBatch.isPending ? "Cancelling..." : "Cancel"}
-                        </button>
-                      </>
-                    )}
-                    {batch.status === "cancelling" && (
-                      <div className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-200">
-                        Cancelling after current book
-                      </div>
-                    )}
-                  </div>
-                </div>
-                {(pauseBatch.isError || resumeBatch.isError || cancelBatch.isError) && (
-                  <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
-                    Failed to update the batch state.
-                  </div>
-                )}
-                <div className="space-y-2">
-                  {batch.items.map((item) => (
-                    <FocusedBatchRow key={item.id} item={item} />
-                  ))}
-                </div>
-              </>
-            )}
+          <div className="space-y-4">
+            {activeBulkBatchIds.map((activeBatchId) => (
+              <ActiveBulkBatchCard
+                key={activeBatchId}
+                batchId={activeBatchId}
+                onDismiss={(dismissedId) => {
+                  setDismissedBatchIds((current) => (
+                    current.includes(dismissedId) ? current : [...current, dismissedId]
+                  ));
+                }}
+              />
+            ))}
           </div>
         </section>
       )}
@@ -415,13 +249,13 @@ export default function IrcDownloadsPage() {
           <div className="rounded-xl border border-slate-700 bg-slate-800/70 px-5 py-6 text-sm text-slate-400">
             Loading IRC download activity...
           </div>
-        ) : activeEntries.length === 0 ? (
+        ) : activeSingleEntries.length === 0 ? (
           <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900/40 px-5 py-6 text-sm text-slate-500">
             No active IRC jobs.
           </div>
         ) : (
           <div className="space-y-3">
-            {activeEntries.map((entry) => (
+            {activeSingleEntries.map((entry) => (
               <DownloadFeedCard key={entry.entry_id} entry={entry} compact />
             ))}
           </div>
@@ -449,37 +283,202 @@ export default function IrcDownloadsPage() {
   );
 }
 
-function FocusedBatchRow({ item }: { item: IrcBulkDownloadItem }) {
-  const activeRetryError = item.status !== "failed" ? item.error_message : null;
+function ActiveBulkBatchCard({
+  batchId,
+  onDismiss,
+}: {
+  batchId: number;
+  onDismiss: (batchId: number) => void;
+}) {
+  const { data: batch, isLoading: batchLoading } = useIrcBulkBatch(batchId, true);
+  const pauseBatch = usePauseIrcBulkBatch();
+  const resumeBatch = useResumeIrcBulkBatch();
+  const cancelBatch = useCancelIrcBulkBatch();
+
+  const remainingBatchBooks = batch
+    ? Math.max(0, batch.total_books - batch.completed_books - batch.failed_books - batch.cancelled_books)
+    : 0;
+  const batchActionPending = pauseBatch.isPending || resumeBatch.isPending || cancelBatch.isPending;
+
+  useEffect(() => {
+    if (batch && (batch.status === "cancelling" || batch.status === "cancelled")) {
+      onDismiss(batch.id);
+    }
+  }, [batch, onDismiss]);
+
+  const handlePauseBatch = async () => {
+    await pauseBatch.mutateAsync(batchId);
+  };
+
+  const handleResumeBatch = async () => {
+    await resumeBatch.mutateAsync(batchId);
+  };
+
+  const handleCancelBatch = async () => {
+    const message =
+      batch?.status === "paused"
+        ? "Cancel this paused batch and remove the remaining queued books from the list?"
+        : "Cancel this batch after the current book finishes? Remaining queued books will be removed from the list.";
+    if (!window.confirm(message)) {
+      return;
+    }
+    await cancelBatch.mutateAsync(batchId);
+    onDismiss(batchId);
+  };
+
   return (
-    <div className="rounded-xl border border-slate-700 bg-slate-900/40 px-4 py-3">
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-slate-700 text-[11px] font-semibold text-slate-200">
-              {item.position}
-            </div>
-            <div className="text-sm font-medium text-slate-100">{item.title}</div>
-            <div className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${itemStatusTone(item.status)}`}>
-              {formatItemStatus(item.status)}
+    <section className="rounded-2xl border border-slate-700 bg-slate-800/80">
+      <div className="border-b border-slate-700 px-5 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-base font-semibold text-slate-100">Batch #{batchId}</div>
+            <div className="mt-1 text-sm text-slate-400">
+              {batch?.created_at ? formatLocalTimestamp(batch.created_at) : "Loading batch status..."}
             </div>
           </div>
-          <div className="mt-1 text-xs text-slate-400">
-            {item.author_name || "Unknown author"}
-            {item.attempt_count > 0 ? ` • Attempt ${item.attempt_count}` : ""}
-          </div>
-          {item.selected_result_label && (
-            <div className="mt-2 rounded-md border border-cyan-500/20 bg-cyan-500/10 px-3 py-2 text-[11px] text-cyan-200">
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-300/80">
-                Selected Result
-              </div>
-              <div className="break-words font-mono">{item.selected_result_label}</div>
+          {batch?.status && (
+            <div className={`rounded-full px-3 py-1 text-xs font-medium ${batchStatusTone(batch.status)}`}>
+              {formatBatchStatus(batch.status)}
             </div>
           )}
         </div>
-        <div className="lg:min-w-[320px]">
+      </div>
+      <div className="space-y-4 px-5 py-4">
+        {batchLoading && !batch ? (
+          <div className="text-sm text-slate-400">Loading batch status...</div>
+        ) : batch ? (
+          <>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2 text-sm text-slate-300">
+                <span className="rounded-full bg-slate-700 px-3 py-1">{batch.completed_books} completed</span>
+                <span className="rounded-full bg-slate-700 px-3 py-1">{batch.failed_books} failed</span>
+                {batch.cancelled_books > 0 && (
+                  <span className="rounded-full bg-slate-700 px-3 py-1">{batch.cancelled_books} cancelled</span>
+                )}
+                <span className="rounded-full bg-slate-700 px-3 py-1">{remainingBatchBooks} remaining</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {(batch.status === "queued" || batch.status === "running") && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handlePauseBatch}
+                      disabled={batchActionPending}
+                      className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm font-medium text-amber-200 transition-colors hover:bg-amber-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {pauseBatch.isPending ? "Pausing..." : "Pause After Current"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCancelBatch}
+                      disabled={batchActionPending}
+                      className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-200 transition-colors hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {cancelBatch.isPending ? "Cancelling..." : "Cancel After Current"}
+                    </button>
+                  </>
+                )}
+                {batch.status === "pausing" && (
+                  <>
+                    <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm font-medium text-amber-200">
+                      Pausing after current book
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleCancelBatch}
+                      disabled={batchActionPending}
+                      className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-200 transition-colors hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {cancelBatch.isPending ? "Cancelling..." : "Cancel After Current"}
+                    </button>
+                  </>
+                )}
+                {batch.status === "paused" && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleResumeBatch}
+                      disabled={batchActionPending}
+                      className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {resumeBatch.isPending ? "Resuming..." : "Resume"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCancelBatch}
+                      disabled={batchActionPending}
+                      className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-200 transition-colors hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {cancelBatch.isPending ? "Cancelling..." : "Cancel"}
+                    </button>
+                  </>
+                )}
+                {batch.status === "cancelling" && (
+                  <div className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-200">
+                    Cancelling after current book
+                  </div>
+                )}
+              </div>
+            </div>
+            {(pauseBatch.isError || resumeBatch.isError || cancelBatch.isError) && (
+              <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+                Failed to update the batch state.
+              </div>
+            )}
+            <div className="space-y-2">
+              {batch.items.map((item) => (
+                <FocusedBatchRow key={item.id} item={item} />
+              ))}
+            </div>
+          </>
+        ) : (
+          <div className="text-sm text-slate-400">Batch not found.</div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function FocusedBatchRow({ item }: { item: IrcBulkDownloadItem }) {
+  const activeRetryError = item.status !== "failed" ? item.error_message : null;
+  const importedPath = item.download_job?.moved_to_library_path ?? null;
+  return (
+    <div className="rounded-xl border border-slate-700 bg-slate-900/40 px-4 py-3">
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-slate-700 text-[11px] font-semibold text-slate-200">
+                {item.position}
+              </div>
+              <div className="text-sm font-medium text-slate-100">{item.title}</div>
+              <div className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${itemStatusTone(item.status)}`}>
+                {formatItemStatus(item.status)}
+              </div>
+            </div>
+            <div className="mt-1 text-xs text-slate-400">
+              {item.author_name || "Unknown author"}
+              {item.attempt_count > 0 ? ` • Attempt ${item.attempt_count}` : ""}
+            </div>
+          </div>
           <CompactStageRail status={item.status} error={item.error_message} retryError={activeRetryError} />
         </div>
+        {item.selected_result_label && (
+          <div className="rounded-md border border-cyan-500/20 bg-cyan-500/10 px-3 py-2 text-[11px] text-cyan-200">
+            <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-300/80">
+              Selected Result
+            </div>
+            <div className="break-words font-mono">{item.selected_result_label}</div>
+            {importedPath && (
+              <div className="mt-2 border-t border-cyan-400/15 pt-2">
+                <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-300/80">
+                  Imported To
+                </div>
+                <div className="break-all text-[11px] text-emerald-200">{importedPath}</div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -557,14 +556,18 @@ function DownloadFeedCard({ entry, compact = false }: { entry: IrcDownloadFeedEn
               </div>
               <div
                 className={`mt-1 text-sm font-medium ${
-                  entry.final_result_kind === "imported" ? "text-emerald-200" : "text-rose-200"
+                  entry.final_result_kind === "error" ? "text-rose-200" : "text-emerald-200"
                 }`}
               >
-                {entry.final_result_kind === "imported" ? "Imported to" : "Error"}
+                {entry.final_result_kind === "imported"
+                  ? "Imported to"
+                  : entry.final_result_kind === "downloaded"
+                    ? "Downloaded to"
+                    : "Error"}
               </div>
               <div
                 className={`mt-1 break-all text-xs ${
-                  entry.final_result_kind === "imported" ? "text-emerald-100/90" : "text-rose-100/90"
+                  entry.final_result_kind === "error" ? "text-rose-100/90" : "text-emerald-100/90"
                 }`}
               >
                 {entry.final_result_text}

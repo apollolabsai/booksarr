@@ -1046,6 +1046,9 @@ def _single_search_feed_entry(job: IrcSearchJob, books_by_id: dict[int, Book]) -
     if latest_download_job is not None and latest_download_job.moved_to_library_path:
         final_result_kind = "imported"
         final_result_text = latest_download_job.moved_to_library_path
+    elif latest_download_job is not None and latest_download_job.saved_path:
+        final_result_kind = "downloaded"
+        final_result_text = latest_download_job.saved_path
     elif latest_download_job is not None and latest_download_job.error_message:
         final_result_kind = "error"
         final_result_text = latest_download_job.error_message
@@ -1095,8 +1098,10 @@ def _single_search_feed_entry(job: IrcSearchJob, books_by_id: dict[int, Book]) -
 
 def _single_feed_status(job: IrcSearchJob, latest_download_job: IrcDownloadJob | None) -> str:
     if latest_download_job is not None:
-        if latest_download_job.status in {"queued", "sent", "waiting_dcc", "downloading", "downloaded"}:
+        if latest_download_job.status in {"queued", "sent", "waiting_dcc", "downloading"}:
             return "downloading_book"
+        if latest_download_job.status == "downloaded":
+            return "completed"
         if latest_download_job.status in {"extracting", "extracted"}:
             return "extracting"
         if latest_download_job.status in {"importing", "refreshing_library"}:
@@ -1123,7 +1128,6 @@ def _is_single_feed_active(job: IrcSearchJob, latest_download_job: IrcDownloadJo
             "sent",
             "waiting_dcc",
             "downloading",
-            "downloaded",
             "extracting",
             "extracted",
             "importing",
