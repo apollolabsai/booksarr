@@ -12,6 +12,8 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gosu \
+    iproute2 \
+    openvpn \
     p7zip-full \
     unar \
     && rm -rf /var/lib/apt/lists/*

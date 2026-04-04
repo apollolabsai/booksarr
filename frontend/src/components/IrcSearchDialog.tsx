@@ -5,10 +5,12 @@ import {
   useCreateIrcDownloadJob,
   useCreateIrcSearchJob,
   useIrcDownloadJob,
+  useIrcDownloadJobs,
   useIrcSearchJob,
   useIrcSearchResults,
   useIrcStatus,
 } from "../api/irc";
+import type { IrcDownloadJob } from "../types";
 
 export default function IrcSearchDialog({
   bookId,
@@ -30,11 +32,20 @@ export default function IrcSearchDialog({
   const [jobId, setJobId] = useState<number | null>(null);
   const [downloadJobId, setDownloadJobId] = useState<number | null>(null);
   const [activeResultId, setActiveResultId] = useState<number | null>(null);
+  const [queuedDownloadJob, setQueuedDownloadJob] = useState<IrcDownloadJob | null>(null);
   const lastOwnershipRefreshJobId = useRef<number | null>(null);
   const { data: ircStatus, isLoading: ircStatusLoading } = useIrcStatus(open);
   const { data: job } = useIrcSearchJob(jobId, open);
   const { data: results, isLoading: resultsLoading } = useIrcSearchResults(jobId, open);
-  const { data: downloadJob } = useIrcDownloadJob(downloadJobId, open);
+  const { data: downloadJobs } = useIrcDownloadJobs(open || downloadJobId != null || queuedDownloadJob != null);
+  const { data: downloadJob } = useIrcDownloadJob(downloadJobId, downloadJobId != null);
+  const selectedResultId = activeResultId ?? results?.find((result) => result.selected)?.id ?? null;
+  const fallbackDownloadJob =
+    (downloadJobId != null ? downloadJobs?.find((candidate) => candidate.id === downloadJobId) : null)
+    ?? (selectedResultId != null ? downloadJobs?.find((candidate) => candidate.search_result_id === selectedResultId) : null)
+    ?? (jobId != null ? downloadJobs?.find((candidate) => candidate.search_job_id === jobId && !isTerminalDownloadStatus(candidate.status)) : null)
+    ?? queuedDownloadJob;
+  const currentDownloadJob = downloadJob ?? fallbackDownloadJob ?? null;
 
   useEffect(() => {
     if (!open) return;
@@ -43,18 +54,29 @@ export default function IrcSearchDialog({
     setJobId(null);
     setDownloadJobId(null);
     setActiveResultId(null);
+    setQueuedDownloadJob(null);
     lastOwnershipRefreshJobId.current = null;
   }, [authorName, title, open]);
 
   useEffect(() => {
-    if (!downloadJob || downloadJob.status !== "moved") return;
-    if (lastOwnershipRefreshJobId.current === downloadJob.id) return;
+    if (!currentDownloadJob || downloadJobId === currentDownloadJob.id) return;
+    setDownloadJobId(currentDownloadJob.id);
+  }, [currentDownloadJob, downloadJobId]);
 
-    lastOwnershipRefreshJobId.current = downloadJob.id;
+  useEffect(() => {
+    if (!currentDownloadJob || currentDownloadJob.status !== "moved") return;
+    if (lastOwnershipRefreshJobId.current === currentDownloadJob.id) return;
+
+    lastOwnershipRefreshJobId.current = currentDownloadJob.id;
     queryClient.invalidateQueries({ queryKey: ["books"] });
     queryClient.invalidateQueries({ queryKey: ["authors"] });
     queryClient.invalidateQueries({ queryKey: ["hiddenBooks"] });
-  }, [downloadJob, queryClient]);
+  }, [currentDownloadJob, queryClient]);
+
+  useEffect(() => {
+    if (!currentDownloadJob || !isTerminalDownloadStatus(currentDownloadJob.status)) return;
+    setQueuedDownloadJob((current) => (current?.id === currentDownloadJob.id ? null : current));
+  }, [currentDownloadJob]);
 
   if (!open || !bookId) return null;
 
@@ -218,6 +240,7 @@ export default function IrcSearchDialog({
                           onClick={async () => {
                             setActiveResultId(result.id);
                             const job = await createDownloadJob.mutateAsync({ search_result_id: result.id });
+                            setQueuedDownloadJob(job);
                             setDownloadJobId(job.id);
                           }}
                           disabled={createDownloadJob.isPending}
@@ -226,37 +249,29 @@ export default function IrcSearchDialog({
                           {createDownloadJob.isPending && activeResultId === result.id ? "Queueing..." : "Download"}
                         </button>
                       </div>
-                      {(activeResultId === result.id || result.selected || downloadJob?.search_result_id === result.id) && (
+                      {(() => {
+                        const rowDownloadJob =
+                          currentDownloadJob?.search_result_id === result.id
+                            ? currentDownloadJob
+                            : queuedDownloadJob?.search_result_id === result.id
+                              ? queuedDownloadJob
+                              : null;
+                        const showRowState = activeResultId === result.id || result.selected || rowDownloadJob !== null;
+
+                        if (!showRowState) return null;
+
+                        return (
                         <div className="mt-2 rounded-md bg-slate-950/60 px-3 py-2 text-xs">
-                          <div className="text-emerald-300">
-                            {downloadJob?.search_result_id === result.id
-                              ? `Selected for download. Status: ${formatDownloadStatus(downloadJob.status)}`
-                              : "Selected for download. Waiting to queue download job..."}
-                          </div>
-                          {downloadJob?.search_result_id === result.id && (
-                            <>
-                              {downloadJob.dcc_filename && (
-                                <div className="mt-1 text-slate-400">
-                                  File: <span className="text-slate-300">{downloadJob.dcc_filename}</span>
-                                </div>
-                              )}
-                              {downloadJob.saved_path && (
-                                <div className="mt-1 text-slate-400">
-                                  Downloaded to: <span className="text-slate-300">{downloadJob.saved_path}</span>
-                                </div>
-                              )}
-                              {downloadJob.moved_to_library_path && (
-                                <div className="mt-1 text-emerald-300">
-                                  Imported to: <span className="text-emerald-200">{downloadJob.moved_to_library_path}</span>
-                                </div>
-                              )}
-                              {downloadJob.error_message && (
-                                <div className="mt-1 text-rose-300">{downloadJob.error_message}</div>
-                              )}
-                            </>
-                          )}
+                          <DownloadStageList
+                            status={rowDownloadJob?.status ?? "queued"}
+                            savedPath={rowDownloadJob?.saved_path ?? null}
+                            dccFilename={rowDownloadJob?.dcc_filename ?? null}
+                            movedToLibraryPath={rowDownloadJob?.moved_to_library_path ?? null}
+                            errorMessage={rowDownloadJob?.error_message ?? null}
+                          />
                         </div>
-                      )}
+                        );
+                      })()}
                     </div>
                   ))}
                 </div>
@@ -281,33 +296,110 @@ export default function IrcSearchDialog({
   );
 }
 
-function formatDownloadStatus(status: string): string {
-  switch (status) {
-    case "queued":
-      return "queued";
-    case "sent":
-      return "request sent";
-    case "waiting_dcc":
-      return "waiting on download";
-    case "downloading":
-      return "downloading";
-    case "extracting":
-      return "extracting archive";
-    case "extracted":
-      return "archive extracted";
-    case "importing":
-      return "importing to library";
-    case "refreshing_library":
-      return "refreshing library";
-    case "downloaded":
-      return "downloaded";
-    case "moved":
-      return "imported";
-    case "failed":
-      return "failed";
-    case "cancelled":
-      return "cancelled";
+function isTerminalDownloadStatus(status: string | null): boolean {
+  return status === "moved" || status === "failed" || status === "cancelled";
+}
+
+function DownloadStageList({
+  status,
+  savedPath,
+  dccFilename,
+  movedToLibraryPath,
+  errorMessage,
+}: {
+  status: string;
+  savedPath: string | null;
+  dccFilename: string | null;
+  movedToLibraryPath: string | null;
+  errorMessage: string | null;
+}) {
+  const stages = [
+    { label: "Queued", statuses: ["queued"] },
+    { label: "Request Sent", statuses: ["sent", "waiting_dcc"] },
+    { label: "Downloading", statuses: ["downloading", "downloaded"] },
+    { label: "Extracting", statuses: ["extracting", "extracted"] },
+    { label: "Importing", statuses: ["importing", "refreshing_library"] },
+    { label: "Done", statuses: ["moved"] },
+    { label: "Error", statuses: ["failed", "cancelled"] },
+  ];
+
+  const activeIndex = stages.findIndex((stage) => stage.statuses.includes(status));
+  const isErrorState = status === "failed" || status === "cancelled";
+  const originalWasArchive = (dccFilename ?? "").toLowerCase().endsWith(".rar");
+  const extractedArtifactReady = Boolean(
+    originalWasArchive
+      && savedPath
+      && !savedPath.toLowerCase().endsWith(".rar"),
+  );
+
+  return (
+    <div className="space-y-1">
+      {stages.map((stage, index) => {
+        const isDone = isErrorState
+          ? didStageCompleteBeforeError({
+              label: stage.label,
+              savedPath,
+              movedToLibraryPath,
+              extractedArtifactReady,
+            })
+          : activeIndex > index;
+        const isActive = stage.statuses.includes(status);
+        const isErrorStage = stage.label === "Error";
+        const tone = isErrorStage && isActive
+          ? "text-rose-300"
+          : isErrorState && !isDone
+            ? "text-rose-300"
+          : isDone || isActive
+            ? "text-emerald-300"
+            : "text-slate-500";
+        const marker = isActive ? "->" : isDone ? "✓" : " ";
+
+        return (
+          <div key={stage.label} className={tone}>
+            <div className="flex items-start gap-2">
+              <span className="inline-block w-4 shrink-0 text-left font-medium">{marker}</span>
+              <span>{stage.label}</span>
+            </div>
+            {stage.label === "Importing" && movedToLibraryPath && (
+              <div className="ml-6 break-all text-[11px] text-emerald-200/90">{movedToLibraryPath}</div>
+            )}
+            {stage.label === "Error" && isActive && errorMessage && (
+              <div className="ml-6 break-all text-[11px] text-rose-200/90">{errorMessage}</div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function didStageCompleteBeforeError({
+  label,
+  savedPath,
+  movedToLibraryPath,
+  extractedArtifactReady,
+}: {
+  label: string;
+  savedPath: string | null;
+  movedToLibraryPath: string | null;
+  extractedArtifactReady: boolean;
+}): boolean {
+  switch (label) {
+    case "Queued":
+      return true;
+    case "Request Sent":
+      return true;
+    case "Downloading":
+      return Boolean(savedPath);
+    case "Extracting":
+      return extractedArtifactReady || Boolean(movedToLibraryPath);
+    case "Importing":
+      return Boolean(movedToLibraryPath);
+    case "Done":
+      return false;
+    case "Error":
+      return false;
     default:
-      return status;
+      return false;
   }
 }

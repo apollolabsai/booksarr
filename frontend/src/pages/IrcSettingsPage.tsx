@@ -10,6 +10,40 @@ import {
   useUpdateIrcSettings,
 } from "../api/irc";
 
+const PIA_VPN_REGIONS = [
+  "Netherlands",
+  "US East",
+  "US California",
+  "US New York",
+  "US Chicago",
+  "US Florida",
+  "US Texas",
+  "US Seattle",
+  "US Denver",
+  "Canada Montreal",
+  "Canada Toronto",
+  "Canada Vancouver",
+  "UK London",
+  "UK Manchester",
+  "Germany Berlin",
+  "Germany Frankfurt",
+  "France",
+  "Switzerland",
+  "Sweden",
+  "Romania",
+  "Australia Sydney",
+  "Australia Melbourne",
+  "Japan",
+  "Ireland",
+  "Israel",
+  "Norway",
+  "Spain",
+  "Italy",
+  "Brazil",
+  "Mexico",
+  "Singapore",
+];
+
 export default function IrcSettingsPage() {
   const { data: settings } = useIrcSettings();
   const { data: status } = useIrcStatus(true);
@@ -29,6 +63,10 @@ export default function IrcSettingsPage() {
   const [realName, setRealName] = useState("");
   const [channel, setChannel] = useState("");
   const [channelPassword, setChannelPassword] = useState("");
+  const [vpnEnabled, setVpnEnabled] = useState(false);
+  const [vpnRegion, setVpnRegion] = useState("Netherlands");
+  const [vpnUsername, setVpnUsername] = useState("");
+  const [vpnPassword, setVpnPassword] = useState("");
   const [autoMove, setAutoMove] = useState(true);
   const [testQuery, setTestQuery] = useState("");
   const [saved, setSaved] = useState(false);
@@ -44,11 +82,30 @@ export default function IrcSettingsPage() {
     setRealName(settings.real_name);
     setChannel(settings.channel);
     setChannelPassword("");
+    setVpnEnabled(settings.vpn_enabled);
+    setVpnRegion(settings.vpn_region);
+    setVpnUsername(settings.vpn_username);
+    setVpnPassword("");
     setAutoMove(settings.auto_move_to_library);
   }, [settings]);
 
   const handleSave = async () => {
-    await updateSettings.mutateAsync({
+    const body: {
+      enabled: boolean;
+      server: string;
+      port: number;
+      use_tls: boolean;
+      nickname: string;
+      username: string;
+      real_name: string;
+      channel: string;
+      channel_password?: string;
+      vpn_enabled: boolean;
+      vpn_region: string;
+      vpn_username: string;
+      vpn_password?: string;
+      auto_move_to_library: boolean;
+    } = {
       enabled,
       server: server.trim(),
       port: Number(port) || 6697,
@@ -57,9 +114,19 @@ export default function IrcSettingsPage() {
       username: username.trim(),
       real_name: realName.trim(),
       channel: channel.trim(),
-      channel_password: channelPassword,
+      vpn_enabled: vpnEnabled,
+      vpn_region: vpnRegion,
+      vpn_username: vpnUsername.trim(),
       auto_move_to_library: autoMove,
-    });
+    };
+    if (channelPassword) {
+      body.channel_password = channelPassword;
+    }
+    if (vpnPassword) {
+      body.vpn_password = vpnPassword;
+    }
+
+    await updateSettings.mutateAsync(body);
     setSaved(true);
     setTimeout(() => setSaved(false), 3000);
   };
@@ -167,6 +234,72 @@ export default function IrcSettingsPage() {
             Disconnect
           </button>
           {saved && <span className="text-sm text-emerald-400">IRC settings saved.</span>}
+        </div>
+      </div>
+
+      <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
+        <div className="flex items-start justify-between gap-6">
+          <div>
+            <h3 className="text-lg font-semibold mb-2">PIA VPN Routing</h3>
+            <p className="text-sm text-slate-400">
+              Route IRC server connections and DCC transfers through a PIA OpenVPN tunnel.
+              Only IRC traffic is routed through the VPN; all other app traffic uses the normal network.
+            </p>
+          </div>
+          <div className="text-right text-xs text-slate-500">
+            Applies to IRC traffic only
+          </div>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2 mt-6">
+          <label className="flex items-center gap-3 text-sm text-slate-200 md:col-span-2">
+            <input
+              type="checkbox"
+              checked={vpnEnabled}
+              onChange={(e) => setVpnEnabled(e.target.checked)}
+              className="h-4 w-4 rounded border-slate-500 bg-slate-700 text-emerald-500 focus:ring-emerald-500"
+            />
+            Enable VPN routing for IRC
+          </label>
+          <div>
+            <div className="text-xs text-slate-400 mb-1">PIA Region</div>
+            <select
+              value={vpnRegion}
+              onChange={(e) => setVpnRegion(e.target.value)}
+              disabled={!vpnEnabled}
+              className="w-full rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {PIA_VPN_REGIONS.map((region) => (
+                <option key={region} value={region}>{region}</option>
+              ))}
+            </select>
+          </div>
+          <div />
+          <div>
+            <div className="text-xs text-slate-400 mb-1">PIA Username</div>
+            <input
+              value={vpnUsername}
+              onChange={(e) => setVpnUsername(e.target.value)}
+              disabled={!vpnEnabled}
+              className="w-full rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
+              placeholder="PIA username"
+            />
+          </div>
+          <div>
+            <div className="text-xs text-slate-400 mb-1">PIA Password</div>
+            <input
+              type="password"
+              value={vpnPassword}
+              onChange={(e) => setVpnPassword(e.target.value)}
+              disabled={!vpnEnabled}
+              className="w-full rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
+              placeholder={settings?.vpn_password_set ? "Saved password present; enter to replace" : "PIA password"}
+            />
+          </div>
+        </div>
+
+        <div className="mt-4 text-xs text-slate-500">
+          Use your PIA account credentials. The VPN connects automatically when IRC connects.
         </div>
       </div>
 

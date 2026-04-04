@@ -8,18 +8,21 @@ router = APIRouter(prefix="/api/logs", tags=["logs"])
 
 @router.get("")
 async def get_logs(
-    category: str | None = Query(None),
-    level: str | None = Query(None),
+    category: list[str] = Query(default=[]),
+    level: list[str] = Query(default=[]),
 ):
     return {
-        "entries": log_store.get_entries(category=category, level=level),
+        "entries": log_store.get_entries(categories=category, levels=level),
         "categories": log_store.get_categories(),
     }
 
 
 @router.get("/download")
-async def download_logs(category: str | None = Query(None)):
-    text = log_store.get_all_text(category=category)
+async def download_logs(
+    category: list[str] = Query(default=[]),
+    level: list[str] = Query(default=[]),
+):
+    text = log_store.get_all_text(categories=category, levels=level)
     return PlainTextResponse(
         content=text,
         headers={"Content-Disposition": "attachment; filename=booksarr.log"},

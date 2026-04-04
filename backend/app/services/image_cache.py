@@ -16,18 +16,24 @@ DEFAULT_HEADERS = {"User-Agent": "Booksarr/0.1.0 (ebook library manager)"}
 MIN_COVER_BYTES = 20_000  # 20KB
 
 
-async def download_image(url: str, category: str, filename: str) -> str | None:
+async def download_image(url: str, category: str, filename: str, *, overwrite: bool = False) -> str | None:
     """Download an image and cache it. Returns relative cache path."""
     if not url:
         return None
 
     cache_path = CACHE_DIR / category / filename
-    if cache_path.exists():
+    if cache_path.exists() and not overwrite:
         logger.debug("Image already cached: %s/%s", category, filename)
         return f"cache/{category}/{filename}"
 
     try:
-        logger.info("Downloading image: %s -> %s/%s", url[:80], category, filename)
+        logger.info(
+            "%s image: %s -> %s/%s",
+            "Refreshing cached" if overwrite and cache_path.exists() else "Downloading",
+            url[:80],
+            category,
+            filename,
+        )
         async with httpx.AsyncClient(
             timeout=15.0,
             follow_redirects=True,
@@ -47,10 +53,16 @@ async def download_image(url: str, category: str, filename: str) -> str | None:
         return None
 
 
-async def cache_author_image(author_key: int | str, url: str, source: str = "hc") -> str | None:
+async def cache_author_image(
+    author_key: int | str,
+    url: str,
+    source: str = "hc",
+    *,
+    overwrite: bool = False,
+) -> str | None:
     ext = _get_ext(url)
     safe_source = source.lower().replace(" ", "_")
-    return await download_image(url, "authors", f"{safe_source}_{author_key}{ext}")
+    return await download_image(url, "authors", f"{safe_source}_{author_key}{ext}", overwrite=overwrite)
 
 
 async def cache_book_image(hardcover_id: int, url: str) -> str | None:

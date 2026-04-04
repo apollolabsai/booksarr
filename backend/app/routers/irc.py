@@ -19,6 +19,7 @@ from backend.app.schemas.irc import (
     IrcSettingsUpdate,
     IrcWorkerStatusResponse,
 )
+from backend.app.services.vpn_manager import normalize_pia_region
 from backend.app.services.irc_parser import (
     build_expected_result_filename,
     build_search_command,
@@ -49,6 +50,10 @@ async def get_irc_settings(db: AsyncSession = Depends(get_db)):
         real_name=settings["real_name"],
         channel=settings["channel"],
         channel_password_set=bool(settings["channel_password"]),
+        vpn_enabled=settings["vpn_enabled"],
+        vpn_region=settings["vpn_region"],
+        vpn_username=settings["vpn_username"],
+        vpn_password_set=bool(settings["vpn_password"]),
         auto_move_to_library=settings["auto_move_to_library"],
         downloads_dir=str(DOWNLOADS_DIR),
     )
@@ -66,6 +71,10 @@ async def update_irc_settings(body: IrcSettingsUpdate, db: AsyncSession = Depend
         "irc_real_name": body.real_name,
         "irc_channel": body.channel,
         "irc_channel_password": body.channel_password,
+        "irc_vpn_enabled": _bool_to_text(body.vpn_enabled) if body.vpn_enabled is not None else None,
+        "irc_vpn_region": normalize_pia_region(body.vpn_region) if body.vpn_region is not None else None,
+        "irc_vpn_username": body.vpn_username,
+        "irc_vpn_password": body.vpn_password,
         "irc_auto_move_to_library": _bool_to_text(body.auto_move_to_library) if body.auto_move_to_library is not None else None,
     }
     for key, value in updates.items():
@@ -322,6 +331,10 @@ async def _load_settings(db: AsyncSession) -> dict[str, object]:
         "real_name": settings.get("irc_real_name", ""),
         "channel": settings.get("irc_channel", ""),
         "channel_password": settings.get("irc_channel_password", ""),
+        "vpn_enabled": settings.get("irc_vpn_enabled", "false").lower() == "true",
+        "vpn_region": normalize_pia_region(settings.get("irc_vpn_region", "Netherlands")),
+        "vpn_username": settings.get("irc_vpn_username", ""),
+        "vpn_password": settings.get("irc_vpn_password", ""),
         "auto_move_to_library": settings.get("irc_auto_move_to_library", "true").lower() == "true",
     }
 

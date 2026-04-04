@@ -28,6 +28,10 @@ export function useUpdateIrcSettings() {
       real_name?: string;
       channel?: string;
       channel_password?: string;
+      vpn_enabled?: boolean;
+      vpn_region?: string;
+      vpn_username?: string;
+      vpn_password?: string;
       auto_move_to_library?: boolean;
     }) => fetchApi("/irc/settings", { method: "PUT", body: JSON.stringify(body) }),
     onSuccess: () => {
@@ -105,11 +109,12 @@ export function useIrcSearchResults(jobId: number | null, enabled: boolean = tru
   });
 }
 
-export function useIrcDownloadJobs() {
+export function useIrcDownloadJobs(enabled: boolean = true) {
   return useQuery({
     queryKey: ["ircDownloadJobs"],
     queryFn: () => fetchApi<IrcDownloadJob[]>("/irc/download-jobs"),
-    refetchInterval: 3000,
+    enabled,
+    refetchInterval: enabled ? 3000 : false,
     refetchIntervalInBackground: true,
   });
 }
@@ -130,7 +135,9 @@ export function useCreateIrcDownloadJob() {
     mutationFn: (body: { search_result_id: number }) =>
       fetchApi<IrcDownloadJob>("/irc/download", { method: "POST", body: JSON.stringify(body) }),
     onSuccess: (job) => {
+      queryClient.setQueryData(["ircDownloadJob", job.id], job);
       queryClient.invalidateQueries({ queryKey: ["ircDownloadJobs"] });
+      queryClient.invalidateQueries({ queryKey: ["ircDownloadJob", job.id] });
       queryClient.invalidateQueries({ queryKey: ["ircStatus"] });
       if (job.search_job_id != null) {
         queryClient.invalidateQueries({ queryKey: ["ircSearchResults", job.search_job_id] });

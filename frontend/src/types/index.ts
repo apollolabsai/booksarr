@@ -319,6 +319,10 @@ export interface IrcSettings {
   real_name: string;
   channel: string;
   channel_password_set: boolean;
+  vpn_enabled: boolean;
+  vpn_region: string;
+  vpn_username: string;
+  vpn_password_set: boolean;
   auto_move_to_library: boolean;
   downloads_dir: string;
 }

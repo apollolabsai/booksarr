@@ -11,6 +11,10 @@ class IrcSettingsResponse(BaseModel):
     real_name: str = ""
     channel: str = ""
     channel_password_set: bool = False
+    vpn_enabled: bool = False
+    vpn_region: str = "Netherlands"
+    vpn_username: str = ""
+    vpn_password_set: bool = False
     auto_move_to_library: bool = True
     downloads_dir: str
 
@@ -25,6 +29,10 @@ class IrcSettingsUpdate(BaseModel):
     real_name: str | None = None
     channel: str | None = None
     channel_password: str | None = None
+    vpn_enabled: bool | None = None
+    vpn_region: str | None = None
+    vpn_username: str | None = None
+    vpn_password: str | None = None
     auto_move_to_library: bool | None = None
 
 

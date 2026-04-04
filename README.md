@@ -34,6 +34,10 @@ services:
   booksarr:
     image: powertowerpro/booksarr:latest
     container_name: booksarr
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
     environment:
       - PUID=1000
       - PGID=1000
@@ -53,6 +57,8 @@ services:
 ```bash
 docker compose up -d
 ```
+
+If you plan to use PIA VPN routing for IRC, the host must expose `/dev/net/tun` to Docker and allow `NET_ADMIN`. On some VPS, rootless Docker, or nested-container setups, TUN devices may be unavailable.
 
 To track the published development image instead, use:
 
@@ -85,7 +91,8 @@ Booksarr expects ebooks under your `/books` mount, typically organized by author
 3. Open **Settings > Profiles** and adjust **Book Visibility** rules.
 4. Open **Settings > Metadata Refreshes** and run **Scan Library** or **Full Refresh**.
 5. Optionally configure **Settings > IRC** if you want IRC search/download support.
-6. Use the magnifying-glass **IRC Search** action on any book to search your configured IRC channel and download a match directly from the app.
+6. If you want IRC traffic routed through PIA, enable **VPN Routing for IRC** in **Settings > IRC** and enter your PIA account credentials plus region.
+7. Use the magnifying-glass **IRC Search** action on any book to search your configured IRC channel and download a match directly from the app.
 
 ## Configuration
 
@@ -124,6 +131,7 @@ Booksarr expects ebooks under your `/books` mount, typically organized by author
 Booksarr supports one IRC profile at a time from **Settings > IRC**.
 
 - Search any visible book directly from the grid or table view with the **IRC Search** action.
+- Optionally route IRC control connections and DCC transfers through a PIA OpenVPN tunnel.
 - Sends `@search {query}` to the configured public channel.
 - Waits for a DCC-delivered `.zip` archive containing a single `.txt` result file.
 - Parses each downloadable result line and stores the exact command needed to request that file.
@@ -133,6 +141,17 @@ Booksarr supports one IRC profile at a time from **Settings > IRC**.
 - Optionally moves completed downloads into `/books` and triggers a targeted library refresh so the book becomes owned in the UI quickly.
 
 For auto-move to work, your `/books` mount must be writable.
+
+For PIA VPN routing to work, the container must be started with:
+
+```yaml
+cap_add:
+  - NET_ADMIN
+devices:
+  - /dev/net/tun:/dev/net/tun
+```
+
+If `/dev/net/tun` is missing inside the container, VPN connection attempts will fail before IRC connects.
 
 ## Tech Stack
 
