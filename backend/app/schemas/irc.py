@@ -126,6 +126,7 @@ class IrcBulkDownloadBatchSummary(BaseModel):
     total_books: int
     completed_books: int
     failed_books: int
+    cancelled_books: int = 0
     items: list[IrcBulkDownloadItemSummary]
     created_at: str | None = None
     updated_at: str | None = None

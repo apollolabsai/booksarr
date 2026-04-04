@@ -47,7 +47,7 @@ IRC_DCC_CHUNK_TIMEOUT_SECONDS = 10
 IRC_DCC_TRAILING_READ_TIMEOUT_SECONDS = 1.0
 IRC_DCC_MAX_TRAILING_BYTES = 1024 * 1024
 
-BULK_BATCH_ACTIVE_STATUSES = {"queued", "running"}
+BULK_BATCH_ACTIVE_STATUSES = {"queued", "running", "pausing", "cancelling"}
 BULK_ITEM_ACTIVE_STATUSES = {
     "searching",
     "downloading_search_results",
@@ -386,6 +386,40 @@ async def _process_bulk_batches():
             if active_item is not None:
                 changed = await _advance_bulk_item(batch, active_item, now, db)
                 updated_anything = updated_anything or changed
+                break
+
+            if batch.status == "pausing":
+                if any(item.status == "queued" for item in items):
+                    batch.status = "paused"
+                    batch.updated_at = now
+                    logger.info("IRC bulk batch %s paused after current book completed", batch.request_id)
+                    updated_anything = True
+                    break
+                batch.status = "completed"
+                batch.updated_at = now
+                batch.completed_at = now
+                logger.info(
+                    "IRC bulk batch %s completed while honoring pause request: total=%s completed=%s failed=%s",
+                    batch.request_id,
+                    len(items),
+                    sum(1 for item in items if item.status == "completed"),
+                    sum(1 for item in items if item.status == "failed"),
+                )
+                updated_anything = True
+                break
+
+            if batch.status == "cancelling":
+                batch.status = "cancelled"
+                batch.updated_at = now
+                batch.completed_at = now
+                logger.info(
+                    "IRC bulk batch %s cancelled after current book completed: total=%s completed=%s failed=%s",
+                    batch.request_id,
+                    len(items),
+                    sum(1 for item in items if item.status == "completed"),
+                    sum(1 for item in items if item.status == "failed"),
+                )
+                updated_anything = True
                 break
 
             queued_item = next((item for item in items if item.status == "queued"), None)
@@ -1453,6 +1487,15 @@ async def _download_search_result_archive(job_id: int, offer: dict[str, Any]):
         )
         await _store_search_results(job_id, archive_path, extracted_text_path, parsed_results)
         _runtime.last_message = f"Search job {job_id} parsed {len(parsed_results)} result lines"
+    except asyncio.CancelledError:
+        logger.info("IRC search job %s DCC archive handling cancelled", job_id)
+        _runtime.last_message = f"Search job {job_id} was cancelled"
+        try:
+            if archive_path.exists():
+                archive_path.unlink()
+        except Exception:
+            pass
+        raise
     except Exception as exc:
         logger.exception("IRC search job %s failed during DCC archive handling: %s", job_id, exc)
         _runtime.last_error = str(exc)
@@ -1652,6 +1695,15 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
                 import_path,
             )
             _runtime.last_message = f"Download job {job_id} completed and stayed in /downloads"
+    except asyncio.CancelledError:
+        logger.info("IRC download job %s DCC book handling cancelled", job_id)
+        _runtime.last_message = f"Download job {job_id} was cancelled"
+        try:
+            if download_path.exists() and not download_completed:
+                download_path.unlink()
+        except Exception:
+            pass
+        raise
     except Exception as exc:
         logger.exception("IRC download job %s failed during DCC book handling: %s", job_id, exc)
         if isinstance(exc, TimeoutError):

@@ -63,6 +63,14 @@ ACTIVE_DOWNLOAD_STATUSES = {
     "importing",
     "refreshing_library",
 }
+ACTIVE_BATCH_ITEM_STATUSES = {
+    "searching",
+    "downloading_search_results",
+    "choosing_best_option",
+    "downloading_book",
+    "extracting",
+    "importing",
+}
 ACTIVE_FEED_ITEM_STATUSES = {
     "queued",
     "searching",
@@ -205,6 +213,111 @@ async def get_bulk_batch(batch_id: int, db: AsyncSession = Depends(get_db)):
     return await _get_bulk_batch_summary(batch_id, db)
 
 
+@router.post("/bulk-batches/{batch_id}/pause", response_model=IrcBulkDownloadBatchSummary)
+async def pause_bulk_batch(batch_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(IrcBulkDownloadBatch)
+        .options(selectinload(IrcBulkDownloadBatch.items))
+        .where(IrcBulkDownloadBatch.id == batch_id)
+    )
+    batch = result.scalar_one_or_none()
+    if batch is None:
+        raise HTTPException(status_code=404, detail="IRC bulk batch not found")
+
+    if batch.status in {"completed", "cancelled"}:
+        return await _get_bulk_batch_summary(batch.id, db)
+
+    now = datetime.utcnow()
+    has_active_item = any(item.status in ACTIVE_BATCH_ITEM_STATUSES for item in batch.items)
+    has_queued_item = any(item.status == "queued" for item in batch.items)
+
+    if has_active_item:
+        batch.status = "pausing"
+    elif has_queued_item:
+        batch.status = "paused"
+    else:
+        batch.status = "completed"
+        batch.completed_at = now
+
+    batch.updated_at = now
+    await db.commit()
+    logger.info("IRC bulk batch %s pause requested: new_status=%s", batch.request_id, batch.status)
+    return await _get_bulk_batch_summary(batch.id, db)
+
+
+@router.post("/bulk-batches/{batch_id}/resume", response_model=IrcBulkDownloadBatchSummary)
+async def resume_bulk_batch(batch_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(IrcBulkDownloadBatch)
+        .options(selectinload(IrcBulkDownloadBatch.items))
+        .where(IrcBulkDownloadBatch.id == batch_id)
+    )
+    batch = result.scalar_one_or_none()
+    if batch is None:
+        raise HTTPException(status_code=404, detail="IRC bulk batch not found")
+
+    if batch.status == "paused":
+        batch.status = "running"
+        batch.updated_at = datetime.utcnow()
+        await db.commit()
+        logger.info("IRC bulk batch %s resumed", batch.request_id)
+
+    return await _get_bulk_batch_summary(batch.id, db)
+
+
+@router.post("/bulk-batches/{batch_id}/cancel", response_model=IrcBulkDownloadBatchSummary)
+async def cancel_bulk_batch(batch_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(IrcBulkDownloadBatch)
+        .options(
+            selectinload(IrcBulkDownloadBatch.items)
+            .selectinload(IrcBulkDownloadItem.search_job),
+            selectinload(IrcBulkDownloadBatch.items)
+            .selectinload(IrcBulkDownloadItem.download_job),
+        )
+        .where(IrcBulkDownloadBatch.id == batch_id)
+    )
+    batch = result.scalar_one_or_none()
+    if batch is None:
+        raise HTTPException(status_code=404, detail="IRC bulk batch not found")
+
+    if batch.status in {"completed", "cancelled"}:
+        return await _get_bulk_batch_summary(batch.id, db)
+
+    now = datetime.utcnow()
+    active_item = next((item for item in batch.items if item.status in ACTIVE_BATCH_ITEM_STATUSES), None)
+    queued_items = [item for item in batch.items if item.status == "queued"]
+
+    for item in queued_items:
+        if item.search_job is not None:
+            item.search_job.status = "cancelled"
+            item.search_job.error_message = "Cancelled by user"
+            item.search_job.updated_at = now
+            item.search_job.completed_at = now
+        if item.download_job is not None:
+            item.download_job.status = "cancelled"
+            item.download_job.error_message = "Cancelled by user"
+            item.download_job.updated_at = now
+            item.download_job.completed_at = now
+        await db.delete(item)
+
+    if active_item is not None:
+        batch.status = "cancelling"
+    else:
+        batch.status = "cancelled"
+        batch.completed_at = now
+    batch.updated_at = now
+    await db.commit()
+    logger.info(
+        "IRC bulk batch %s cancel requested: removed_queued_items=%s active_item_id=%s new_status=%s",
+        batch.request_id,
+        len(queued_items),
+        active_item.id if active_item is not None else None,
+        batch.status,
+    )
+    return await _get_bulk_batch_summary(batch.id, db)
+
+
 @router.get("/downloads-feed", response_model=list[IrcDownloadFeedEntry])
 async def get_downloads_feed(db: AsyncSession = Depends(get_db)):
     bulk_items_result = await db.execute(
@@ -268,7 +381,7 @@ async def clear_downloads_feed_history(db: AsyncSession = Depends(get_db)):
             selectinload(IrcBulkDownloadBatch.items)
             .selectinload(IrcBulkDownloadItem.download_job),
         )
-        .where(IrcBulkDownloadBatch.status == "completed")
+        .where(IrcBulkDownloadBatch.status.in_(["completed", "cancelled"]))
     )
     completed_batches = completed_batch_result.scalars().all()
 
@@ -813,6 +926,7 @@ async def _get_bulk_batch_summary(batch_id: int, db: AsyncSession) -> IrcBulkDow
     items = [_bulk_item_summary(item) for item in sorted(batch.items, key=lambda row: row.position)]
     completed_books = sum(1 for item in batch.items if item.status == "completed")
     failed_books = sum(1 for item in batch.items if item.status == "failed")
+    cancelled_books = sum(1 for item in batch.items if item.status == "cancelled")
 
     return IrcBulkDownloadBatchSummary(
         id=batch.id,
@@ -821,6 +935,7 @@ async def _get_bulk_batch_summary(batch_id: int, db: AsyncSession) -> IrcBulkDow
         total_books=len(batch.items),
         completed_books=completed_books,
         failed_books=failed_books,
+        cancelled_books=cancelled_books,
         items=items,
         created_at=_iso(batch.created_at),
         updated_at=_iso(batch.updated_at),

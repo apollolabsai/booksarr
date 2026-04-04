@@ -139,6 +139,48 @@ export function useIrcBulkBatch(batchId: number | null, enabled: boolean = true)
   });
 }
 
+export function usePauseIrcBulkBatch() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (batchId: number) =>
+      fetchApi<IrcBulkDownloadBatch>(`/irc/bulk-batches/${batchId}/pause`, { method: "POST" }),
+    onSuccess: (batch) => {
+      queryClient.setQueryData(["ircBulkBatch", batch.id], batch);
+      queryClient.invalidateQueries({ queryKey: ["ircBulkBatch", batch.id] });
+      queryClient.invalidateQueries({ queryKey: ["ircDownloadsFeed"] });
+      queryClient.invalidateQueries({ queryKey: ["ircStatus"] });
+    },
+  });
+}
+
+export function useResumeIrcBulkBatch() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (batchId: number) =>
+      fetchApi<IrcBulkDownloadBatch>(`/irc/bulk-batches/${batchId}/resume`, { method: "POST" }),
+    onSuccess: (batch) => {
+      queryClient.setQueryData(["ircBulkBatch", batch.id], batch);
+      queryClient.invalidateQueries({ queryKey: ["ircBulkBatch", batch.id] });
+      queryClient.invalidateQueries({ queryKey: ["ircDownloadsFeed"] });
+      queryClient.invalidateQueries({ queryKey: ["ircStatus"] });
+    },
+  });
+}
+
+export function useCancelIrcBulkBatch() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (batchId: number) =>
+      fetchApi<IrcBulkDownloadBatch>(`/irc/bulk-batches/${batchId}/cancel`, { method: "POST" }),
+    onSuccess: (batch) => {
+      queryClient.setQueryData(["ircBulkBatch", batch.id], batch);
+      queryClient.invalidateQueries({ queryKey: ["ircBulkBatch", batch.id] });
+      queryClient.invalidateQueries({ queryKey: ["ircDownloadsFeed"] });
+      queryClient.invalidateQueries({ queryKey: ["ircStatus"] });
+    },
+  });
+}
+
 export function useIrcDownloadsFeed(enabled: boolean = true) {
   return useQuery({
     queryKey: ["ircDownloadsFeed"],

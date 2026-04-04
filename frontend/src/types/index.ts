@@ -404,6 +404,7 @@ export interface IrcBulkDownloadBatch {
   total_books: number;
   completed_books: number;
   failed_books: number;
+  cancelled_books: number;
   items: IrcBulkDownloadItem[];
   created_at: string | null;
   updated_at: string | null;

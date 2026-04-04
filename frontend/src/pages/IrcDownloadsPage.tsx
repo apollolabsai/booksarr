@@ -2,11 +2,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
+  useCancelIrcBulkBatch,
   useClearIrcDownloadsFeed,
   useCreateIrcBulkBatch,
   useIrcBulkBatch,
   useIrcDownloadsFeed,
   useIrcStatus,
+  usePauseIrcBulkBatch,
+  useResumeIrcBulkBatch,
 } from "../api/irc";
 import type { Book, IrcBulkDownloadItem, IrcDownloadFeedEntry } from "../types";
 
@@ -43,6 +46,9 @@ export default function IrcDownloadsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const createBatch = useCreateIrcBulkBatch();
   const clearHistory = useClearIrcDownloadsFeed();
+  const pauseBatch = usePauseIrcBulkBatch();
+  const resumeBatch = useResumeIrcBulkBatch();
+  const cancelBatch = useCancelIrcBulkBatch();
   const { data: ircStatus, isLoading: ircStatusLoading } = useIrcStatus(true);
   const { data: feedEntries, isLoading: feedLoading } = useIrcDownloadsFeed(true);
   const batchId = Number(searchParams.get("batchId") || "") || null;
@@ -85,6 +91,10 @@ export default function IrcDownloadsPage() {
     () => pendingBooks.filter((book) => !book.is_owned).length,
     [pendingBooks],
   );
+  const remainingBatchBooks = batch
+    ? Math.max(0, batch.total_books - batch.completed_books - batch.failed_books - batch.cancelled_books)
+    : 0;
+  const batchActionPending = pauseBatch.isPending || resumeBatch.isPending || cancelBatch.isPending;
 
   const handleStartBatch = async () => {
     if (pendingBooks.length === 0) return;
@@ -107,11 +117,33 @@ export default function IrcDownloadsPage() {
       return;
     }
     await clearHistory.mutateAsync();
-    if (batch?.status === "completed" && batchId != null) {
+    if ((batch?.status === "completed" || batch?.status === "cancelled") && batchId != null) {
       const nextParams = new URLSearchParams(searchParams);
       nextParams.delete("batchId");
       setSearchParams(nextParams, { replace: true });
     }
+  };
+
+  const handlePauseBatch = async () => {
+    if (batchId == null) return;
+    await pauseBatch.mutateAsync(batchId);
+  };
+
+  const handleResumeBatch = async () => {
+    if (batchId == null) return;
+    await resumeBatch.mutateAsync(batchId);
+  };
+
+  const handleCancelBatch = async () => {
+    if (batchId == null) return;
+    const message =
+      batch?.status === "paused"
+        ? "Cancel this paused batch and remove the remaining queued books from the list?"
+        : "Cancel this batch after the current book finishes? Remaining queued books will be removed from the list.";
+    if (!window.confirm(message)) {
+      return;
+    }
+    await cancelBatch.mutateAsync(batchId);
   };
 
   return (
@@ -236,13 +268,83 @@ export default function IrcDownloadsPage() {
             )}
             {batch && (
               <>
-                <div className="flex flex-wrap items-center gap-2 text-sm text-slate-300">
-                  <span className="rounded-full bg-slate-700 px-3 py-1">{batch.completed_books} completed</span>
-                  <span className="rounded-full bg-slate-700 px-3 py-1">{batch.failed_books} failed</span>
-                  <span className="rounded-full bg-slate-700 px-3 py-1">
-                    {Math.max(0, batch.total_books - batch.completed_books - batch.failed_books)} remaining
-                  </span>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2 text-sm text-slate-300">
+                    <span className="rounded-full bg-slate-700 px-3 py-1">{batch.completed_books} completed</span>
+                    <span className="rounded-full bg-slate-700 px-3 py-1">{batch.failed_books} failed</span>
+                    {batch.cancelled_books > 0 && (
+                      <span className="rounded-full bg-slate-700 px-3 py-1">{batch.cancelled_books} cancelled</span>
+                    )}
+                    <span className="rounded-full bg-slate-700 px-3 py-1">{remainingBatchBooks} remaining</span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {(batch.status === "queued" || batch.status === "running") && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={handlePauseBatch}
+                          disabled={batchActionPending}
+                          className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm font-medium text-amber-200 transition-colors hover:bg-amber-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {pauseBatch.isPending ? "Pausing..." : "Pause After Current"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleCancelBatch}
+                          disabled={batchActionPending}
+                          className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-200 transition-colors hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {cancelBatch.isPending ? "Cancelling..." : "Cancel After Current"}
+                        </button>
+                      </>
+                    )}
+                    {batch.status === "pausing" && (
+                      <>
+                        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm font-medium text-amber-200">
+                          Pausing after current book
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleCancelBatch}
+                          disabled={batchActionPending}
+                          className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-200 transition-colors hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {cancelBatch.isPending ? "Cancelling..." : "Cancel After Current"}
+                        </button>
+                      </>
+                    )}
+                    {batch.status === "paused" && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleResumeBatch}
+                          disabled={batchActionPending}
+                          className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {resumeBatch.isPending ? "Resuming..." : "Resume"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleCancelBatch}
+                          disabled={batchActionPending}
+                          className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-200 transition-colors hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {cancelBatch.isPending ? "Cancelling..." : "Cancel"}
+                        </button>
+                      </>
+                    )}
+                    {batch.status === "cancelling" && (
+                      <div className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-200">
+                        Cancelling after current book
+                      </div>
+                    )}
+                  </div>
                 </div>
+                {(pauseBatch.isError || resumeBatch.isError || cancelBatch.isError) && (
+                  <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+                    Failed to update the batch state.
+                  </div>
+                )}
                 <div className="space-y-2">
                   {batch.items.map((item) => (
                     <FocusedBatchRow key={item.id} item={item} />
@@ -493,6 +595,10 @@ function getFailureProgressRank(status: string, path?: string | null): number {
 function formatBatchStatus(status: string): string {
   if (status === "queued") return "Queued";
   if (status === "running") return "Running";
+  if (status === "pausing") return "Pausing After Current Book";
+  if (status === "paused") return "Paused";
+  if (status === "cancelling") return "Cancelling After Current Book";
+  if (status === "cancelled") return "Cancelled";
   if (status === "completed") return "Completed";
   return status;
 }
@@ -506,6 +612,7 @@ function formatItemStatus(status: string): string {
   if (status === "extracting") return "Extracting";
   if (status === "importing") return "Importing";
   if (status === "completed") return "Done";
+  if (status === "cancelled") return "Cancelled";
   if (status === "failed") return "Failed";
   return status;
 }
@@ -513,11 +620,14 @@ function formatItemStatus(status: string): string {
 function batchStatusTone(status: string): string {
   if (status === "completed") return "bg-emerald-500/15 text-emerald-300";
   if (status === "running") return "bg-blue-500/15 text-blue-300";
+  if (status === "pausing" || status === "paused") return "bg-amber-500/15 text-amber-300";
+  if (status === "cancelling" || status === "cancelled") return "bg-rose-500/15 text-rose-300";
   return "bg-slate-700 text-slate-300";
 }
 
 function itemStatusTone(status: string): string {
   if (status === "completed") return "bg-emerald-500/15 text-emerald-300";
+  if (status === "cancelled") return "bg-slate-700 text-slate-300";
   if (status === "failed") return "bg-rose-500/15 text-rose-300";
   if (status === "queued") return "bg-slate-700 text-slate-300";
   return "bg-blue-500/15 text-blue-300";
