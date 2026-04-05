@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useCancelIrcBulkBatch,
@@ -32,6 +32,7 @@ const ITEM_PROGRESS_ORDER = [
 
 export default function IrcDownloadsPage() {
   const location = useLocation();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const createBatch = useCreateIrcBulkBatch();
   const clearHistory = useClearIrcDownloadsFeed();
@@ -39,7 +40,14 @@ export default function IrcDownloadsPage() {
   const { data: feedEntries, isLoading: feedLoading } = useIrcDownloadsFeed(true);
   const locationState = (location.state as IrcDownloadsLocationState | null) ?? null;
   const [pendingBooks, setPendingBooks] = useState<SelectedBook[]>(locationState?.selectedBooks ?? []);
-  const [dismissedBatchIds, setDismissedBatchIds] = useState<number[]>([]);
+  const [dismissedBatchIds, setDismissedBatchIds] = useState<number[]>(() => {
+    try {
+      const stored = sessionStorage.getItem("ircDismissedBatchIds");
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
   const completedEntryIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -47,6 +55,14 @@ export default function IrcDownloadsPage() {
       setPendingBooks(locationState.selectedBooks);
     }
   }, [locationState]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem("ircDismissedBatchIds", JSON.stringify(dismissedBatchIds));
+    } catch {
+      // sessionStorage full or unavailable
+    }
+  }, [dismissedBatchIds]);
 
   useEffect(() => {
     if (!feedEntries) return;
@@ -103,6 +119,7 @@ export default function IrcDownloadsPage() {
         book_ids: pendingBooks.map((book) => book.id),
       });
       setPendingBooks([]);
+      navigate(location.pathname, { replace: true });
     } catch {
       // Mutation state is rendered below.
     }
@@ -112,7 +129,11 @@ export default function IrcDownloadsPage() {
     if (!window.confirm("Clear completed and failed IRC download history? Active jobs will be kept.")) {
       return;
     }
-    await clearHistory.mutateAsync();
+    try {
+      await clearHistory.mutateAsync();
+    } catch {
+      // Mutation state is rendered below.
+    }
   };
 
   return (
@@ -125,14 +146,16 @@ export default function IrcDownloadsPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={handleClearHistory}
-            disabled={clearHistory.isPending}
-            className="rounded-md border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-200 transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {clearHistory.isPending ? "Clearing..." : "Clear History"}
-          </button>
+          {historyEntries.length > 0 && (
+            <button
+              type="button"
+              onClick={handleClearHistory}
+              disabled={clearHistory.isPending}
+              className="rounded-md border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-200 transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {clearHistory.isPending ? "Clearing..." : "Clear History"}
+            </button>
+          )}
           <Link
             to="/settings/irc"
             className="rounded-md border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-200 transition-colors hover:bg-slate-700"
@@ -141,6 +164,12 @@ export default function IrcDownloadsPage() {
           </Link>
         </div>
       </div>
+
+      {clearHistory.isError && (
+        <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200">
+          Failed to clear IRC download history.
+        </div>
+      )}
 
       {!ircStatusLoading && !isIrcReady && (
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4">

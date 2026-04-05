@@ -256,7 +256,7 @@ async def resume_bulk_batch(batch_id: int, db: AsyncSession = Depends(get_db)):
     if batch is None:
         raise HTTPException(status_code=404, detail="IRC bulk batch not found")
 
-    if batch.status == "paused":
+    if batch.status in {"paused", "pausing"}:
         batch.status = "running"
         batch.updated_at = datetime.utcnow()
         await db.commit()
