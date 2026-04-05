@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useAddAuthorFromHardcover, useSearchHardcoverAuthors } from "../api/authors";
 import { getImageUrl } from "../types";
 
@@ -9,6 +10,7 @@ export default function AddAuthorDialog({
   open: boolean;
   onClose: () => void;
 }) {
+  const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const searchAuthors = useSearchHardcoverAuthors();
   const addAuthor = useAddAuthorFromHardcover();
@@ -114,8 +116,9 @@ export default function AddAuthorDialog({
                       <button
                         type="button"
                         onClick={async () => {
-                          await addAuthor.mutateAsync(candidate.hardcover_id);
+                          const author = await addAuthor.mutateAsync(candidate.hardcover_id);
                           onClose();
+                          navigate(`/authors/${author.id}`);
                         }}
                         disabled={addAuthor.isPending}
                         className="shrink-0 rounded-md border border-slate-600 bg-slate-700 px-3 py-1.5 text-xs font-medium text-slate-100 transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
