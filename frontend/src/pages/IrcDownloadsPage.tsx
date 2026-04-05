@@ -272,11 +272,7 @@ export default function IrcDownloadsPage() {
             No completed IRC history yet.
           </div>
         ) : (
-          <div className="space-y-3">
-            {historyEntries.map((entry) => (
-              <DownloadFeedCard key={entry.entry_id} entry={entry} />
-            ))}
-          </div>
+          <RecentHistoryTable entries={historyEntries} />
         )}
       </section>
     </div>
@@ -457,7 +453,7 @@ function FocusedBatchRow({ item }: { item: IrcBulkDownloadItem }) {
               </div>
             </div>
             <div className="mt-1 text-xs text-slate-400">
-              {item.author_name || "Unknown author"}
+              <AuthorNameLink authorId={item.author_id} authorName={item.author_name} />
               {item.attempt_count > 0 ? ` • Attempt ${item.attempt_count}` : ""}
             </div>
           </div>
@@ -518,7 +514,9 @@ function DownloadFeedCard({ entry, compact = false }: { entry: IrcDownloadFeedEn
 
         <div className="min-w-0">
           <div className="text-base font-semibold text-slate-100">{entry.title}</div>
-          <div className="mt-1 text-sm text-slate-400">{entry.author_name || "Unknown author"}</div>
+          <div className="mt-1 text-sm text-slate-400">
+            <AuthorNameLink authorId={entry.author_id} authorName={entry.author_name} />
+          </div>
           {entry.query_text && (
             <div className="mt-2 text-xs text-slate-500">
               Query: <span className="text-slate-400">{entry.query_text}</span>
@@ -582,6 +580,167 @@ function DownloadFeedCard({ entry, compact = false }: { entry: IrcDownloadFeedEn
         </div>
       </div>
     </article>
+  );
+}
+
+function RecentHistoryTable({ entries }: { entries: IrcDownloadFeedEntry[] }) {
+  return (
+    <div className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-800/70">
+      <div className="hidden grid-cols-[52px_172px_180px_minmax(240px,1.45fr)_132px_84px_78px_82px] gap-x-5 border-b border-slate-700 bg-slate-900/80 px-5 py-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400 lg:grid">
+        <div className="text-center"><span className="sr-only">Status</span></div>
+        <div>Date Time</div>
+        <div>Author</div>
+        <div>Book Title</div>
+        <div>Final Result</div>
+        <div>Size</div>
+        <div>Attempts</div>
+        <div>Bulk #</div>
+      </div>
+      <div className="divide-y divide-slate-700">
+        {entries.map((entry) => (
+          <RecentHistoryRow key={entry.entry_id} entry={entry} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RecentHistoryRow({ entry }: { entry: IrcDownloadFeedEntry }) {
+  const timestamp = entry.completed_at ?? entry.updated_at ?? entry.created_at ?? entry.sort_timestamp;
+  const detailRows = getHistoryDetailRows(entry);
+  const sizeText = getHistorySize(entry);
+
+  return (
+    <article className="px-5 py-3.5">
+      <div className="grid gap-3 lg:grid-cols-[52px_172px_180px_minmax(240px,1.45fr)_132px_84px_78px_82px] lg:items-center lg:gap-x-5">
+        <div className="flex items-start justify-between gap-3 lg:block">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 lg:hidden">
+            Status
+          </div>
+          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900/80 ring-1 ring-slate-700 lg:mx-auto">
+            <HistoryStatusIcon kind={entry.final_result_kind} />
+          </div>
+        </div>
+        <HistoryCell
+          label="Date Time"
+          value={timestamp ? formatLocalTimestamp(timestamp) : "No timestamp"}
+          noTruncate
+          className="text-slate-300"
+        />
+        <HistoryCell
+          label="Author"
+          value={entry.author_name || "Unknown author"}
+          href={entry.author_id != null ? `/authors/${entry.author_id}` : undefined}
+        />
+        <HistoryCell label="Book Title" value={entry.title} emphasized />
+        <HistoryCell
+          label="Final Result"
+          value={formatHistoryFinalResult(entry)}
+          tone={entry.final_result_kind === "error" ? "text-rose-200" : "text-emerald-200"}
+        />
+        <HistoryCell label="Size" value={sizeText} mono className="lg:text-center" />
+        <HistoryCell
+          label="Attempts"
+          value={entry.attempt_count > 0 ? String(entry.attempt_count) : "1"}
+          className="lg:text-center"
+        />
+        <HistoryCell
+          label="Bulk #"
+          value={entry.batch_id != null ? `#${entry.batch_id}` : "Single"}
+          className="lg:text-center"
+        />
+      </div>
+      <div className="mt-2 space-y-1.5 border-t border-slate-700/70 pt-2">
+        {detailRows.map((row) => (
+          <div key={row.label} className="text-xs leading-5">
+            <span className={`mr-2 font-semibold uppercase tracking-[0.12em] ${row.labelTone}`}>
+              {row.label}:
+            </span>
+            <span className={`break-all ${row.valueTone}`}>{row.value}</span>
+          </div>
+        ))}
+      </div>
+    </article>
+  );
+}
+
+function HistoryStatusIcon({ kind }: { kind: string | null }) {
+  const isError = kind === "error";
+  return (
+    <svg
+      className={isError ? "h-4 w-4 text-rose-400" : "h-4 w-4 text-emerald-400"}
+      viewBox="0 0 20 20"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      {isError ? (
+        <path
+          fillRule="evenodd"
+          d="M10 18a8 8 0 100-16 8 8 0 000 16zm2.12-10.95a.75.75 0 10-1.06-1.06L10 7.94 8.94 6.88a.75.75 0 10-1.06 1.06L8.94 9l-1.06 1.06a.75.75 0 101.06 1.06L10 10.06l1.06 1.06a.75.75 0 101.06-1.06L11.06 9l1.06-1.06z"
+          clipRule="evenodd"
+        />
+      ) : (
+        <path
+          fillRule="evenodd"
+          d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.03-9.22a.75.75 0 10-1.06-1.06L9.25 10.44 8.03 9.22a.75.75 0 00-1.06 1.06l1.75 1.75a.75.75 0 001.06 0l3.25-3.25z"
+          clipRule="evenodd"
+        />
+      )}
+    </svg>
+  );
+}
+
+function HistoryCell({
+  label,
+  value,
+  emphasized = false,
+  tone = "text-slate-200",
+  mono = false,
+  noTruncate = false,
+  className = "",
+  href,
+}: {
+  label: string;
+  value: string;
+  emphasized?: boolean;
+  tone?: string;
+  mono?: boolean;
+  noTruncate?: boolean;
+  className?: string;
+  href?: string;
+}) {
+  const contentClassName = `${noTruncate ? "" : "truncate"} text-sm leading-5 ${tone} ${emphasized ? "font-semibold text-slate-100" : ""} ${mono ? "font-mono text-[13px]" : ""} ${className}`;
+  return (
+    <div className="min-w-0">
+      <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500 lg:hidden">
+        {label}
+      </div>
+      {href ? (
+        <Link to={href} className={`${contentClassName} transition-colors hover:text-emerald-300`}>
+          {value}
+        </Link>
+      ) : (
+        <div className={contentClassName}>{value}</div>
+      )}
+    </div>
+  );
+}
+
+function AuthorNameLink({
+  authorId,
+  authorName,
+}: {
+  authorId: number | null | undefined;
+  authorName: string | null | undefined;
+}) {
+  const label = authorName || "Unknown author";
+  if (authorId == null) {
+    return <>{label}</>;
+  }
+  return (
+    <Link to={`/authors/${authorId}`} className="transition-colors hover:text-emerald-300">
+      {label}
+    </Link>
   );
 }
 
@@ -715,4 +874,89 @@ function formatLocalTimestamp(value: string): string {
   hours %= 12;
   if (hours === 0) hours = 12;
   return `${year}-${month}-${day} ${hours}:${minutes}${meridiem}`;
+}
+
+function formatHistoryFinalResult(entry: IrcDownloadFeedEntry): string {
+  if (entry.final_result_kind === "imported") return "Imported";
+  if (entry.final_result_kind === "downloaded") return "Downloaded";
+  if (entry.final_result_kind === "error") return "Error";
+  if (entry.status === "cancelled") return "Cancelled";
+  return formatItemStatus(entry.status);
+}
+
+function getHistoryDetailRows(entry: IrcDownloadFeedEntry): Array<{
+  label: string;
+  value: string;
+  labelTone: string;
+  valueTone: string;
+}> {
+  if (entry.final_result_kind === "error" && entry.final_result_text) {
+    return [
+      {
+        label: "Error",
+        value: entry.final_result_text,
+        labelTone: "text-rose-300/80",
+        valueTone: "text-rose-200",
+      },
+    ];
+  }
+
+  const rows: Array<{
+    label: string;
+    value: string;
+    labelTone: string;
+    valueTone: string;
+  }> = [];
+
+  if (entry.selected_result_label) {
+    rows.push({
+      label: "Selected Result",
+      value: entry.selected_result_label,
+      labelTone: "text-cyan-300/80",
+      valueTone: "font-mono text-cyan-200",
+    });
+  }
+
+  if (entry.final_result_kind === "imported" && entry.final_result_text) {
+    rows.push({
+      label: "Import Path",
+      value: entry.final_result_text,
+      labelTone: "text-emerald-300/80",
+      valueTone: "text-emerald-200",
+    });
+  } else if (entry.final_result_kind === "downloaded" && entry.final_result_text) {
+    rows.push({
+      label: "Download Path",
+      value: entry.final_result_text,
+      labelTone: "text-emerald-300/80",
+      valueTone: "text-emerald-200",
+    });
+  }
+
+  if (rows.length > 0) {
+    return rows;
+  }
+
+  return [
+    {
+      label: "Status",
+      value: formatHistoryFinalResult(entry),
+      labelTone: "text-slate-400",
+      valueTone: "text-slate-300",
+    },
+  ];
+}
+
+function getHistorySize(entry: IrcDownloadFeedEntry): string {
+  const fromSelectedResult = extractResultSize(entry.selected_result_label);
+  if (fromSelectedResult) return fromSelectedResult;
+  const dccFilename = entry.download_job?.dcc_filename;
+  const fromFilename = extractResultSize(dccFilename);
+  return fromFilename ?? "—";
+}
+
+function extractResultSize(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const match = value.match(/::INFO::\s*([0-9]+(?:\.[0-9]+)?\s*(?:KB|MB|GB|TB))/i);
+  return match ? match[1].replace(/\s+/g, "") : null;
 }

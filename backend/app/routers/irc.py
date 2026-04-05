@@ -946,6 +946,7 @@ async def _get_bulk_batch_summary(batch_id: int, db: AsyncSession) -> IrcBulkDow
 def _bulk_item_summary(item: IrcBulkDownloadItem) -> IrcBulkDownloadItemSummary:
     book = item.book
     title = book.title if book else f"Book {item.book_id}"
+    author_id = book.author.id if book and book.author else None
     author_name = book.author.name if book and book.author else None
     attempt_count = len(_parse_attempted_result_ids(item.attempted_result_ids))
     selected_result_text = (
@@ -957,6 +958,7 @@ def _bulk_item_summary(item: IrcBulkDownloadItem) -> IrcBulkDownloadItemSummary:
         id=item.id,
         book_id=item.book_id,
         title=title,
+        author_id=author_id,
         author_name=author_name,
         position=item.position,
         status=item.status,
@@ -1011,6 +1013,7 @@ def _bulk_feed_entry(item: IrcBulkDownloadItem) -> IrcDownloadFeedEntry:
         bulk_request_id=item.batch.request_id if item.batch is not None else None,
         book_id=item.book_id,
         title=item.book.title if item.book is not None else f"Book {item.book_id}",
+        author_id=item.book.author.id if item.book is not None and item.book.author is not None else None,
         author_name=item.book.author.name if item.book is not None and item.book.author is not None else None,
         status=status,
         query_text=item.query_text,
@@ -1067,6 +1070,7 @@ def _single_search_feed_entry(job: IrcSearchJob, books_by_id: dict[int, Book]) -
         bulk_request_id=job.bulk_request_id,
         book_id=job.book_id,
         title=book.title if book is not None else job.query_text,
+        author_id=book.author.id if book is not None and book.author is not None else None,
         author_name=book.author.name if book is not None and book.author is not None else None,
         status=status,
         query_text=job.query_text,

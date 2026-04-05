@@ -384,6 +384,7 @@ export interface IrcBulkDownloadItem {
   id: number;
   book_id: number;
   title: string;
+  author_id: number | null;
   author_name: string | null;
   position: number;
   status: string;
@@ -419,6 +420,7 @@ export interface IrcDownloadFeedEntry {
   bulk_request_id: string | null;
   book_id: number | null;
   title: string;
+  author_id: number | null;
   author_name: string | null;
   status: string;
   query_text: string | null;

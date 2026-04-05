@@ -105,6 +105,7 @@ class IrcBulkDownloadItemSummary(BaseModel):
     id: int
     book_id: int
     title: str
+    author_id: int | None = None
     author_name: str | None
     position: int
     status: str
@@ -140,6 +141,7 @@ class IrcDownloadFeedEntry(BaseModel):
     bulk_request_id: str | None = None
     book_id: int | None = None
     title: str
+    author_id: int | None = None
     author_name: str | None = None
     status: str
     query_text: str | None = None
