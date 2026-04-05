@@ -32,6 +32,7 @@ from backend.app.utils.book_visibility import (
     get_book_visibility_settings,
     get_hidden_category,
     is_book_visible,
+    is_book_visible_for_metadata_enrichment,
 )
 from backend.app.services.google_books import (
     GoogleBooksClient,
@@ -1517,7 +1518,7 @@ async def run_full_sync(force: bool = False):
                     books_to_reconcile = [
                         book for book in all_hc_books
                         if book.publish_date_checked_at is None
-                        and is_book_visible(book, visibility_settings)
+                        and is_book_visible_for_metadata_enrichment(book, visibility_settings)
                     ]
                     author_map = {a.id: a.name for a in authors}
 

@@ -305,7 +305,7 @@ export default function SettingsPage({ section }: { section: SettingsSection }) 
           <span className="text-xs bg-slate-600 text-slate-300 px-2 py-0.5 rounded">Optional</span>
         </div>
         <p className="text-sm text-slate-400 mb-2">
-          Recommended for more accurate publish dates. Without it, Open Library is used as a fallback (less reliable). Free — allows 1,000 requests/day.
+          Recommended for stronger Google Books matching, ISBN enrichment, and cover-art fallback. Free — allows 1,000 requests/day.
         </p>
         <ol className="text-sm text-slate-400 mb-4 list-decimal list-inside space-y-1">
           <li>Go to the{" "}
@@ -416,7 +416,7 @@ export default function SettingsPage({ section }: { section: SettingsSection }) 
             Choose which types of books should be included in the library by default.
           </p>
           <p className="text-xs text-slate-500 mb-4">
-            Owned books are always shown. Books hidden by these rules are skipped for Google Books and Open Library lookups to conserve external API usage.
+            Owned books are always shown. Books hidden by these rules are skipped for Google Books and Open Library lookups to conserve external API usage, except titles hidden only for missing valid ISBNs still get checked so external ISBN matches can unhide them.
           </p>
           <div className="space-y-3">
             {VISIBILITY_OPTIONS.map((option) => (

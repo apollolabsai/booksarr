@@ -158,6 +158,17 @@ def is_book_visible(book: Book, visibility_settings: dict[str, bool], today: str
     return visibility_settings.get(get_primary_visibility_category(book), True)
 
 
+def is_book_visible_for_metadata_enrichment(
+    book: Book,
+    visibility_settings: dict[str, bool],
+    today: str | None = None,
+) -> bool:
+    """Apply normal visibility rules, but never let the valid ISBN gate block external ISBN lookups."""
+    relaxed_settings = dict(visibility_settings)
+    relaxed_settings["valid_isbn"] = False
+    return is_book_visible(book, relaxed_settings, today=today)
+
+
 def get_hidden_category(book: Book, visibility_settings: dict[str, bool], today: str | None = None) -> tuple[str, str] | None:
     categories = get_hidden_categories(book, visibility_settings, today=today)
     return categories[0] if categories else None
