@@ -666,26 +666,35 @@ function RecentHistoryRow({ entry }: { entry: IrcDownloadFeedEntry }) {
 
 function HistoryStatusIcon({ kind }: { kind: string | null }) {
   const isError = kind === "error";
+  if (isError) {
+    return (
+      <svg
+        className="h-5 w-5 text-rose-400"
+        viewBox="0 0 20 20"
+        fill="none"
+        aria-hidden="true"
+      >
+        <path
+          d="M6.25 6.25L13.75 13.75M13.75 6.25L6.25 13.75"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  }
   return (
     <svg
-      className={isError ? "h-4 w-4 text-rose-400" : "h-4 w-4 text-emerald-400"}
+      className="h-4 w-4 text-emerald-400"
       viewBox="0 0 20 20"
       fill="currentColor"
       aria-hidden="true"
     >
-      {isError ? (
-        <path
-          fillRule="evenodd"
-          d="M10 18a8 8 0 100-16 8 8 0 000 16zm2.12-10.95a.75.75 0 10-1.06-1.06L10 7.94 8.94 6.88a.75.75 0 10-1.06 1.06L8.94 9l-1.06 1.06a.75.75 0 101.06 1.06L10 10.06l1.06 1.06a.75.75 0 101.06-1.06L11.06 9l1.06-1.06z"
-          clipRule="evenodd"
-        />
-      ) : (
-        <path
-          fillRule="evenodd"
-          d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.03-9.22a.75.75 0 10-1.06-1.06L9.25 10.44 8.03 9.22a.75.75 0 00-1.06 1.06l1.75 1.75a.75.75 0 001.06 0l3.25-3.25z"
-          clipRule="evenodd"
-        />
-      )}
+      <path
+        fillRule="evenodd"
+        d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.03-9.22a.75.75 0 10-1.06-1.06L9.25 10.44 8.03 9.22a.75.75 0 00-1.06 1.06l1.75 1.75a.75.75 0 001.06 0l3.25-3.25z"
+        clipRule="evenodd"
+      />
     </svg>
   );
 }
