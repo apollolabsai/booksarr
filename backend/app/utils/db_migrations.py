@@ -61,6 +61,61 @@ def run_schema_migrations(conn: Connection) -> None:
 
     conn.exec_driver_sql(
         """
+        CREATE TABLE IF NOT EXISTS irc_bulk_download_batches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id VARCHAR NOT NULL UNIQUE,
+            status VARCHAR NOT NULL DEFAULT 'queued',
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            completed_at DATETIME NULL
+        )
+        """
+    )
+    conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_irc_bulk_download_batches_request_id ON irc_bulk_download_batches (request_id)"
+    )
+    conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_irc_bulk_download_batches_status ON irc_bulk_download_batches (status)"
+    )
+
+    conn.exec_driver_sql(
+        """
+        CREATE TABLE IF NOT EXISTS irc_bulk_download_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id INTEGER NOT NULL,
+            book_id INTEGER NOT NULL,
+            position INTEGER NOT NULL,
+            status VARCHAR NOT NULL DEFAULT 'queued',
+            query_text VARCHAR NULL,
+            error_message TEXT NULL,
+            search_job_id INTEGER NULL,
+            download_job_id INTEGER NULL,
+            selected_search_result_id INTEGER NULL,
+            selected_result_label TEXT NULL,
+            attempted_result_ids TEXT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            completed_at DATETIME NULL,
+            FOREIGN KEY(batch_id) REFERENCES irc_bulk_download_batches (id),
+            FOREIGN KEY(book_id) REFERENCES books (id),
+            FOREIGN KEY(search_job_id) REFERENCES irc_search_jobs (id),
+            FOREIGN KEY(download_job_id) REFERENCES irc_download_jobs (id),
+            FOREIGN KEY(selected_search_result_id) REFERENCES irc_search_results (id)
+        )
+        """
+    )
+    conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_irc_bulk_download_items_batch_id ON irc_bulk_download_items (batch_id)"
+    )
+    conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_irc_bulk_download_items_book_id ON irc_bulk_download_items (book_id)"
+    )
+    conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_irc_bulk_download_items_status ON irc_bulk_download_items (status)"
+    )
+
+    conn.exec_driver_sql(
+        """
         CREATE TABLE IF NOT EXISTS irc_search_jobs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             book_id INTEGER NULL,
@@ -87,6 +142,26 @@ def run_schema_migrations(conn: Connection) -> None:
     )
     conn.exec_driver_sql(
         "CREATE INDEX IF NOT EXISTS ix_irc_search_jobs_normalized_query ON irc_search_jobs (normalized_query)"
+    )
+    irc_search_job_rows = conn.exec_driver_sql("PRAGMA table_info(irc_search_jobs)").fetchall()
+    existing_irc_search_job_columns = {row[1] for row in irc_search_job_rows}
+    if "auto_download" not in existing_irc_search_job_columns:
+        conn.exec_driver_sql(
+            "ALTER TABLE irc_search_jobs ADD COLUMN auto_download BOOLEAN NOT NULL DEFAULT 0"
+        )
+    if "bulk_request_id" not in existing_irc_search_job_columns:
+        conn.exec_driver_sql(
+            "ALTER TABLE irc_search_jobs ADD COLUMN bulk_request_id VARCHAR"
+        )
+    if "bulk_item_id" not in existing_irc_search_job_columns:
+        conn.exec_driver_sql(
+            "ALTER TABLE irc_search_jobs ADD COLUMN bulk_item_id INTEGER"
+        )
+    conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_irc_search_jobs_bulk_request_id ON irc_search_jobs (bulk_request_id)"
+    )
+    conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_irc_search_jobs_bulk_item_id ON irc_search_jobs (bulk_item_id)"
     )
 
     conn.exec_driver_sql(
@@ -140,4 +215,20 @@ def run_schema_migrations(conn: Connection) -> None:
     )
     conn.exec_driver_sql(
         "CREATE INDEX IF NOT EXISTS ix_irc_download_jobs_book_id ON irc_download_jobs (book_id)"
+    )
+    irc_download_job_rows = conn.exec_driver_sql("PRAGMA table_info(irc_download_jobs)").fetchall()
+    existing_irc_download_job_columns = {row[1] for row in irc_download_job_rows}
+    if "bulk_request_id" not in existing_irc_download_job_columns:
+        conn.exec_driver_sql(
+            "ALTER TABLE irc_download_jobs ADD COLUMN bulk_request_id VARCHAR"
+        )
+    if "bulk_item_id" not in existing_irc_download_job_columns:
+        conn.exec_driver_sql(
+            "ALTER TABLE irc_download_jobs ADD COLUMN bulk_item_id INTEGER"
+        )
+    conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_irc_download_jobs_bulk_request_id ON irc_download_jobs (bulk_request_id)"
+    )
+    conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_irc_download_jobs_bulk_item_id ON irc_download_jobs (bulk_item_id)"
     )

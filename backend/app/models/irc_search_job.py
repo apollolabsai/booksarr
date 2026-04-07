@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.database import Base
@@ -14,6 +14,9 @@ class IrcSearchJob(Base):
     query_text: Mapped[str] = mapped_column(String, nullable=False)
     normalized_query: Mapped[str] = mapped_column(String, nullable=False, index=True)
     status: Mapped[str] = mapped_column(String, nullable=False, default="queued", index=True)
+    auto_download: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    bulk_request_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    bulk_item_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("irc_bulk_download_items.id"), nullable=True, index=True)
     request_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     expected_result_filename: Mapped[str | None] = mapped_column(String, nullable=True)
     result_archive_path: Mapped[str | None] = mapped_column(String, nullable=True)

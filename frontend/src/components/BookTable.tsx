@@ -166,14 +166,46 @@ function ActionIconButton({
   );
 }
 
+function SelectionToggle({
+  selected,
+  label,
+  onToggle,
+}: {
+  selected: boolean;
+  label: string;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={selected}
+      aria-label={label}
+      className={`inline-flex h-3.5 w-3.5 items-center justify-center rounded-[4px] border transition-colors ${
+        selected
+          ? "border-emerald-500 bg-emerald-500/90 text-slate-950"
+          : "border-slate-500 bg-slate-800/70 text-transparent hover:border-slate-300 hover:bg-slate-700"
+      }`}
+    >
+      <svg className="h-2.5 w-2.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.25">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3.25 8.25 6.5 11.5 12.75 4.75" />
+      </svg>
+    </button>
+  );
+}
+
 export default function BookTable({
   books,
   showAuthor = true,
   authorName: contextAuthorName = null,
+  selectedBookIds,
+  onToggleSelected,
 }: {
   books: BookLike[];
   showAuthor?: boolean;
   authorName?: string | null;
+  selectedBookIds?: Set<number>;
+  onToggleSelected?: (bookId: number) => void;
 }) {
   const refreshBook = useRefreshBook();
   const setBookVisibility = useSetBookVisibility();
@@ -182,6 +214,7 @@ export default function BookTable({
   const [sortKey, setSortKey] = useState<TableSortKey | null>(null);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
+  const showSelectionColumn = Boolean(onToggleSelected);
 
   const handleSort = (nextKey: TableSortKey) => {
     setSortKey((currentKey) => {
@@ -232,7 +265,7 @@ export default function BookTable({
     });
   };
 
-  const detailColSpan = showAuthor ? 8 : 7;
+  const detailColSpan = (showAuthor ? 8 : 7) + (showSelectionColumn ? 1 : 0);
 
   return (
     <>
@@ -240,6 +273,7 @@ export default function BookTable({
         <table className="w-full text-sm text-left">
           <thead className="border-b border-slate-700 bg-slate-800/80 text-[11px] uppercase tracking-wide text-slate-400">
             <tr>
+              {showSelectionColumn && <th className="px-4 py-2 w-10"></th>}
               <th className="px-4 py-2 w-10"></th>
               <th className="px-4 py-2 w-12"></th>
               <th className="px-4 py-2">
@@ -278,13 +312,23 @@ export default function BookTable({
               const seriesStr = formatSeriesPosition(book);
               const isExpanded = expandedRows.has(book.id);
               const localFiles = [...book.local_files].sort((a, b) => a.file_path.localeCompare(b.file_path));
+              const isSelected = selectedBookIds?.has(book.id) ?? false;
 
               return (
                 <Fragment key={book.id}>
                   <tr
                     key={book.id}
-                    className="hover:bg-slate-700/50 transition-colors"
+                    className={`transition-colors ${isSelected ? "bg-emerald-500/10 hover:bg-emerald-500/15" : "hover:bg-slate-700/50"}`}
                   >
+                    {showSelectionColumn && (
+                      <td className="px-4 py-2 text-center">
+                        <SelectionToggle
+                          selected={isSelected}
+                          onToggle={() => onToggleSelected?.(book.id)}
+                          label={`Select ${book.title}`}
+                        />
+                      </td>
+                    )}
                     <td className="px-4 py-2 text-center">
                       {book.is_owned ? (
                         <OwnedIndicator count={book.owned_copy_count} />

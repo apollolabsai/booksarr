@@ -1,10 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   useConnectIrc,
-  useCreateIrcSearchJob,
   useDisconnectIrc,
-  useIrcDownloadJobs,
-  useIrcSearchJobs,
   useIrcSettings,
   useIrcStatus,
   useUpdateIrcSettings,
@@ -47,10 +44,7 @@ const PIA_VPN_REGIONS = [
 export default function IrcSettingsPage() {
   const { data: settings } = useIrcSettings();
   const { data: status } = useIrcStatus(true);
-  const { data: searchJobs } = useIrcSearchJobs();
-  const { data: downloadJobs } = useIrcDownloadJobs();
   const updateSettings = useUpdateIrcSettings();
-  const createSearchJob = useCreateIrcSearchJob();
   const connectIrc = useConnectIrc();
   const disconnectIrc = useDisconnectIrc();
 
@@ -68,7 +62,6 @@ export default function IrcSettingsPage() {
   const [vpnUsername, setVpnUsername] = useState("");
   const [vpnPassword, setVpnPassword] = useState("");
   const [autoMove, setAutoMove] = useState(true);
-  const [testQuery, setTestQuery] = useState("");
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -330,83 +323,6 @@ export default function IrcSettingsPage() {
         </div>
       </div>
 
-      <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
-        <h3 className="text-lg font-semibold mb-4">Test Search</h3>
-        <p className="mb-4 text-sm text-slate-400">
-          Queue a manual IRC search and watch the worker logs and job table update. This is useful while the DCC receive path is still being wired in.
-        </p>
-        <div className="flex flex-col gap-3 md:flex-row md:items-center">
-          <input
-            value={testQuery}
-            onChange={(e) => setTestQuery(e.target.value)}
-            className="w-full rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-slate-100"
-            placeholder="John Grisham The Activist"
-          />
-          <button
-            type="button"
-            onClick={() => createSearchJob.mutate({ query_text: testQuery })}
-            disabled={createSearchJob.isPending || !testQuery.trim()}
-            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {createSearchJob.isPending ? "Queueing..." : "Queue Search"}
-          </button>
-        </div>
-        {createSearchJob.isError && (
-          <div className="mt-3 text-sm text-rose-300">Failed to queue the test IRC search.</div>
-        )}
-      </div>
-
-      <div className="grid gap-6 xl:grid-cols-2">
-        <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold">Recent Search Jobs</h3>
-            <span className="text-xs text-slate-500">{status?.queued_search_jobs ?? 0} queued</span>
-          </div>
-          <div className="space-y-3">
-            {(searchJobs ?? []).length === 0 ? (
-              <div className="text-sm text-slate-500">No IRC search jobs yet.</div>
-            ) : (
-              searchJobs?.map((job) => (
-                <div key={job.id} className="rounded-lg border border-slate-700 bg-slate-900/30 p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-sm font-medium text-slate-200">{job.query_text}</div>
-                    <div className="text-xs text-slate-400">{job.status}</div>
-                  </div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    {job.expected_result_filename || "No expected result filename yet"}
-                  </div>
-                  {job.error_message && <div className="mt-1 text-xs text-red-400">{job.error_message}</div>}
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold">Recent Download Jobs</h3>
-            <span className="text-xs text-slate-500">{status?.queued_download_jobs ?? 0} queued</span>
-          </div>
-          <div className="space-y-3">
-            {(downloadJobs ?? []).length === 0 ? (
-              <div className="text-sm text-slate-500">No IRC download jobs yet.</div>
-            ) : (
-              downloadJobs?.map((job) => (
-                <div key={job.id} className="rounded-lg border border-slate-700 bg-slate-900/30 p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-sm font-medium text-slate-200">{job.dcc_filename || "Pending filename"}</div>
-                    <div className="text-xs text-slate-400">{job.status}</div>
-                  </div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    {job.moved_to_library_path || job.saved_path || "No file path yet"}
-                  </div>
-                  {job.error_message && <div className="mt-1 text-xs text-red-400">{job.error_message}</div>}
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      </div>
     </div>
   );
 }

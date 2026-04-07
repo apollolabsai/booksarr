@@ -46,11 +46,15 @@ export default function BookCard({
   onClick,
   showAuthor = false,
   authorName = null,
+  selected = false,
+  onToggleSelected,
 }: {
   book: BookLike;
   onClick?: () => void;
   showAuthor?: boolean;
   authorName?: string | null;
+  selected?: boolean;
+  onToggleSelected?: () => void;
 }) {
   const refreshBook = useRefreshBook();
   const setBookVisibility = useSetBookVisibility();
@@ -96,9 +100,29 @@ export default function BookCard({
         onClick={handleClick}
       >
         <div
-          className={`relative rounded-lg overflow-hidden border border-slate-600 group-hover:border-emerald-500/50 transition-all ${coverPresentation.frameClassName}`}
+          className={`relative rounded-lg overflow-hidden border transition-all ${
+            selected
+              ? "border-emerald-500 shadow-[0_0_0_1px_rgba(16,185,129,0.45)]"
+              : "border-slate-600 group-hover:border-emerald-500/50"
+          } ${coverPresentation.frameClassName}`}
           style={coverPresentation.frameStyle}
         >
+          {onToggleSelected && (
+            <div className="absolute left-2 top-2 z-20">
+              <label
+                className="flex h-6 w-6 items-center justify-center rounded-md border border-slate-500/70 bg-slate-950/80"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <input
+                  type="checkbox"
+                  checked={selected}
+                  onChange={() => onToggleSelected()}
+                  aria-label={`Select ${book.title}`}
+                  className="h-4 w-4 rounded border-slate-500 bg-slate-800 text-emerald-500 focus:ring-emerald-500"
+                />
+              </label>
+            </div>
+          )}
           {imgUrl ? (
             coverPresentation.innerClassName ? (
               <div className={coverPresentation.innerClassName}>

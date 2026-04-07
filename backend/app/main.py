@@ -12,6 +12,7 @@ from backend.app.config import CONFIG_DIR
 from backend.app.database import engine, Base
 from backend.app.models import *  # noqa: F401, F403
 from backend.app.utils.db_migrations import run_schema_migrations
+from backend.app.utils.logging_config import apply_persisted_log_level
 
 # --- Logging setup ---
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -37,6 +38,8 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(run_schema_migrations)
     logger.info("Database initialized")
+    configured_log_level = await apply_persisted_log_level()
+    logger.info("Effective log level set to %s", configured_log_level)
 
     from backend.app.services.scheduler import start_scheduler, stop_scheduler
     from backend.app.services.irc_worker import start_irc_worker, stop_irc_worker

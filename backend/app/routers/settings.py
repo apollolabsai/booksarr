@@ -19,6 +19,11 @@ from backend.app.schemas.setting import (
 )
 from backend.app.utils.api_usage import get_api_usage_rows
 from backend.app.utils.book_visibility import normalize_visibility_settings
+from backend.app.utils.logging_config import (
+    apply_log_level,
+    get_effective_log_level,
+    normalize_log_level,
+)
 
 logger = logging.getLogger("booksarr.settings")
 
@@ -46,6 +51,8 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
         except ValueError:
             logger.warning("Ignoring invalid last_scan_summary setting payload")
     scan_interval = int(settings.get("scan_interval_hours", "24"))
+    log_level = normalize_log_level(settings.get("log_level"))
+    effective_log_level = get_effective_log_level()
     visibility_categories = normalize_visibility_settings(settings.get("book_visibility_categories"))
 
     # Mask API keys for display
@@ -63,6 +70,7 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
         last_scan_at=last_scan,
         last_scan_summary=last_scan_summary,
         scan_interval_hours=scan_interval,
+        log_level=effective_log_level if settings.get("log_level") or effective_log_level != "INFO" else log_level,
         visibility_categories=VisibilityCategories(**visibility_categories),
     )
 
@@ -80,6 +88,12 @@ async def update_settings(body: SettingsUpdate, db: AsyncSession = Depends(get_d
         # Update the running scheduler
         from backend.app.services.scheduler import update_scan_schedule
         await update_scan_schedule(body.scan_interval_hours)
+
+    if body.log_level is not None:
+        normalized_log_level = normalize_log_level(body.log_level)
+        await _upsert_setting(db, "log_level", normalized_log_level)
+        apply_log_level(normalized_log_level)
+        logger.warning("Application log level changed to %s", normalized_log_level)
 
     if body.visibility_categories is not None:
         await _upsert_setting(

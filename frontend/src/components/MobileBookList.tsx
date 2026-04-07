@@ -22,9 +22,13 @@ function getSeriesLabel(book: BookLike): string | null {
 export default function MobileBookList({
   books,
   showAuthor = true,
+  selectedBookIds,
+  onToggleSelected,
 }: {
   books: BookLike[];
   showAuthor?: boolean;
+  selectedBookIds?: Set<number>;
+  onToggleSelected?: (bookId: number) => void;
 }) {
   return (
     <div className="space-y-3">
@@ -32,11 +36,16 @@ export default function MobileBookList({
         const imageUrl = getImageUrl(book.cover_image_cached_path, "cover_image_url" in book ? book.cover_image_url : null);
         const seriesLabel = getSeriesLabel(book);
         const coverPresentation = getBookCoverPresentation(book.cover_aspect_ratio);
+        const isSelected = selectedBookIds?.has(book.id) ?? false;
 
         return (
           <div
             key={book.id}
-            className="rounded-2xl border border-slate-800 bg-slate-900/70 p-3"
+            className={`rounded-2xl border p-3 ${
+              isSelected
+                ? "border-emerald-500/60 bg-emerald-500/5"
+                : "border-slate-800 bg-slate-900/70"
+            }`}
           >
             <div className="flex gap-3">
               <div className={`h-24 w-16 flex-shrink-0 overflow-hidden rounded-xl ${coverPresentation.frameClassName}`}>
@@ -55,7 +64,18 @@ export default function MobileBookList({
                 )}
               </div>
               <div className="min-w-0 flex-1">
-                <div className="line-clamp-2 text-sm font-semibold text-slate-100">{book.title}</div>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="line-clamp-2 text-sm font-semibold text-slate-100">{book.title}</div>
+                  {onToggleSelected && (
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => onToggleSelected(book.id)}
+                      aria-label={`Select ${book.title}`}
+                      className="mt-0.5 h-4 w-4 rounded border-slate-500 bg-slate-800 text-emerald-500 focus:ring-emerald-500"
+                    />
+                  )}
+                </div>
                 {showAuthor && isFullBook(book) && (
                   <Link to={`/authors/${book.author_id}`} className="mt-1 block truncate text-xs text-slate-400">
                     {book.author_name}

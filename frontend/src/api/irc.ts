@@ -1,6 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchApi } from "./client";
 import type {
+  IrcBulkDownloadBatch,
+  IrcDownloadFeedEntry,
+  IrcBulkSearchResponse,
   IrcDownloadJob,
   IrcSearchJob,
   IrcSearchResult,
@@ -78,13 +81,125 @@ export function useIrcSearchJobs() {
 export function useCreateIrcSearchJob() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (body: { book_id?: number; query_text: string }) =>
+    mutationFn: (body: { book_id?: number; query_text: string; auto_download?: boolean }) =>
       fetchApi<IrcSearchJob>("/irc/search", { method: "POST", body: JSON.stringify(body) }),
     onSuccess: (job) => {
       queryClient.invalidateQueries({ queryKey: ["ircSearchJobs"] });
       queryClient.invalidateQueries({ queryKey: ["ircStatus"] });
+      queryClient.invalidateQueries({ queryKey: ["ircDownloadsFeed"] });
       queryClient.invalidateQueries({ queryKey: ["ircSearchJob", job.id] });
       queryClient.invalidateQueries({ queryKey: ["ircSearchResults", job.id] });
+    },
+  });
+}
+
+export function useCreateBulkIrcSearchJobs() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: {
+      book_ids: number[];
+      skip_owned?: boolean;
+      auto_download_single_result?: boolean;
+    }) => fetchApi<IrcBulkSearchResponse>("/irc/search/bulk", { method: "POST", body: JSON.stringify(body) }),
+    onSuccess: (response) => {
+      queryClient.invalidateQueries({ queryKey: ["ircSearchJobs"] });
+      queryClient.invalidateQueries({ queryKey: ["ircDownloadJobs"] });
+      queryClient.invalidateQueries({ queryKey: ["ircStatus"] });
+      queryClient.invalidateQueries({ queryKey: ["ircDownloadsFeed"] });
+      for (const item of response.queued) {
+        queryClient.setQueryData(["ircSearchJob", item.job.id], item.job);
+        queryClient.invalidateQueries({ queryKey: ["ircSearchResults", item.job.id] });
+      }
+    },
+  });
+}
+
+export function useCreateIrcBulkBatch() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { book_ids: number[] }) =>
+      fetchApi<IrcBulkDownloadBatch>("/irc/bulk-batches", { method: "POST", body: JSON.stringify(body) }),
+    onSuccess: (batch) => {
+      queryClient.setQueryData(["ircBulkBatch", batch.id], batch);
+      queryClient.invalidateQueries({ queryKey: ["ircStatus"] });
+      queryClient.invalidateQueries({ queryKey: ["ircSearchJobs"] });
+      queryClient.invalidateQueries({ queryKey: ["ircDownloadJobs"] });
+      queryClient.invalidateQueries({ queryKey: ["ircDownloadsFeed"] });
+    },
+  });
+}
+
+export function useIrcBulkBatch(batchId: number | null, enabled: boolean = true) {
+  return useQuery({
+    queryKey: ["ircBulkBatch", batchId],
+    queryFn: () => fetchApi<IrcBulkDownloadBatch>(`/irc/bulk-batches/${batchId}`),
+    enabled: enabled && batchId != null,
+    refetchInterval: enabled && batchId != null ? 3000 : false,
+    refetchIntervalInBackground: true,
+  });
+}
+
+export function usePauseIrcBulkBatch() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (batchId: number) =>
+      fetchApi<IrcBulkDownloadBatch>(`/irc/bulk-batches/${batchId}/pause`, { method: "POST" }),
+    onSuccess: (batch) => {
+      queryClient.setQueryData(["ircBulkBatch", batch.id], batch);
+      queryClient.invalidateQueries({ queryKey: ["ircBulkBatch", batch.id] });
+      queryClient.invalidateQueries({ queryKey: ["ircDownloadsFeed"] });
+      queryClient.invalidateQueries({ queryKey: ["ircStatus"] });
+    },
+  });
+}
+
+export function useResumeIrcBulkBatch() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (batchId: number) =>
+      fetchApi<IrcBulkDownloadBatch>(`/irc/bulk-batches/${batchId}/resume`, { method: "POST" }),
+    onSuccess: (batch) => {
+      queryClient.setQueryData(["ircBulkBatch", batch.id], batch);
+      queryClient.invalidateQueries({ queryKey: ["ircBulkBatch", batch.id] });
+      queryClient.invalidateQueries({ queryKey: ["ircDownloadsFeed"] });
+      queryClient.invalidateQueries({ queryKey: ["ircStatus"] });
+    },
+  });
+}
+
+export function useCancelIrcBulkBatch() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (batchId: number) =>
+      fetchApi<IrcBulkDownloadBatch>(`/irc/bulk-batches/${batchId}/cancel`, { method: "POST" }),
+    onSuccess: (batch) => {
+      queryClient.setQueryData(["ircBulkBatch", batch.id], batch);
+      queryClient.invalidateQueries({ queryKey: ["ircBulkBatch", batch.id] });
+      queryClient.invalidateQueries({ queryKey: ["ircDownloadsFeed"] });
+      queryClient.invalidateQueries({ queryKey: ["ircStatus"] });
+    },
+  });
+}
+
+export function useIrcDownloadsFeed(enabled: boolean = true) {
+  return useQuery({
+    queryKey: ["ircDownloadsFeed"],
+    queryFn: () => fetchApi<IrcDownloadFeedEntry[]>("/irc/downloads-feed"),
+    enabled,
+    refetchInterval: enabled ? 3000 : false,
+    refetchIntervalInBackground: true,
+  });
+}
+
+export function useClearIrcDownloadsFeed() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => fetchApi("/irc/downloads-feed", { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ircDownloadsFeed"] });
+      queryClient.invalidateQueries({ queryKey: ["ircDownloadJobs"] });
+      queryClient.invalidateQueries({ queryKey: ["ircSearchJobs"] });
+      queryClient.invalidateQueries({ queryKey: ["ircStatus"] });
     },
   });
 }
@@ -139,6 +254,7 @@ export function useCreateIrcDownloadJob() {
       queryClient.invalidateQueries({ queryKey: ["ircDownloadJobs"] });
       queryClient.invalidateQueries({ queryKey: ["ircDownloadJob", job.id] });
       queryClient.invalidateQueries({ queryKey: ["ircStatus"] });
+      queryClient.invalidateQueries({ queryKey: ["ircDownloadsFeed"] });
       if (job.search_job_id != null) {
         queryClient.invalidateQueries({ queryKey: ["ircSearchResults", job.search_job_id] });
       }
