@@ -94,11 +94,55 @@ class IrcRuntimeState:
 _runtime = IrcRuntimeState()
 _IRC_COLOR_RE = re.compile(r"\x03(?:\d{1,2}(?:,\d{1,2})?)?")
 _IRC_FORMAT_RE = re.compile(r"[\x02\x0f\x16\x1d\x1f]")
+_IRC_NICK_PREFIX_CHARS = "~&@%+"
 _vpn_bind_ip: str | None = None
+_online_channel_nicks: dict[str, str] = {}
 
 
 def get_runtime_status() -> IrcRuntimeState:
     return IrcRuntimeState(**asdict(_runtime))
+
+
+def get_online_irc_nicks() -> list[str]:
+    return sorted(_online_channel_nicks.values(), key=str.lower)
+
+
+def is_bot_online(bot_name: str | None) -> bool | None:
+    normalized = _normalize_irc_nick(bot_name)
+    if not normalized:
+        return None
+    return normalized in _online_channel_nicks
+
+
+def _normalize_irc_nick(value: str | None) -> str:
+    cleaned = (value or "").strip()
+    if not cleaned:
+        return ""
+    return cleaned.lstrip(_IRC_NICK_PREFIX_CHARS).split("!", 1)[0].strip().lower()
+
+
+def _track_online_nick(nick: str | None):
+    normalized = _normalize_irc_nick(nick)
+    if not normalized:
+        return
+    display = (nick or "").strip().lstrip(_IRC_NICK_PREFIX_CHARS).split("!", 1)[0].strip()
+    _online_channel_nicks[normalized] = display or normalized
+
+
+def _forget_online_nick(nick: str | None):
+    normalized = _normalize_irc_nick(nick)
+    if not normalized:
+        return
+    _online_channel_nicks.pop(normalized, None)
+
+
+def _replace_online_nick(old_nick: str | None, new_nick: str | None):
+    _forget_online_nick(old_nick)
+    _track_online_nick(new_nick)
+
+
+def _reset_online_nicks():
+    _online_channel_nicks.clear()
 
 
 async def start_irc_worker():
@@ -125,6 +169,7 @@ async def stop_irc_worker():
     _stop_event = None
     _runtime.connected = False
     _runtime.joined_channel = False
+    _reset_online_nicks()
     _runtime.state = "stopped"
     await _close_connection("Worker shutdown")
     logger.info("IRC worker stopped")
@@ -160,6 +205,7 @@ async def request_disconnect():
     except Exception as exc:
         logger.warning("Failed to stop VPN during IRC disconnect: %s", exc)
     _vpn_bind_ip = None
+    _reset_online_nicks()
     _runtime.state = "idle"
     _runtime.last_message = "Disconnected on request"
     logger.info("IRC disconnect requested")
@@ -754,6 +800,13 @@ def _choose_best_bulk_result(
     if not candidates:
         return None
 
+    online_candidates = [
+        (score, result) for score, result in candidates
+        if is_bot_online(result.bot_name)
+    ]
+    if online_candidates:
+        candidates = online_candidates
+
     candidates.sort(key=lambda item: (item[0], -item[1].result_index), reverse=True)
     if prefer_different_bot and previous_result and previous_result.bot_name:
         different_bot = [
@@ -1210,6 +1263,18 @@ def _normalize_irc_notice_text(line: str) -> str:
     return cleaned
 
 
+def _handle_names_reply(line: str):
+    if not _runtime.channel or f" {_runtime.channel} " not in line:
+        return
+
+    if " :" not in line:
+        return
+
+    nick_list = line.split(" :", 1)[1]
+    for nick in nick_list.split():
+        _track_online_nick(nick)
+
+
 async def _handle_dcc_offer(offer: dict[str, Any]):
     global _archive_task, _book_download_task
 
@@ -1351,10 +1416,16 @@ async def _handle_server_line(line: str):
         await _join_configured_channel()
         return
 
+    if " 353 " in line:
+        _handle_names_reply(line)
+        return
+
     if line.startswith(":") and " JOIN " in line:
         prefix = line[1:].split(" ", 1)[0]
         nickname = prefix.split("!", 1)[0]
         channel = line.split(" JOIN ", 1)[1].lstrip(":").strip()
+        if channel == _runtime.channel:
+            _track_online_nick(nickname)
         if nickname == _runtime.nickname and channel == _runtime.channel:
             _runtime.joined_channel = True
             _runtime.state = "connected"
@@ -1369,6 +1440,41 @@ async def _handle_server_line(line: str):
         _runtime.last_error = None
         _runtime.last_message = f"Joined IRC channel {_runtime.channel}"
         logger.info("IRC end-of-names confirms join completed for %s", _runtime.channel)
+        return
+
+    if line.startswith(":") and " PART " in line:
+        prefix = line[1:].split(" ", 1)[0]
+        nickname = prefix.split("!", 1)[0]
+        channel = line.split(" PART ", 1)[1].split(" ", 1)[0].strip()
+        if channel == _runtime.channel:
+            _forget_online_nick(nickname)
+        return
+
+    if line.startswith(":") and " QUIT " in line:
+        prefix = line[1:].split(" ", 1)[0]
+        nickname = prefix.split("!", 1)[0]
+        _forget_online_nick(nickname)
+        return
+
+    if line.startswith(":") and " NICK " in line:
+        prefix = line[1:].split(" ", 1)[0]
+        old_nickname = prefix.split("!", 1)[0]
+        new_nickname = line.split(" NICK ", 1)[1].lstrip(":").strip()
+        _replace_online_nick(old_nickname, new_nickname)
+        if old_nickname == _runtime.nickname:
+            _runtime.nickname = new_nickname
+        return
+
+    if line.startswith(":") and " KICK " in line:
+        parts = line.split()
+        if len(parts) >= 4:
+            channel = parts[2]
+            kicked_nickname = parts[3]
+            if channel == _runtime.channel:
+                _forget_online_nick(kicked_nickname)
+                if kicked_nickname == _runtime.nickname:
+                    _runtime.joined_channel = False
+                    _reset_online_nicks()
         return
 
     if " 451 " in line and "You have not registered" in line:
@@ -1874,6 +1980,7 @@ async def _close_connection(reason: str):
 
     _runtime.connected = False
     _runtime.joined_channel = False
+    _reset_online_nicks()
 
 
 async def _expire_stale_search_jobs():

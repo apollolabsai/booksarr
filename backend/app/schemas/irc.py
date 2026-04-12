@@ -49,6 +49,7 @@ class IrcWorkerStatusResponse(BaseModel):
     active_download_job_id: int | None = None
     last_message: str | None = None
     last_error: str | None = None
+    online_bots: list[str] = Field(default_factory=list)
     queued_search_jobs: int = 0
     queued_download_jobs: int = 0
 
@@ -74,6 +75,7 @@ class IrcSearchResultSummary(BaseModel):
     result_index: int
     raw_line: str
     bot_name: str | None
+    bot_online: bool | None = None
     display_name: str
     file_format: str | None
     file_size_text: str | None

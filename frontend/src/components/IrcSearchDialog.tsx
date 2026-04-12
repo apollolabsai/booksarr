@@ -203,9 +203,14 @@ export default function IrcSearchDialog({
           {jobId != null && (
             <div className="mt-5 rounded-xl border border-slate-700 bg-slate-800 p-4">
               <div className="mb-3 flex items-center justify-between">
-                <div className="text-sm font-medium text-slate-100">Parsed Results</div>
-                <div className="text-xs text-slate-500">
-                  {resultsLoading ? "Checking for results..." : `${results?.length ?? 0} result(s)`}
+                <div>
+                  <div className="text-sm font-medium text-slate-100">Parsed Results</div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    <span className="text-rose-300">Red text</span> means the result bot is currently offline.
+                  </div>
+                </div>
+                <div className="text-right text-xs text-slate-500">
+                  <div>{resultsLoading ? "Checking for results..." : `${results?.length ?? 0} result(s)`}</div>
                 </div>
               </div>
 
@@ -226,7 +231,11 @@ export default function IrcSearchDialog({
                       <div className="flex items-center gap-3">
                         <div className="min-w-0 flex-1">
                           <div className="truncate text-sm text-slate-100">
-                            {result.download_command}
+                            <span className={getBotStatusClassName(result.bot_online)}>
+                              {result.bot_name || "unknown_bot"}
+                            </span>
+                            <span className="text-slate-500"> | </span>
+                            <span>{getResultLabel(result.display_name, result.download_command)}</span>
                           </div>
                         </div>
                         <div className="shrink-0 rounded border border-slate-600 bg-slate-800 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-300">
@@ -402,4 +411,24 @@ function didStageCompleteBeforeError({
     default:
       return false;
   }
+}
+
+function getBotStatusClassName(botOnline: boolean | null): string {
+  if (botOnline === false) return "text-rose-300";
+  if (botOnline === true) return "text-emerald-300";
+  return "text-slate-400";
+}
+
+function getResultLabel(displayName: string | null, downloadCommand: string): string {
+  const cleanedDisplayName = (displayName ?? "").trim();
+  if (cleanedDisplayName) return cleanedDisplayName;
+
+  const cleanedCommand = downloadCommand.trim();
+  if (!cleanedCommand.startsWith("!")) return cleanedCommand;
+
+  const commandBody = cleanedCommand.slice(1);
+  const firstSpace = commandBody.indexOf(" ");
+  if (firstSpace === -1) return cleanedCommand;
+
+  return commandBody.slice(firstSpace + 1).trim();
 }

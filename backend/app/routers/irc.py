@@ -44,7 +44,9 @@ from backend.app.services.irc_parser import (
     normalize_query_text,
 )
 from backend.app.services.irc_worker import (
+    get_online_irc_nicks,
     get_runtime_status,
+    is_bot_online,
     request_connect,
     request_disconnect,
 )
@@ -149,6 +151,7 @@ async def get_irc_status(db: AsyncSession = Depends(get_db)):
         active_download_job_id=runtime.active_download_job_id,
         last_message=runtime.last_message,
         last_error=runtime.last_error,
+        online_bots=get_online_irc_nicks(),
         queued_search_jobs=queued_search_jobs,
         queued_download_jobs=queued_download_jobs,
     )
@@ -715,6 +718,7 @@ async def get_search_results(job_id: int, db: AsyncSession = Depends(get_db)):
             result_index=row.result_index,
             raw_line=row.raw_line,
             bot_name=row.bot_name,
+            bot_online=is_bot_online(row.bot_name),
             display_name=row.display_name,
             file_format=row.file_format,
             file_size_text=row.file_size_text,

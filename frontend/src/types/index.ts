@@ -341,6 +341,7 @@ export interface IrcWorkerStatus {
   active_download_job_id: number | null;
   last_message: string | null;
   last_error: string | null;
+  online_bots: string[];
   queued_search_jobs: number;
   queued_download_jobs: number;
 }
@@ -443,6 +444,7 @@ export interface IrcSearchResult {
   result_index: number;
   raw_line: string;
   bot_name: string | null;
+  bot_online: boolean | null;
   display_name: string;
   file_format: string | null;
   file_size_text: string | null;
