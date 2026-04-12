@@ -10,6 +10,9 @@ Booksarr is a Docker-based ebook library manager inspired by Radarr/Sonarr. It s
 
 ![Books view](media/books.png)
 
+![IRC Download view](media/downloadIRC.png)
+
+
 ## Features
 
 - **Local library scanning** — Discovers EPUBs from your mounted library, reads sidecar `metadata.opf` when present, and falls back to internal EPUB metadata and filename parsing.
