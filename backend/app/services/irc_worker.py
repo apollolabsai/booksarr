@@ -44,9 +44,12 @@ IRC_MAX_TIMEOUT_SECONDS = 60
 IRC_CONNECT_TIMEOUT_SECONDS = 30
 IRC_DCC_CONNECT_TIMEOUT_SECONDS = 15
 IRC_DCC_WAIT_TIMEOUT_SECONDS = 30
+IRC_DCC_BOOK_IDLE_TIMEOUT_SECONDS = 180
 IRC_DCC_CHUNK_TIMEOUT_SECONDS = 10
 IRC_DCC_TRAILING_READ_TIMEOUT_SECONDS = 1.0
 IRC_DCC_MAX_TRAILING_BYTES = 1024 * 1024
+IRC_DCC_PROGRESS_UPDATE_INTERVAL_SECONDS = 1.0
+IRC_DCC_PROGRESS_UPDATE_MIN_BYTES = 512 * 1024
 BULK_MAX_DOWNLOAD_ATTEMPTS = 3
 
 BULK_BATCH_ACTIVE_STATUSES = {"queued", "running", "pausing", "cancelling"}
@@ -1723,15 +1726,20 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
         download_path,
     )
 
-    await _update_download_job(job_id, status="downloading", error_message=None)
+    await _update_download_job(
+        job_id,
+        status="downloading",
+        dcc_filename=filename,
+        size_bytes=size_bytes,
+        bytes_downloaded=0,
+        error_message=None,
+    )
     _runtime.last_message = f"Downloading DCC book for job {job_id}"
 
     reader: asyncio.StreamReader | None = None
     writer: asyncio.StreamWriter | None = None
     bytes_received = 0
     download_completed = False
-    deadline = asyncio.get_running_loop().time() + IRC_DCC_WAIT_TIMEOUT_SECONDS
-
     try:
         downloads_dir.mkdir(parents=True, exist_ok=True)
         reader, writer = await asyncio.wait_for(
@@ -1751,18 +1759,14 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
             filename,
         )
 
+        last_progress_update_at = asyncio.get_running_loop().time()
+        last_progress_update_bytes = 0
         with download_path.open("wb") as handle:
             while bytes_received < size_bytes:
                 remaining = size_bytes - bytes_received
-                timeout_remaining = max(0.1, deadline - asyncio.get_running_loop().time())
-                if timeout_remaining <= 0:
-                    raise TimeoutError(
-                        f"DCC book download timed out after {IRC_DCC_WAIT_TIMEOUT_SECONDS} seconds"
-                    )
-
                 chunk = await asyncio.wait_for(
                     reader.read(min(65536, remaining)),
-                    timeout=min(IRC_DCC_CHUNK_TIMEOUT_SECONDS, timeout_remaining),
+                    timeout=IRC_DCC_BOOK_IDLE_TIMEOUT_SECONDS,
                 )
                 if not chunk:
                     raise RuntimeError(
@@ -1775,6 +1779,26 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
                 if writer is not None:
                     writer.write(struct.pack("!I", bytes_received & 0xFFFFFFFF))
                     await writer.drain()
+
+                now = asyncio.get_running_loop().time()
+                if (
+                    now - last_progress_update_at >= IRC_DCC_PROGRESS_UPDATE_INTERVAL_SECONDS
+                    or bytes_received - last_progress_update_bytes >= IRC_DCC_PROGRESS_UPDATE_MIN_BYTES
+                    or bytes_received >= size_bytes
+                ):
+                    await _update_download_job(
+                        job_id,
+                        status="downloading",
+                        dcc_filename=filename,
+                        size_bytes=size_bytes,
+                        bytes_downloaded=bytes_received,
+                        error_message=None,
+                    )
+                    _runtime.last_message = (
+                        f"Downloading DCC book for job {job_id}: {bytes_received}/{size_bytes} bytes"
+                    )
+                    last_progress_update_at = now
+                    last_progress_update_bytes = bytes_received
 
             bytes_received = await _read_dcc_trailing_bytes(
                 reader=reader,
@@ -1801,6 +1825,8 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
             job_id,
             status="downloaded",
             dcc_filename=filename,
+            size_bytes=size_bytes,
+            bytes_downloaded=bytes_received,
             saved_path=saved_relative_path,
             error_message=None,
         )
@@ -1811,6 +1837,8 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
                 job_id,
                 status="extracting",
                 dcc_filename=filename,
+                size_bytes=size_bytes,
+                bytes_downloaded=bytes_received,
                 saved_path=saved_relative_path,
                 error_message=None,
             )
@@ -1822,6 +1850,8 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
                 job_id,
                 status="extracted",
                 dcc_filename=filename,
+                size_bytes=size_bytes,
+                bytes_downloaded=bytes_received,
                 saved_path=saved_relative_path,
                 error_message=None,
             )
@@ -1839,6 +1869,8 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
                 job_id,
                 status="importing",
                 dcc_filename=filename,
+                size_bytes=size_bytes,
+                bytes_downloaded=bytes_received,
                 saved_path=saved_relative_path,
                 error_message=None,
             )
@@ -1848,6 +1880,8 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
                 job_id,
                 status="refreshing_library",
                 dcc_filename=filename,
+                size_bytes=size_bytes,
+                bytes_downloaded=bytes_received,
                 saved_path=saved_relative_path,
                 moved_to_library_path=str(moved_path.relative_to(BOOKS_DIR)),
                 error_message=None,
@@ -1859,6 +1893,8 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
                 job_id,
                 status="moved",
                 dcc_filename=filename,
+                size_bytes=size_bytes,
+                bytes_downloaded=bytes_received,
                 saved_path=saved_relative_path,
                 moved_to_library_path=str(moved_path.relative_to(BOOKS_DIR)),
                 completed_at=datetime.utcnow(),
@@ -1874,6 +1910,8 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
                 job_id,
                 status="extracted" if import_path != download_path else "downloaded",
                 dcc_filename=filename,
+                size_bytes=size_bytes,
+                bytes_downloaded=bytes_received,
                 saved_path=saved_relative_path,
                 completed_at=datetime.utcnow(),
                 error_message=None,
@@ -1895,7 +1933,10 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
         raise
     except Exception as exc:
         if isinstance(exc, TimeoutError):
-            error_message = "Timed out waiting for more DCC data while downloading the book"
+            error_message = (
+                f"Timed out waiting for more DCC data while downloading the book for "
+                f"{IRC_DCC_BOOK_IDLE_TIMEOUT_SECONDS} seconds"
+            )
         else:
             error_message = str(exc).strip() or exc.__class__.__name__
         logger.exception("IRC download job %s failed during DCC book handling: %s", job_id, error_message)
@@ -2097,13 +2138,18 @@ async def _expire_stale_download_jobs():
         now = datetime.utcnow()
         for job in jobs:
             age_seconds = (now - job.updated_at).total_seconds()
-            if age_seconds <= IRC_DCC_WAIT_TIMEOUT_SECONDS:
+            timeout_seconds = (
+                IRC_DCC_BOOK_IDLE_TIMEOUT_SECONDS
+                if job.status == "downloading"
+                else IRC_DCC_WAIT_TIMEOUT_SECONDS
+            )
+            if age_seconds <= timeout_seconds:
                 continue
 
             previous_status = job.status
             job.status = "failed"
             job.error_message = (
-                f"Timed out after {IRC_DCC_WAIT_TIMEOUT_SECONDS} seconds waiting for the DCC book transfer"
+                f"Timed out after {timeout_seconds} seconds waiting for the DCC book transfer"
             )
             job.updated_at = now
             job.completed_at = now

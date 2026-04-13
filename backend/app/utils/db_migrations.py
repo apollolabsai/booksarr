@@ -224,6 +224,14 @@ def run_schema_migrations(conn: Connection) -> None:
     )
     irc_download_job_rows = conn.exec_driver_sql("PRAGMA table_info(irc_download_jobs)").fetchall()
     existing_irc_download_job_columns = {row[1] for row in irc_download_job_rows}
+    if "size_bytes" not in existing_irc_download_job_columns:
+        conn.exec_driver_sql(
+            "ALTER TABLE irc_download_jobs ADD COLUMN size_bytes INTEGER"
+        )
+    if "bytes_downloaded" not in existing_irc_download_job_columns:
+        conn.exec_driver_sql(
+            "ALTER TABLE irc_download_jobs ADD COLUMN bytes_downloaded INTEGER"
+        )
     if "bulk_request_id" not in existing_irc_download_job_columns:
         conn.exec_driver_sql(
             "ALTER TABLE irc_download_jobs ADD COLUMN bulk_request_id VARCHAR"

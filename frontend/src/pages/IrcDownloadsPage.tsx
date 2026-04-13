@@ -678,6 +678,7 @@ function ActiveBulkBatchCard({
 function FocusedBatchRow({ item }: { item: IrcBulkDownloadItem }) {
   const activeRetryError = item.status !== "failed" ? item.error_message : null;
   const importedPath = item.download_job?.moved_to_library_path ?? null;
+  const downloadProgress = getDownloadProgress(item.download_job);
   return (
     <div className="rounded-xl border border-slate-700 bg-slate-900/40 px-4 py-3">
       <div className="space-y-3">
@@ -715,6 +716,9 @@ function FocusedBatchRow({ item }: { item: IrcBulkDownloadItem }) {
             )}
           </div>
         )}
+        {downloadProgress && (
+          <DownloadProgressPanel progress={downloadProgress} />
+        )}
       </div>
     </div>
   );
@@ -727,6 +731,7 @@ function DownloadFeedCard({ entry, compact = false }: { entry: IrcDownloadFeedEn
       ? entry.final_result_text
       : null;
   const showInlineFinalResult = Boolean(!entry.active && entry.final_result_kind && entry.final_result_text);
+  const downloadProgress = getDownloadProgress(entry.download_job);
   return (
     <article className="rounded-2xl border border-slate-700 bg-slate-800/70 px-4 py-3">
       <div className={`grid gap-3 ${compact ? "xl:grid-cols-[170px_minmax(0,1fr)]" : "xl:grid-cols-[170px_minmax(0,1fr)]"}`}>
@@ -777,6 +782,11 @@ function DownloadFeedCard({ entry, compact = false }: { entry: IrcDownloadFeedEn
               retryError={activeRetryError}
             />
           </div>
+          {downloadProgress && (
+            <div className="mt-3">
+              <DownloadProgressPanel progress={downloadProgress} />
+            </div>
+          )}
           {showInlineFinalResult && entry.final_result_text && (
             <div
               className={`mt-3 rounded-xl px-4 py-3 ${
@@ -1208,4 +1218,66 @@ function extractResultSize(value: string | null | undefined): string | null {
   if (!value) return null;
   const match = value.match(/::INFO::\s*([0-9]+(?:\.[0-9]+)?\s*(?:KB|MB|GB|TB))/i);
   return match ? match[1].replace(/\s+/g, "") : null;
+}
+
+function formatByteSize(size: number | null | undefined): string {
+  if (size == null || Number.isNaN(size)) return "Unknown size";
+  if (size < 1024) return `${size} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = size / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2)} ${units[unitIndex]}`;
+}
+
+function getDownloadProgress(downloadJob: IrcDownloadFeedEntry["download_job"] | IrcBulkDownloadItem["download_job"]) {
+  if (!downloadJob || downloadJob.status !== "downloading") {
+    return null;
+  }
+  const downloaded = downloadJob.bytes_downloaded ?? 0;
+  const total = downloadJob.size_bytes ?? null;
+  if (total == null || total <= 0) {
+    return {
+      downloaded,
+      total: null,
+      percent: null,
+    };
+  }
+  return {
+    downloaded,
+    total,
+    percent: Math.max(0, Math.min(100, (downloaded / total) * 100)),
+  };
+}
+
+function DownloadProgressPanel({
+  progress,
+}: {
+  progress: { downloaded: number; total: number | null; percent: number | null };
+}) {
+  return (
+    <div className="rounded-xl border border-blue-500/20 bg-blue-500/10 px-4 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-blue-300/80">
+          Download Progress
+        </div>
+        <div className="text-sm font-medium text-blue-200">
+          {progress.percent != null ? `${Math.round(progress.percent)}%` : "Downloading"}
+        </div>
+      </div>
+      <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-900/70">
+        <div
+          className="h-full rounded-full bg-blue-400 transition-[width]"
+          style={{ width: `${progress.percent ?? 0}%` }}
+        />
+      </div>
+      <div className="mt-2 text-xs text-blue-100/90">
+        {formatByteSize(progress.downloaded)}
+        {progress.total != null ? ` / ${formatByteSize(progress.total)}` : ""}
+      </div>
+    </div>
+  );
 }

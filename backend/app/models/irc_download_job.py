@@ -18,6 +18,8 @@ class IrcDownloadJob(Base):
     bulk_item_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("irc_bulk_download_items.id"), nullable=True, index=True)
     request_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     dcc_filename: Mapped[str | None] = mapped_column(String, nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bytes_downloaded: Mapped[int | None] = mapped_column(Integer, nullable=True)
     saved_path: Mapped[str | None] = mapped_column(String, nullable=True)
     moved_to_library_path: Mapped[str | None] = mapped_column(String, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

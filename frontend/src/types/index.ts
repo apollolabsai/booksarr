@@ -467,6 +467,8 @@ export interface IrcDownloadJob {
   status: string;
   bulk_request_id: string | null;
   dcc_filename: string | null;
+  size_bytes: number | null;
+  bytes_downloaded: number | null;
   saved_path: string | null;
   moved_to_library_path: string | null;
   error_message: string | null;

@@ -101,6 +101,8 @@ class IrcDownloadJobSummary(BaseModel):
     status: str
     bulk_request_id: str | None = None
     dcc_filename: str | None
+    size_bytes: int | None = None
+    bytes_downloaded: int | None = None
     saved_path: str | None
     moved_to_library_path: str | None
     error_message: str | None
