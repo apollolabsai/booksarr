@@ -11,7 +11,13 @@ import {
   usePauseIrcBulkBatch,
   useResumeIrcBulkBatch,
 } from "../api/irc";
-import type { Book, IrcBulkDownloadItem, IrcDownloadFeedEntry } from "../types";
+import type {
+  Book,
+  IrcBulkDownloadItem,
+  IrcBulkFileTypeKey,
+  IrcBulkFileTypePreference,
+  IrcDownloadFeedEntry,
+} from "../types";
 
 type SelectedBook = Pick<Book, "id" | "title" | "author_name" | "is_owned">;
 
@@ -30,6 +36,64 @@ const ITEM_PROGRESS_ORDER = [
   "completed",
 ] as const;
 
+const IRC_BULK_FILE_TYPE_OPTIONS: Array<{
+  key: IrcBulkFileTypeKey;
+  label: string;
+  description: string;
+}> = [
+  { key: "epub", label: "EPUB", description: "Standard ebook file." },
+  { key: "mobi", label: "MOBI", description: "Kindle-compatible ebook file." },
+  { key: "zip", label: "ZIP", description: "Compressed archive that may contain book files." },
+  { key: "rar", label: "RAR", description: "Compressed archive that may contain book files." },
+  {
+    key: "audiobook",
+    label: "Audiobook",
+    description: "Matches results with audio in the title and size greater than 15MB.",
+  },
+];
+
+const DEFAULT_IRC_BULK_FILE_TYPE_PREFERENCES: IrcBulkFileTypePreference[] =
+  IRC_BULK_FILE_TYPE_OPTIONS.map((option) => ({
+    key: option.key,
+    enabled: true,
+  }));
+
+function normalizeIrcBulkFileTypePreferences(
+  value: unknown,
+): IrcBulkFileTypePreference[] {
+  const normalized: IrcBulkFileTypePreference[] = [];
+  const seen = new Set<IrcBulkFileTypeKey>();
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (!item || typeof item !== "object") {
+        continue;
+      }
+      const key = String((item as { key?: unknown }).key ?? "").toLowerCase() as IrcBulkFileTypeKey;
+      if (!IRC_BULK_FILE_TYPE_OPTIONS.some((option) => option.key === key) || seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      normalized.push({
+        key,
+        enabled: Boolean((item as { enabled?: unknown }).enabled),
+      });
+    }
+  }
+
+  for (const option of IRC_BULK_FILE_TYPE_OPTIONS) {
+    if (seen.has(option.key)) {
+      continue;
+    }
+    normalized.push({
+      key: option.key,
+      enabled: true,
+    });
+  }
+
+  return normalized.sort((left, right) => Number(right.enabled) - Number(left.enabled));
+}
+
 export default function IrcDownloadsPage() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -40,6 +104,17 @@ export default function IrcDownloadsPage() {
   const { data: feedEntries, isLoading: feedLoading } = useIrcDownloadsFeed(true);
   const locationState = (location.state as IrcDownloadsLocationState | null) ?? null;
   const [pendingBooks, setPendingBooks] = useState<SelectedBook[]>(locationState?.selectedBooks ?? []);
+  const [fileTypePreferences, setFileTypePreferences] = useState<IrcBulkFileTypePreference[]>(() => {
+    try {
+      const stored = localStorage.getItem("ircBulkFileTypePreferences");
+      if (!stored) {
+        return DEFAULT_IRC_BULK_FILE_TYPE_PREFERENCES;
+      }
+      return normalizeIrcBulkFileTypePreferences(JSON.parse(stored));
+    } catch {
+      return DEFAULT_IRC_BULK_FILE_TYPE_PREFERENCES;
+    }
+  });
   const [dismissedBatchIds, setDismissedBatchIds] = useState<number[]>(() => {
     try {
       const stored = sessionStorage.getItem("ircDismissedBatchIds");
@@ -49,6 +124,7 @@ export default function IrcDownloadsPage() {
     }
   });
   const completedEntryIdsRef = useRef<Set<string>>(new Set());
+  const draggedFileTypeKeyRef = useRef<IrcBulkFileTypeKey | null>(null);
 
   useEffect(() => {
     if (locationState?.selectedBooks && locationState.selectedBooks.length > 0) {
@@ -63,6 +139,14 @@ export default function IrcDownloadsPage() {
       // sessionStorage full or unavailable
     }
   }, [dismissedBatchIds]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("ircBulkFileTypePreferences", JSON.stringify(fileTypePreferences));
+    } catch {
+      // localStorage unavailable
+    }
+  }, [fileTypePreferences]);
 
   useEffect(() => {
     if (!feedEntries) return;
@@ -111,12 +195,18 @@ export default function IrcDownloadsPage() {
     () => pendingBooks.filter((book) => !book.is_owned).length,
     [pendingBooks],
   );
+  const enabledFileTypeCount = useMemo(
+    () => fileTypePreferences.filter((preference) => preference.enabled).length,
+    [fileTypePreferences],
+  );
 
   const handleStartBatch = async () => {
     if (pendingBooks.length === 0) return;
+    if (enabledFileTypeCount === 0) return;
     try {
       await createBatch.mutateAsync({
         book_ids: pendingBooks.map((book) => book.id),
+        file_type_preferences: fileTypePreferences,
       });
       setPendingBooks([]);
       navigate(location.pathname, { replace: true });
@@ -134,6 +224,37 @@ export default function IrcDownloadsPage() {
     } catch {
       // Mutation state is rendered below.
     }
+  };
+
+  const handleToggleFileType = (key: IrcBulkFileTypeKey) => {
+    setFileTypePreferences((current) => normalizeIrcBulkFileTypePreferences(
+      current.map((preference) => (
+        preference.key === key
+          ? { ...preference, enabled: !preference.enabled }
+          : preference
+      )),
+    ));
+  };
+
+  const handleFileTypeDrop = (targetKey: IrcBulkFileTypeKey) => {
+    const draggedKey = draggedFileTypeKeyRef.current;
+    draggedFileTypeKeyRef.current = null;
+    if (!draggedKey || draggedKey === targetKey) {
+      return;
+    }
+    setFileTypePreferences((current) => {
+      const enabled = current.filter((preference) => preference.enabled);
+      const disabled = current.filter((preference) => !preference.enabled);
+      const fromIndex = enabled.findIndex((preference) => preference.key === draggedKey);
+      const toIndex = enabled.findIndex((preference) => preference.key === targetKey);
+      if (fromIndex === -1 || toIndex === -1) {
+        return current;
+      }
+      const reordered = [...enabled];
+      const [moved] = reordered.splice(fromIndex, 1);
+      reordered.splice(toIndex, 0, moved);
+      return [...reordered, ...disabled];
+    });
   };
 
   return (
@@ -199,6 +320,96 @@ export default function IrcDownloadsPage() {
             <div className="rounded-xl border border-slate-700 bg-slate-900/50 px-4 py-3 text-sm text-slate-300">
               Booksarr will search each selected book, download the search results, choose the best ebook match, import it into the library, then continue to the next book.
             </div>
+            <div className="rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-sm font-semibold text-slate-100">Preferred download file types</div>
+                  <div className="mt-1 text-xs text-slate-400">
+                    Drag enabled types to reorder priority. Disabled types are excluded and kept at the bottom.
+                  </div>
+                </div>
+                <div className="text-xs text-slate-500">
+                  Audiobook requires audio in the title and size greater than 15MB.
+                </div>
+              </div>
+              <div className="mt-4 space-y-2">
+                {fileTypePreferences.map((preference, index) => {
+                  const option = IRC_BULK_FILE_TYPE_OPTIONS.find((entry) => entry.key === preference.key);
+                  if (!option) return null;
+                  return (
+                    <div
+                      key={preference.key}
+                      draggable={preference.enabled}
+                      onDragStart={() => {
+                        if (!preference.enabled) return;
+                        draggedFileTypeKeyRef.current = preference.key;
+                      }}
+                      onDragOver={(event) => {
+                        if (!preference.enabled || draggedFileTypeKeyRef.current == null) return;
+                        event.preventDefault();
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        if (!preference.enabled) return;
+                        handleFileTypeDrop(preference.key);
+                      }}
+                      onDragEnd={() => {
+                        draggedFileTypeKeyRef.current = null;
+                      }}
+                      className={[
+                        "flex items-center gap-3 rounded-lg border px-3 py-3 transition-colors",
+                        preference.enabled
+                          ? "border-slate-600 bg-slate-800/70 text-slate-100"
+                          : "border-slate-800 bg-slate-900/40 text-slate-500",
+                      ].join(" ")}
+                    >
+                      <div
+                        className={[
+                          "text-sm",
+                          preference.enabled ? "cursor-grab text-slate-400" : "text-slate-700",
+                        ].join(" ")}
+                        aria-hidden="true"
+                      >
+                        ::
+                      </div>
+                      <div className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-700/70 text-[11px] font-semibold text-slate-200">
+                        {index + 1}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium">{option.label}</div>
+                        <div className="text-xs text-slate-400">{option.description}</div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleFileType(preference.key)}
+                        className={[
+                          "relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border transition-colors",
+                          preference.enabled
+                            ? "border-emerald-500/60 bg-emerald-500/20"
+                            : "border-slate-700 bg-slate-900/70",
+                        ].join(" ")}
+                        aria-pressed={preference.enabled}
+                        aria-label={`${preference.enabled ? "Disable" : "Enable"} ${option.label}`}
+                      >
+                        <span
+                          className={[
+                            "inline-block h-5 w-5 rounded-full transition-transform",
+                            preference.enabled
+                              ? "translate-x-6 bg-emerald-400"
+                              : "translate-x-1 bg-slate-500",
+                          ].join(" ")}
+                        />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              {enabledFileTypeCount === 0 && (
+                <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+                  Enable at least one file type before starting a bulk IRC batch.
+                </div>
+              )}
+            </div>
             <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
               {pendingBooks.map((book, index) => (
                 <div key={book.id} className="rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-2.5">
@@ -234,7 +445,7 @@ export default function IrcDownloadsPage() {
             <button
               type="button"
               onClick={handleStartBatch}
-              disabled={!isIrcReady || createBatch.isPending}
+              disabled={!isIrcReady || createBatch.isPending || enabledFileTypeCount === 0}
               className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {createBatch.isPending ? "Starting..." : "Search All Selected Books"}

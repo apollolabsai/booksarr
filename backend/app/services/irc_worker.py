@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import re
 import shutil
@@ -57,8 +58,8 @@ BULK_ITEM_ACTIVE_STATUSES = {
     "extracting",
     "importing",
 }
-_AUDIO_FORMATS = {"mp3", "m4b", "m4a", "aac", "flac", "ogg", "opus", "aax", "aa", "wav"}
 _AUDIO_TOKENS = {
+    "audio",
     "audiobook",
     "audio book",
     "audible",
@@ -66,6 +67,9 @@ _AUDIO_TOKENS = {
     "abridged",
     "narrated",
 }
+_BULK_FILE_TYPE_KEYS = ("epub", "mobi", "zip", "rar", "audiobook")
+_DIRECT_BULK_FILE_TYPES = {"epub", "mobi", "zip", "rar"}
+_AUDIOBOOK_MIN_SIZE_MB = 15.0
 
 _worker_task: asyncio.Task | None = None
 _stop_event: asyncio.Event | None = None
@@ -688,6 +692,7 @@ async def _queue_best_download_for_bulk_item(
         attempted_ids=attempted_ids,
         previous_result=previous_result,
         prefer_different_bot=prefer_different_bot,
+        file_type_preferences=batch.file_type_preferences,
     )
     if selected_result is None:
         item.status = "failed"
@@ -762,6 +767,40 @@ def _parse_attempted_ids(value: str | None) -> list[int]:
     return parsed
 
 
+def normalize_bulk_file_type_preferences(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            value = []
+    if not isinstance(value, list):
+        value = []
+
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip().lower()
+        if key not in _BULK_FILE_TYPE_KEYS or key in seen:
+            continue
+        seen.add(key)
+        normalized.append({
+            "key": key,
+            "enabled": bool(item.get("enabled", True)),
+        })
+
+    for key in _BULK_FILE_TYPE_KEYS:
+        if key in seen:
+            continue
+        normalized.append({"key": key, "enabled": True})
+    return normalized
+
+
+def serialize_bulk_file_type_preferences(value: Any) -> str:
+    return json.dumps(normalize_bulk_file_type_preferences(value), separators=(",", ":"))
+
+
 def _has_next_bulk_result_candidate(item: IrcBulkDownloadItem) -> bool:
     if item.search_job is None or not item.search_job.results:
         return False
@@ -776,6 +815,7 @@ def _has_next_bulk_result_candidate(item: IrcBulkDownloadItem) -> bool:
         attempted_ids=attempted_ids,
         previous_result=previous_result,
         prefer_different_bot=True,
+        file_type_preferences=item.batch.file_type_preferences if item.batch is not None else None,
     ) is not None
 
 
@@ -786,16 +826,32 @@ def _choose_best_bulk_result(
     attempted_ids: list[int],
     previous_result: IrcSearchResult | None,
     prefer_different_bot: bool,
+    file_type_preferences: Any = None,
 ) -> IrcSearchResult | None:
+    normalized_preferences = normalize_bulk_file_type_preferences(file_type_preferences)
+    enabled_keys = [item["key"] for item in normalized_preferences if item["enabled"]]
+    if not enabled_keys:
+        return None
+    priority_by_key = {
+        key: len(enabled_keys) - index
+        for index, key in enumerate(enabled_keys)
+    }
+
     candidates = []
     attempted_set = set(attempted_ids)
     for result in results:
         if result.id in attempted_set:
             continue
-        score = _score_bulk_result(book, result)
+        matched_type = _classify_bulk_result_type(result)
+        if matched_type is None:
+            continue
+        priority_rank = priority_by_key.get(matched_type)
+        if priority_rank is None:
+            continue
+        score = _score_bulk_result(book, result, matched_type)
         if score <= -1000:
             continue
-        candidates.append((score, result))
+        candidates.append(((priority_rank, score, -result.result_index), result))
 
     if not candidates:
         return None
@@ -807,7 +863,7 @@ def _choose_best_bulk_result(
     if online_candidates:
         candidates = online_candidates
 
-    candidates.sort(key=lambda item: (item[0], -item[1].result_index), reverse=True)
+    candidates.sort(key=lambda item: item[0], reverse=True)
     if prefer_different_bot and previous_result and previous_result.bot_name:
         different_bot = [
             (score, result) for score, result in candidates
@@ -819,28 +875,43 @@ def _choose_best_bulk_result(
     return candidates[0][1]
 
 
-def _score_bulk_result(book: Book | None, result: IrcSearchResult) -> int:
+def _classify_bulk_result_type(result: IrcSearchResult) -> str | None:
     display_name = (result.display_name or result.download_command or "").lower()
     file_format = (result.file_format or Path(result.display_name or "").suffix.lstrip(".")).lower()
-    if file_format in _AUDIO_FORMATS:
-        return -5000
+    size_mb = _parse_size_to_megabytes(result.file_size_text)
     if any(token in display_name for token in _AUDIO_TOKENS):
-        return -5000
-    if file_format not in {"epub", "rar"}:
-        return -2000
+        if size_mb is not None and size_mb > _AUDIOBOOK_MIN_SIZE_MB:
+            return "audiobook"
+    if file_format in _DIRECT_BULK_FILE_TYPES:
+        return file_format
+    return None
 
-    score = 120 if file_format == "epub" else 80
-    if file_format == "rar":
-        score += 10
+
+def _score_bulk_result(book: Book | None, result: IrcSearchResult, matched_type: str) -> int:
+    score = {
+        "epub": 120,
+        "mobi": 100,
+        "zip": 90,
+        "rar": 80,
+        "audiobook": 70,
+    }.get(matched_type, 0)
 
     size_mb = _parse_size_to_megabytes(result.file_size_text)
     if size_mb is not None:
-        if size_mb > 100:
-            score -= 250
-        elif size_mb > 25:
-            score -= 75
-        elif size_mb < 0.1:
-            score -= 75
+        if matched_type == "audiobook":
+            if size_mb <= _AUDIOBOOK_MIN_SIZE_MB:
+                return -5000
+            if size_mb > 1500:
+                score -= 80
+            elif size_mb < 40:
+                score -= 20
+        else:
+            if size_mb > 100:
+                score -= 250
+            elif size_mb > 25:
+                score -= 75
+            elif size_mb < 0.1:
+                score -= 75
 
     if book is None:
         return score

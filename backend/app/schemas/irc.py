@@ -1,4 +1,14 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+
+IrcBulkFileTypeKey = Literal["epub", "mobi", "zip", "rar", "audiobook"]
+
+
+class IrcBulkFileTypePreference(BaseModel):
+    key: IrcBulkFileTypeKey
+    enabled: bool = True
 
 
 class IrcSettingsResponse(BaseModel):
@@ -101,6 +111,7 @@ class IrcDownloadJobSummary(BaseModel):
 
 class IrcBulkBatchCreateRequest(BaseModel):
     book_ids: list[int] = Field(min_length=1, max_length=50)
+    file_type_preferences: list[IrcBulkFileTypePreference] = Field(default_factory=list)
 
 
 class IrcBulkDownloadItemSummary(BaseModel):

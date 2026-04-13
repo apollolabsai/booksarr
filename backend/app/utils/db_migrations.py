@@ -77,6 +77,12 @@ def run_schema_migrations(conn: Connection) -> None:
     conn.exec_driver_sql(
         "CREATE INDEX IF NOT EXISTS ix_irc_bulk_download_batches_status ON irc_bulk_download_batches (status)"
     )
+    irc_bulk_batch_rows = conn.exec_driver_sql("PRAGMA table_info(irc_bulk_download_batches)").fetchall()
+    existing_irc_bulk_batch_columns = {row[1] for row in irc_bulk_batch_rows}
+    if "file_type_preferences" not in existing_irc_bulk_batch_columns:
+        conn.exec_driver_sql(
+            "ALTER TABLE irc_bulk_download_batches ADD COLUMN file_type_preferences TEXT"
+        )
 
     conn.exec_driver_sql(
         """

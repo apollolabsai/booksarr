@@ -381,6 +381,13 @@ export interface IrcBulkSearchResponse {
   skipped: IrcBulkSearchSkippedItem[];
 }
 
+export type IrcBulkFileTypeKey = "epub" | "mobi" | "zip" | "rar" | "audiobook";
+
+export interface IrcBulkFileTypePreference {
+  key: IrcBulkFileTypeKey;
+  enabled: boolean;
+}
+
 export interface IrcBulkDownloadItem {
   id: number;
   book_id: number;

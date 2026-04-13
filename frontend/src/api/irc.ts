@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchApi } from "./client";
 import type {
   IrcBulkDownloadBatch,
+  IrcBulkFileTypePreference,
   IrcDownloadFeedEntry,
   IrcBulkSearchResponse,
   IrcDownloadJob,
@@ -117,7 +118,7 @@ export function useCreateBulkIrcSearchJobs() {
 export function useCreateIrcBulkBatch() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (body: { book_ids: number[] }) =>
+    mutationFn: (body: { book_ids: number[]; file_type_preferences: IrcBulkFileTypePreference[] }) =>
       fetchApi<IrcBulkDownloadBatch>("/irc/bulk-batches", { method: "POST", body: JSON.stringify(body) }),
     onSuccess: (batch) => {
       queryClient.setQueryData(["ircBulkBatch", batch.id], batch);

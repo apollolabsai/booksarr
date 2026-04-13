@@ -47,6 +47,7 @@ from backend.app.services.irc_worker import (
     get_online_irc_nicks,
     get_runtime_status,
     is_bot_online,
+    serialize_bulk_file_type_preferences,
     request_connect,
     request_disconnect,
 )
@@ -192,7 +193,13 @@ async def create_bulk_batch(body: IrcBulkBatchCreateRequest, db: AsyncSession = 
         raise HTTPException(status_code=404, detail=f"Book not found: {missing_book_ids[0]}")
 
     request_id = uuid4().hex[:12]
-    batch = IrcBulkDownloadBatch(request_id=request_id, status="queued")
+    batch = IrcBulkDownloadBatch(
+        request_id=request_id,
+        status="queued",
+        file_type_preferences=serialize_bulk_file_type_preferences(
+            [preference.model_dump() for preference in body.file_type_preferences]
+        ),
+    )
     db.add(batch)
     await db.flush()
 
