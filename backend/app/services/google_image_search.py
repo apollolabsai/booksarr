@@ -22,6 +22,21 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
+# Shared client — keeps a persistent connection to Bing alive across requests
+# so each search reuses the existing TCP connection rather than opening a new one.
+_client: httpx.AsyncClient | None = None
+
+
+def _get_client() -> httpx.AsyncClient:
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(
+            timeout=15.0,
+            follow_redirects=True,
+            headers=HEADERS,
+        )
+    return _client
+
 
 @dataclass
 class ImageResult:
@@ -44,14 +59,9 @@ async def _search_images(query: str, max_results: int = 10) -> list[ImageResult]
     logger.debug("Image search: query='%s' url=%s params=%s", query[:120], BING_URL, params)
 
     try:
-        async with httpx.AsyncClient(
-            timeout=15.0,
-            follow_redirects=True,
-            headers=HEADERS,
-        ) as client:
-            resp = await client.get(BING_URL, params=params)
-            resp.raise_for_status()
-            html = resp.text
+        resp = await _get_client().get(BING_URL, params=params)
+        resp.raise_for_status()
+        html = resp.text
     except Exception as e:
         logger.warning(
             "Image search HTTP error for query '%s': %r",
