@@ -27,7 +27,12 @@ from backend.app.utils.book_visibility import get_book_visibility_settings, is_b
 from backend.app.utils.isbn import has_any_valid_isbn
 from backend.app.services.image_cache import get_cached_cover_aspect_ratio
 from backend.app.services.author_images import get_author_portrait_options, set_author_portrait_selection
-from backend.app.services.library_sync import get_api_key, _get_or_create_series, refresh_single_author
+from backend.app.services.library_sync import (
+    _get_or_create_series,
+    enrich_imported_books_metadata,
+    get_api_key,
+    refresh_single_author,
+)
 from backend.app.utils.hardcover_metadata import get_book_category_name, get_literary_type_name
 from backend.app.utils.isbn import normalized_valid_isbn
 from backend.app.utils.api_usage import begin_api_usage_batch, clear_api_usage_batch, flush_api_usage_batch
@@ -126,11 +131,26 @@ async def add_author_from_hardcover(
             hc_author.id,
             len(hc_books),
         )
+        imported_book_ids: list[int] = []
         for hc_book in hc_books:
             book_result = await db.execute(select(Book).where(Book.hardcover_id == hc_book.id))
             book = book_result.scalar_one_or_none()
             tags_json = json.dumps(hc_book.tags) if hc_book.tags else None
             if book:
+                if book.title != hc_book.title:
+                    book.google_id = None
+                    book.google_published_date = None
+                    book.google_cover_url = None
+                    book.google_isbn_10 = None
+                    book.google_isbn_13 = None
+                    book.ol_edition_key = None
+                    book.ol_first_publish_year = None
+                    book.ol_cover_url = None
+                    book.ol_isbn_10 = None
+                    book.ol_isbn_13 = None
+                    book.publish_date_checked_at = None
+                if book.release_date != hc_book.release_date:
+                    book.publish_date_checked_at = None
                 book.title = hc_book.title
                 book.author_id = author.id
                 book.hardcover_slug = hc_book.slug
@@ -174,6 +194,7 @@ async def add_author_from_hardcover(
                 )
                 db.add(book)
                 await db.flush()
+                book.publish_date_checked_at = None
 
             for sr in hc_book.series_refs:
                 series = await _get_or_create_series(db, sr.id, sr.name)
@@ -185,7 +206,10 @@ async def add_author_from_hardcover(
                 )
                 if not existing_bs.scalar_one_or_none():
                     db.add(BookSeries(book_id=book.id, series_id=series.id, position=sr.position))
+            imported_book_ids.append(book.id)
 
+        await db.commit()
+        await enrich_imported_books_metadata(db, imported_book_ids)
         await flush_api_usage_batch(db)
         await db.commit()
         result = await db.execute(

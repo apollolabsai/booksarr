@@ -1066,6 +1066,167 @@ async def get_google_api_key(db: AsyncSession) -> str:
     return setting.value if setting else ""
 
 
+async def enrich_imported_books_metadata(db: AsyncSession, book_ids: list[int]) -> None:
+    """Populate Google/Open Library metadata for freshly imported Hardcover books."""
+    if not book_ids:
+        return
+
+    result = await db.execute(
+        select(Book).where(Book.id.in_(sorted(set(book_ids))))
+    )
+    imported_books = result.scalars().all()
+    if not imported_books:
+        return
+
+    visibility_settings = await get_book_visibility_settings(db)
+    books_to_reconcile = [
+        book for book in imported_books
+        if book.hardcover_id is not None
+        and book.publish_date_checked_at is None
+        and is_book_visible_for_metadata_enrichment(book, visibility_settings)
+    ]
+    if not books_to_reconcile:
+        logger.info("Imported author books did not require immediate Google/Open Library enrichment")
+        return
+
+    author_ids = sorted({book.author_id for book in books_to_reconcile})
+    author_map: dict[int, str] = {}
+    if author_ids:
+        author_result = await db.execute(select(Author).where(Author.id.in_(author_ids)))
+        author_map = {author.id: author.name for author in author_result.scalars().all()}
+
+    google_api_key = await get_google_api_key(db)
+    google_retry_ids: set[int] = set()
+
+    if google_api_key:
+        google_client = GoogleBooksClient(google_api_key)
+        try:
+            fetched = 0
+            cached = 0
+            for book in books_to_reconcile:
+                if book.google_id == "_none":
+                    cached += 1
+                    continue
+                if book.google_id and book.google_id != "_none":
+                    cached += 1
+                    continue
+
+                try:
+                    gbook = None
+                    final_reason = "no_result"
+                    for isbn in _preferred_google_isbns(book):
+                        isbn_result = await google_client.search_by_isbn_result(isbn)
+                        gbook = isbn_result.book
+                        final_reason = isbn_result.reason
+                        if gbook or final_reason not in {"no_result"}:
+                            break
+
+                    if not gbook:
+                        author_name = author_map.get(book.author_id, "")
+                        title_result = await google_client.search_by_title_author_result(
+                            book.title,
+                            author_name,
+                        )
+                        gbook = title_result.book
+                        final_reason = title_result.reason
+
+                    if gbook:
+                        book.google_id = gbook.google_id
+                        book.google_published_date = gbook.published_date
+                        book.google_cover_url = gbook.cover_url
+                        book.google_isbn_10 = normalized_valid_isbn(gbook.isbn_10)
+                        book.google_isbn_13 = normalized_valid_isbn(gbook.isbn_13)
+                        fetched += 1
+                    elif final_reason in {"no_result", "title_mismatch", "author_mismatch"}:
+                        book.google_id = "_none"
+                except GoogleBooksThrottledError as exc:
+                    google_retry_ids.add(book.id)
+                    remaining = len(books_to_reconcile) - fetched - cached
+                    logger.warning(
+                        "Google Books throttled during imported-author enrichment after %d fetched, %d cached; %d remaining deferred: %s",
+                        fetched,
+                        cached,
+                        max(0, remaining),
+                        exc,
+                    )
+                    break
+                except GoogleBooksLookupError as exc:
+                    google_retry_ids.add(book.id)
+                    logger.warning(
+                        "Google Books lookup failed during imported-author enrichment for book_id=%s title=%r: %s",
+                        book.id,
+                        book.title,
+                        exc,
+                    )
+            await db.commit()
+            logger.info(
+                "Imported author Google enrichment complete: fetched=%d cached=%d deferred=%d total=%d",
+                fetched,
+                cached,
+                len(google_retry_ids),
+                len(books_to_reconcile),
+            )
+        finally:
+            await google_client.close()
+    else:
+        logger.info("Skipping imported-author Google enrichment because no Google Books API key is configured")
+
+    ol_client = OpenLibraryClient()
+    try:
+        fetched_ol = 0
+        cached_ol = 0
+        for book in books_to_reconcile:
+            if book.ol_edition_key == "_none":
+                cached_ol += 1
+                continue
+            if book.ol_edition_key and book.ol_edition_key != "_none":
+                cached_ol += 1
+                continue
+
+            ol_lookup = None
+            for isbn in _preferred_google_isbns(book):
+                ol_lookup = await ol_client.search_book_by_isbn_with_result(isbn)
+                if ol_lookup.book or ol_lookup.reason not in {"no_result"}:
+                    break
+
+            if not ol_lookup or (not ol_lookup.book and ol_lookup.reason == "no_result"):
+                author_name = author_map.get(book.author_id, "")
+                ol_lookup = await ol_client.search_book_with_result(book.title, author_name)
+
+            if ol_lookup.book:
+                ol_book = ol_lookup.book
+                ol_isbn_10, ol_isbn_13 = extract_isbn_variants(ol_book.isbn_list)
+                book.ol_edition_key = ol_book.cover_edition_key or "_found"
+                book.ol_first_publish_year = ol_book.first_publish_year
+                if not book.hardcover_isbn_10 and not book.google_isbn_10:
+                    book.ol_isbn_10 = ol_isbn_10
+                if not book.hardcover_isbn_13 and not book.google_isbn_13:
+                    book.ol_isbn_13 = ol_isbn_13
+                if ol_book.cover_id:
+                    book.ol_cover_url = ol_book.cover_url_large
+                fetched_ol += 1
+            elif ol_lookup.reason == "no_result":
+                book.ol_edition_key = "_none"
+
+        finalized = 0
+        for book in books_to_reconcile:
+            if book.id in google_retry_ids:
+                continue
+            book.publish_date_checked_at = datetime.utcnow()
+            finalized += 1
+
+        await db.commit()
+        logger.info(
+            "Imported author Open Library enrichment complete: fetched=%d cached=%d finalized=%d total=%d",
+            fetched_ol,
+            cached_ol,
+            finalized,
+            len(books_to_reconcile),
+        )
+    finally:
+        await ol_client.close()
+
+
 def _author_needs_hardcover_lookup(author: Author) -> bool:
     author_has_manual_image = bool(author.manual_image_source and author.manual_image_url)
     author_needs_cached_image = not author.image_cached_path
