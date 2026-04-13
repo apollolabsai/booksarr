@@ -41,6 +41,8 @@ async def _search_images(query: str, max_results: int = 10) -> list[ImageResult]
         "first": "1",
     }
 
+    logger.debug("Image search: query='%s' url=%s params=%s", query[:120], BING_URL, params)
+
     try:
         async with httpx.AsyncClient(
             timeout=15.0,
@@ -51,19 +53,39 @@ async def _search_images(query: str, max_results: int = 10) -> list[ImageResult]
             resp.raise_for_status()
             html = resp.text
     except Exception as e:
-        logger.warning("Image search failed for query '%s': %s", query[:120], e)
+        logger.warning("Image search HTTP error for query '%s': %s", query[:120], e)
         return []
+
+    html_bytes = len(html.encode())
+    content_type = resp.headers.get("content-type", "unknown")
+    final_url = str(resp.url)
+    logger.debug(
+        "Image search response: status=%d content_type=%s size=%d final_url=%s",
+        resp.status_code, content_type, html_bytes, final_url,
+    )
 
     # Bing embeds image metadata in HTML-encoded JSON inside m="" attributes
     m_attrs = re.findall(r'm="([^"]+)"', html)
+    logger.debug("Image search: found %d raw m= attributes in HTML", len(m_attrs))
+
+    if not m_attrs:
+        # Dump a snippet of the HTML to help diagnose captcha/redirect pages
+        snippet = html[:500].replace("\n", " ").replace("\r", "")
+        logger.warning(
+            "Image search: 0 m= attributes found for query='%s' — "
+            "status=%d size=%d content_type=%s html_start=%r",
+            query[:120], resp.status_code, html_bytes, content_type, snippet,
+        )
 
     results: list[ImageResult] = []
     seen_urls: set[str] = set()
+    parse_errors = 0
 
     for m_raw in m_attrs:
         try:
             m_json = json.loads(unescape(m_raw))
         except (json.JSONDecodeError, TypeError):
+            parse_errors += 1
             continue
 
         if not isinstance(m_json, dict):
@@ -91,9 +113,12 @@ async def _search_images(query: str, max_results: int = 10) -> list[ImageResult]
             break
 
     logger.info(
-        "Image search: query='%s' raw=%d final=%d",
+        "Image search: query='%s' status=%d html=%dB m_attrs=%d parse_errors=%d final=%d",
         query[:80],
+        resp.status_code,
+        html_bytes,
         len(m_attrs),
+        parse_errors,
         len(results),
     )
     return results

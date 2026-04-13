@@ -15,6 +15,11 @@ DEFAULT_HEADERS = {"User-Agent": "Booksarr/0.1.0 (ebook library manager)"}
 # Local covers smaller than this are considered thumbnails and skipped
 MIN_COVER_BYTES = 20_000  # 20KB
 
+# Remote covers are already filtered by download_image_bytes (1KB minimum).
+# Use a much smaller floor here to reject obviously corrupt responses without
+# discarding valid small covers (e.g. Open Library "-L" images can be ~18KB).
+_MIN_REMOTE_COVER_BYTES = 3_000  # 3KB
+
 
 async def download_image(url: str, category: str, filename: str, *, overwrite: bool = False) -> str | None:
     """Download an image and cache it. Returns relative cache path."""
@@ -210,7 +215,7 @@ async def download_image_bytes(url: str) -> bytes | None:
 
 def cache_cover_data(data: bytes, book_id: int, source: str = "remote") -> str | None:
     """Save raw image bytes to cache as {source}_{book_id}.ext. Overwrites if exists."""
-    if not data or len(data) < MIN_COVER_BYTES:
+    if not data or len(data) < _MIN_REMOTE_COVER_BYTES:
         return None
     ext = ".png" if data[:8] == b"\x89PNG\r\n\x1a\n" else ".jpg"
     safe_source = source.lower().replace(" ", "_")

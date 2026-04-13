@@ -27,6 +27,7 @@ export default function CoverPickerDialog({
   const [selectedSource, setSelectedSource] = useState<string | null>(null);
   const [selectedSearchUrl, setSelectedSearchUrl] = useState<string | null>(null);
   const [failedImages, setFailedImages] = useState<Set<string>>(new Set());
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!data) return;
@@ -42,6 +43,7 @@ export default function CoverPickerDialog({
   useEffect(() => {
     if (!open) {
       setFailedImages(new Set());
+      setSaveError(null);
     }
   }, [open]);
 
@@ -58,12 +60,17 @@ export default function CoverPickerDialog({
   };
 
   const handleSave = async () => {
-    if (selectedSearchUrl) {
-      await setBookCover.mutateAsync({ bookId, source: "google_image", url: selectedSearchUrl });
-      onClose();
-    } else if (selectedSource) {
-      await setBookCover.mutateAsync({ bookId, source: selectedSource });
-      onClose();
+    setSaveError(null);
+    try {
+      if (selectedSearchUrl) {
+        await setBookCover.mutateAsync({ bookId, source: "google_image", url: selectedSearchUrl });
+        onClose();
+      } else if (selectedSource) {
+        await setBookCover.mutateAsync({ bookId, source: selectedSource });
+        onClose();
+      }
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Failed to save poster.");
     }
   };
 
@@ -202,22 +209,27 @@ export default function CoverPickerDialog({
           </div>
         </div>
 
-        <div className="flex shrink-0 items-center justify-end gap-3 border-t border-slate-700 px-6 py-4">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md border border-slate-600 bg-slate-800 px-4 py-2 text-sm text-slate-200 hover:bg-slate-700"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={!hasSelection || setBookCover.isPending}
-            className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {setBookCover.isPending ? "Saving..." : "Save Poster"}
-          </button>
+        <div className="flex shrink-0 items-center justify-between gap-3 border-t border-slate-700 px-6 py-4">
+          {saveError && (
+            <p className="text-sm text-rose-300">{saveError}</p>
+          )}
+          <div className="flex items-center gap-3 ml-auto">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-md border border-slate-600 bg-slate-800 px-4 py-2 text-sm text-slate-200 hover:bg-slate-700"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={!hasSelection || setBookCover.isPending}
+              className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {setBookCover.isPending ? "Saving..." : "Save Poster"}
+            </button>
+          </div>
         </div>
       </div>
     </div>
