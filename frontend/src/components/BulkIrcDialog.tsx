@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCreateIrcBulkBatch, useIrcBulkBatch, useIrcStatus } from "../api/irc";
-import type { Book, IrcBulkDownloadItem } from "../types";
+import type { Book, IrcBulkDownloadItem, IrcBulkFileTypePreference } from "../types";
 
 const ACTIVE_ITEM_STATUSES = new Set([
   "searching",
@@ -23,6 +23,14 @@ const ITEM_PROGRESS_ORDER = [
   "importing",
   "completed",
 ] as const;
+
+const DEFAULT_IRC_BULK_FILE_TYPE_PREFERENCES: IrcBulkFileTypePreference[] = [
+  { key: "epub", enabled: true },
+  { key: "mobi", enabled: true },
+  { key: "zip", enabled: true },
+  { key: "rar", enabled: true },
+  { key: "audiobook", enabled: true },
+];
 
 export default function BulkIrcDialog({
   open,
@@ -77,6 +85,7 @@ export default function BulkIrcDialog({
     try {
       const createdBatch = await createBatch.mutateAsync({
         book_ids: books.map((book) => book.id),
+        file_type_preferences: DEFAULT_IRC_BULK_FILE_TYPE_PREFERENCES,
       });
       setBatchId(createdBatch.id);
       onQueued();
