@@ -34,6 +34,7 @@ def _get_client() -> httpx.AsyncClient:
             timeout=15.0,
             follow_redirects=True,
             headers=HEADERS,
+            transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0"),
         )
     return _client
 
