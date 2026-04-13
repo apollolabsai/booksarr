@@ -29,6 +29,8 @@ from backend.app.services.image_cache import get_cached_cover_aspect_ratio
 from backend.app.services.author_images import get_author_portrait_options, set_author_portrait_selection
 from backend.app.services.library_sync import (
     _get_or_create_series,
+    _deduplicate_books,
+    _is_valid_title,
     enrich_imported_books_metadata,
     get_api_key,
     refresh_single_author,
@@ -125,14 +127,21 @@ async def add_author_from_hardcover(
         logger.info("Ensured author folder exists: %s", folder_path)
 
         hc_books = await client.get_author_books(hc_author.id)
+        canonical_books = [b for b in hc_books if b.is_canonical]
+        valid_books = [b for b in canonical_books if _is_valid_title(b.title)]
+        eligible_books = _deduplicate_books(valid_books)
+        author.book_count_total = len(eligible_books)
         logger.info(
-            "Importing Hardcover author %s (hc_id=%s) with %s book candidate(s)",
+            "Importing Hardcover author %s (hc_id=%s): %d raw, %d canonical, %d valid, %d eligible",
             hc_author.name,
             hc_author.id,
             len(hc_books),
+            len(canonical_books),
+            len(valid_books),
+            len(eligible_books),
         )
         imported_book_ids: list[int] = []
-        for hc_book in hc_books:
+        for hc_book in eligible_books:
             book_result = await db.execute(select(Book).where(Book.hardcover_id == hc_book.id))
             book = book_result.scalar_one_or_none()
             tags_json = json.dumps(hc_book.tags) if hc_book.tags else None
