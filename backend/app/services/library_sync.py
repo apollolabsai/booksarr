@@ -1028,6 +1028,7 @@ class ScanRunSummary:
     owned_books_found: int = 0
     authors_added: int = 0
     books_added: int = 0
+    books_removed: int = 0
     books_hidden: int = 0
     hidden_by_category: list[dict[str, str | int]] = field(default_factory=list)
     hardcover: SourceRunSummary = field(default_factory=SourceRunSummary)
@@ -1359,6 +1360,7 @@ async def run_full_sync(force: bool = False):
 
                 new_author_count = 0
                 books_added = 0
+                books_removed = 0
                 for i, author in enumerate(authors):
                     author_has_manual_image = bool(author.manual_image_source and author.manual_image_url)
                     author_needs_cached_image = not author.image_cached_path
@@ -1554,6 +1556,7 @@ async def run_full_sync(force: bool = False):
                     canonical_books = [b for b in hc_books if b.is_canonical]
                     valid_books = [b for b in canonical_books if _is_valid_title(b.title)]
                     eligible_books = _deduplicate_books(valid_books)
+                    eligible_hardcover_ids = {book.id for book in eligible_books}
                     author.book_count_total = len(eligible_books)
                     authors_synced += 1
                     skipped = len(hc_books) - len(eligible_books)
@@ -1563,6 +1566,31 @@ async def run_full_sync(force: bool = False):
                             author.name, len(hc_books), len(eligible_books),
                             len(hc_books) - len(canonical_books),
                             len(canonical_books) - len(eligible_books),
+                        )
+
+                    # Remove stale books no longer in the eligible set
+                    existing_author_books_result = await db.execute(
+                        select(Book)
+                        .where(Book.author_id == author.id, Book.hardcover_id.is_not(None))
+                        .options(selectinload(Book.files), selectinload(Book.book_series))
+                    )
+                    existing_author_books = existing_author_books_result.scalars().all()
+                    for stale_book in existing_author_books:
+                        if not stale_book.hardcover_id or stale_book.hardcover_id in eligible_hardcover_ids:
+                            continue
+                        if stale_book.files or stale_book.is_owned:
+                            logger.warning(
+                                "Skipping stale book cleanup (has local data): book_id=%s title=%r author=%r",
+                                stale_book.id, stale_book.title, author.name,
+                            )
+                            continue
+                        for book_series in list(stale_book.book_series):
+                            await db.delete(book_series)
+                        await db.delete(stale_book)
+                        books_removed += 1
+                        logger.info(
+                            "Removed stale book during scan: book_id=%s title=%r author=%r hc=%s",
+                            stale_book.id, stale_book.title, author.name, stale_book.hardcover_id,
                         )
 
                     for hc_book in eligible_books:
@@ -1665,6 +1693,7 @@ async def run_full_sync(force: bool = False):
                 matched_count, repaired_count, new_local_books = await _repair_local_file_links(db)
                 books_added += new_local_books
                 summary.books_added = books_added
+                summary.books_removed = books_removed
                 scan_status.progress = 80.0
 
                 # Phase 5: Publish date enrichment
