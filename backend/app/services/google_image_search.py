@@ -53,7 +53,10 @@ async def _search_images(query: str, max_results: int = 10) -> list[ImageResult]
             resp.raise_for_status()
             html = resp.text
     except Exception as e:
-        logger.warning("Image search HTTP error for query '%s': %s", query[:120], e)
+        logger.warning(
+            "Image search HTTP error for query '%s': %r",
+            query[:120], e, exc_info=True,
+        )
         return []
 
     html_bytes = len(html.encode())
