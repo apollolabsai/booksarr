@@ -34,6 +34,7 @@ class GBook:
     google_id: str | None = None
     isbn_10: str | None = None
     isbn_13: str | None = None
+    language: str | None = None
 
     @property
     def publish_year(self) -> int | None:
@@ -403,6 +404,7 @@ class GoogleBooksClient:
                 google_id=google_id,
                 isbn_10=isbn_10,
                 isbn_13=isbn_13,
+                language=info.get("language"),
             ),
             reason="matched",
         )
