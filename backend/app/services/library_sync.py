@@ -6,7 +6,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from sqlalchemy import select, func
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -2333,6 +2333,7 @@ async def refresh_single_author(author_id: int):
                 )
             )
             author.book_count_local = count_result.scalar() or 0
+            await db.commit()
 
             refreshed_author_result = await db.execute(
                 select(Author)
@@ -2424,17 +2425,7 @@ async def _refresh_book_from_scratch(db: AsyncSession, book: Book) -> None:
             book.hardcover_isbn_13 = normalized_valid_isbn(hc_book.isbn_13)
             book.language = hc_book.language or book.language
 
-            for existing_bs in list(book.book_series):
-                await db.delete(existing_bs)
-            await db.flush()
-
-            for sr in hc_book.series_refs:
-                series = await _get_or_create_series(db, sr.id, sr.name)
-                db.add(BookSeries(
-                    book_id=book.id,
-                    series_id=series.id,
-                    position=sr.position,
-                ))
+            await _replace_book_series_links(db, book.id, hc_book.series_refs)
 
     google_api_key = await get_google_api_key(db)
     if google_api_key:
@@ -2585,8 +2576,31 @@ async def _get_or_create_series(db: AsyncSession, hardcover_id: int, name: str) 
     if not series:
         series = Series(hardcover_id=hardcover_id, name=name)
         db.add(series)
-        await db.flush()
+    await db.flush()
     return series
+
+
+async def _replace_book_series_links(
+    db: AsyncSession,
+    book_id: int,
+    series_refs: list,
+) -> None:
+    """Replace all series links for a book in an idempotent way."""
+    await db.execute(delete(BookSeries).where(BookSeries.book_id == book_id))
+    await db.flush()
+
+    deduped_refs: dict[int, tuple[str, float | None]] = {}
+    for sr in series_refs:
+        if sr.id not in deduped_refs:
+            deduped_refs[sr.id] = (sr.name, sr.position)
+
+    for hardcover_series_id, (name, position) in deduped_refs.items():
+        series = await _get_or_create_series(db, hardcover_series_id, name)
+        db.add(BookSeries(
+            book_id=book_id,
+            series_id=series.id,
+            position=position,
+        ))
 
 
 async def _update_last_scan(db: AsyncSession):
