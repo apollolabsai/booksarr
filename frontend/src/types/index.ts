@@ -270,8 +270,10 @@ export interface ScanSummary {
 export interface Settings {
   hardcover_api_key: string;
   hardcover_api_key_from_env: boolean;
+  hardcover_api_key_source: "database" | "environment" | "none";
   google_books_api_key: string;
   google_books_api_key_from_env: boolean;
+  google_books_api_key_source: "database" | "environment" | "none";
   library_path: string;
   last_scan_at: string | null;
   last_scan_summary: ScanSummary | null;

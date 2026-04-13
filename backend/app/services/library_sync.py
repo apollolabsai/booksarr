@@ -1059,25 +1059,25 @@ class ScanRunSummary:
 
 
 async def get_api_key(db: AsyncSession) -> str:
-    """Get Hardcover API key from env var (via config) or database settings."""
-    from backend.app.config import HARDCOVER_API_KEY
-    if HARDCOVER_API_KEY:
-        return HARDCOVER_API_KEY
-
+    """Get Hardcover API key from database settings, falling back to env config."""
     result = await db.execute(select(Setting).where(Setting.key == "hardcover_api_key"))
     setting = result.scalar_one_or_none()
-    return setting.value if setting else ""
+    if setting and setting.value:
+        return setting.value
+
+    from backend.app.config import HARDCOVER_API_KEY
+    return HARDCOVER_API_KEY
 
 
 async def get_google_api_key(db: AsyncSession) -> str:
-    """Get Google Books API key from env var or database settings."""
-    from backend.app.config import GOOGLE_BOOKS_API_KEY
-    if GOOGLE_BOOKS_API_KEY:
-        return GOOGLE_BOOKS_API_KEY
-
+    """Get Google Books API key from database settings, falling back to env config."""
     result = await db.execute(select(Setting).where(Setting.key == "google_books_api_key"))
     setting = result.scalar_one_or_none()
-    return setting.value if setting else ""
+    if setting and setting.value:
+        return setting.value
+
+    from backend.app.config import GOOGLE_BOOKS_API_KEY
+    return GOOGLE_BOOKS_API_KEY
 
 
 async def enrich_imported_books_metadata(db: AsyncSession, book_ids: list[int]) -> None:

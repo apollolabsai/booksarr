@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -55,8 +57,10 @@ class ScanSummary(BaseModel):
 class SettingsResponse(BaseModel):
     hardcover_api_key: str
     hardcover_api_key_from_env: bool = False
+    hardcover_api_key_source: Literal["database", "environment", "none"] = "none"
     google_books_api_key: str
     google_books_api_key_from_env: bool = False
+    google_books_api_key_source: Literal["database", "environment", "none"] = "none"
     library_path: str
     last_scan_at: str | None
     last_scan_summary: ScanSummary | None = None

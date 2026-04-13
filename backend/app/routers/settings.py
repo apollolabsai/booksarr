@@ -35,12 +35,16 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Setting))
     settings = {s.key: s.value for s in result.scalars().all()}
 
-    # Resolve keys: env var takes precedence over DB
+    # Resolve keys: saved DB value takes precedence over env fallback
+    db_hardcover_key = settings.get("hardcover_api_key", "")
     hc_from_env = bool(HARDCOVER_API_KEY)
-    api_key = HARDCOVER_API_KEY or settings.get("hardcover_api_key", "")
+    api_key = db_hardcover_key or HARDCOVER_API_KEY
+    hardcover_source = "database" if db_hardcover_key else ("environment" if hc_from_env else "none")
 
+    db_google_key = settings.get("google_books_api_key", "")
     google_from_env = bool(GOOGLE_BOOKS_API_KEY)
-    google_key = GOOGLE_BOOKS_API_KEY or settings.get("google_books_api_key", "")
+    google_key = db_google_key or GOOGLE_BOOKS_API_KEY
+    google_source = "database" if db_google_key else ("environment" if google_from_env else "none")
 
     last_scan = settings.get("last_scan_at")
     last_scan_summary = None
@@ -64,8 +68,10 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
     return SettingsResponse(
         hardcover_api_key=_mask(api_key),
         hardcover_api_key_from_env=hc_from_env,
+        hardcover_api_key_source=hardcover_source,
         google_books_api_key=_mask(google_key),
         google_books_api_key_from_env=google_from_env,
+        google_books_api_key_source=google_source,
         library_path=str(BOOKS_DIR),
         last_scan_at=last_scan,
         last_scan_summary=last_scan_summary,
