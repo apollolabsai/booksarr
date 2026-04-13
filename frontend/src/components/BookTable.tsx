@@ -7,7 +7,7 @@ import CoverPickerDialog from "./CoverPickerDialog";
 import IrcSearchDialog from "./IrcSearchDialog";
 
 type BookLike = Book | BookInAuthor;
-type TableSortKey = "title" | "series" | "year" | "rating";
+type TableSortKey = "title" | "series" | "year" | "rating" | "size";
 
 function isFullBook(book: BookLike): book is Book {
   return "author_name" in book;
@@ -241,6 +241,10 @@ export default function BookTable({
         comparison = (a.release_date || "").localeCompare(b.release_date || "") || a.title.localeCompare(b.title);
       } else if (sortKey === "rating") {
         comparison = (a.rating || 0) - (b.rating || 0) || a.title.localeCompare(b.title);
+      } else if (sortKey === "size") {
+        const sizeA = a.local_files.reduce((sum, f) => sum + (f.file_size ?? 0), 0);
+        const sizeB = b.local_files.reduce((sum, f) => sum + (f.file_size ?? 0), 0);
+        comparison = sizeA - sizeB || a.title.localeCompare(b.title);
       }
       return sortDirection === "asc" ? comparison : -comparison;
     });
@@ -265,7 +269,7 @@ export default function BookTable({
     });
   };
 
-  const detailColSpan = (showAuthor ? 8 : 7) + (showSelectionColumn ? 1 : 0);
+  const detailColSpan = (showAuthor ? 9 : 8) + (showSelectionColumn ? 1 : 0);
 
   return (
     <>
@@ -295,6 +299,11 @@ export default function BookTable({
               <th className="px-4 py-2 text-right">
                 <button type="button" onClick={() => handleSort("rating")} className="hover:text-slate-200 transition-colors">
                   Rating{renderSortIndicator("rating")}
+                </button>
+              </th>
+              <th className="px-4 py-2 text-right">
+                <button type="button" onClick={() => handleSort("size")} className="hover:text-slate-200 transition-colors">
+                  Size{renderSortIndicator("size")}
                 </button>
               </th>
               <th className="px-4 py-2 text-right"></th>
@@ -390,6 +399,11 @@ export default function BookTable({
                     </td>
                     <td className="px-4 py-2 text-right text-slate-400">
                       {book.rating ? book.rating.toFixed(1) : "-"}
+                    </td>
+                    <td className="px-4 py-2 text-right text-slate-400 whitespace-nowrap">
+                      {localFiles.length > 0
+                        ? formatFileSize(localFiles.reduce((sum, f) => sum + (f.file_size ?? 0), 0))
+                        : "-"}
                     </td>
                     <td className="px-4 py-2 text-right">
                       <div className="flex items-center justify-end gap-2">
