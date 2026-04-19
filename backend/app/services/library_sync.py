@@ -738,6 +738,26 @@ async def _repair_local_file_links(
         )
         matching_authors = author_result.scalars().all()
         author = matching_authors[0] if matching_authors else None
+
+        # If opf_author didn't resolve to any known author, try the path-derived
+        # folder name instead. This handles epubs whose dc:creator is corrupt
+        # (e.g. set to the book title rather than the author name).
+        if not matching_authors and not matched_book:
+            fallback_key = normalize_author_key(fallback_author)
+            if fallback_key and fallback_key != author_key:
+                fallback_author_result = await db.execute(
+                    select(Author)
+                    .where(Author.author_key == fallback_key)
+                    .order_by(
+                        Author.hardcover_id.is_(None),
+                        Author.book_count_local.desc(),
+                        Author.book_count_total.desc(),
+                        Author.id,
+                    )
+                )
+                matching_authors = fallback_author_result.scalars().all()
+                author = matching_authors[0] if matching_authors else None
+
         if not matching_authors and not matched_book:
             continue
 
