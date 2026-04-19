@@ -5,15 +5,12 @@ import { getBookCoverPresentation, getImageUrl } from "../types";
 import CoverPickerDialog from "./CoverPickerDialog";
 import IrcSearchDialog from "./IrcSearchDialog";
 import { useRefreshBook, useSetBookVisibility } from "../api/books";
+import BookDownloadSelector from "./BookDownloadSelector";
 
 type BookLike = BookInAuthor | Book;
 
 function isFullBook(book: BookLike): book is Book {
   return "author_name" in book;
-}
-
-function downloadBook(bookId: number) {
-  window.open(`/api/books/${bookId}/download`, "_blank", "noopener,noreferrer");
 }
 
 function OwnedBadge({ count }: { count: number }) {
@@ -198,17 +195,26 @@ export default function BookCard({
                 >
                   Refresh
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    downloadBook(book.id);
-                  }}
+                <BookDownloadSelector
+                  bookId={book.id}
+                  localFiles={book.local_files}
                   disabled={!book.is_owned}
-                  className="flex w-full items-center rounded-md px-2.5 py-1.5 text-xs text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Download Book
-                </button>
+                  align="left"
+                  direction="down"
+                  wrapperClassName="flex w-full"
+                  menuWidthClassName="w-[18rem]"
+                  onDownloadStart={() => setMenuOpen(false)}
+                  renderTrigger={({ toggle, disabled, hasMultiple }) => (
+                    <button
+                      type="button"
+                      onClick={toggle}
+                      disabled={disabled}
+                      className="flex w-full items-center rounded-md px-2.5 py-1.5 text-xs text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {hasMultiple ? "Download..." : "Download Book"}
+                    </button>
+                  )}
+                />
                 <button
                   type="button"
                   onClick={() => {

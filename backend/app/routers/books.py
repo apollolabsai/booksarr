@@ -1,5 +1,10 @@
+import tempfile
+import zipfile
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -36,6 +41,19 @@ from backend.app.services.library_sync import (
 from backend.app.services.image_cache import get_cached_cover_aspect_ratio
 
 router = APIRouter(prefix="/api/books", tags=["books"])
+
+
+def _archive_directory_for_download(source_dir: Path) -> Path:
+    temp_file = tempfile.NamedTemporaryFile(prefix="booksarr-download-", suffix=".zip", delete=False)
+    archive_path = Path(temp_file.name)
+    temp_file.close()
+
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for child in sorted(source_dir.rglob("*")):
+            if child.is_file():
+                archive.write(child, arcname=str(child.relative_to(source_dir)))
+
+    return archive_path
 
 
 def _book_summary(book: Book) -> BookSummary:
@@ -383,7 +401,11 @@ async def refresh_book(book_id: int):
 
 
 @router.get("/{book_id}/download")
-async def download_book(book_id: int, db: AsyncSession = Depends(get_db)):
+async def download_book(
+    book_id: int,
+    file_id: int | None = Query(default=None, ge=1),
+    db: AsyncSession = Depends(get_db),
+):
     result = await db.execute(
         select(Book)
         .where(Book.id == book_id)
@@ -395,13 +417,30 @@ async def download_book(book_id: int, db: AsyncSession = Depends(get_db)):
     if not book.is_owned or not book.files:
         raise HTTPException(status_code=404, detail="No local file available for this book")
 
-    preferred_formats = ("epub", "mobi", "audiobook")
-    files_by_format = {(f.file_format or "").lower(): f for f in sorted(book.files, key=lambda f: f.id)}
-    book_file = next(
-        (files_by_format[fmt] for fmt in preferred_formats if fmt in files_by_format),
-        sorted(book.files, key=lambda file: file.id)[0],
-    )
+    if file_id is not None:
+        book_file = next((file for file in book.files if file.id == file_id), None)
+        if book_file is None:
+            raise HTTPException(status_code=404, detail="Requested local file not found for this book")
+    else:
+        preferred_formats = ("epub", "mobi", "audiobook")
+        files_by_format = {(f.file_format or "").lower(): f for f in sorted(book.files, key=lambda f: f.id)}
+        book_file = next(
+            (files_by_format[fmt] for fmt in preferred_formats if fmt in files_by_format),
+            sorted(book.files, key=lambda file: file.id)[0],
+        )
+
     file_path = BOOKS_DIR / book_file.file_path
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Local file not available for download")
+
+    if file_path.is_dir():
+        archive_path = _archive_directory_for_download(file_path)
+        return FileResponse(
+            str(archive_path),
+            media_type="application/zip",
+            filename=f"{book_file.file_name}.zip",
+            background=BackgroundTask(lambda path=archive_path: path.unlink(missing_ok=True)),
+        )
     if not file_path.is_file():
         raise HTTPException(status_code=404, detail="Local file not available for download")
 
