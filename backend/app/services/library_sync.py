@@ -52,6 +52,7 @@ _ARTICLE_RE = re.compile(r"^(a|an|the)\s+", re.IGNORECASE)
 
 # Cover height threshold — stop looking for better covers once met
 COVER_HEIGHT_THRESHOLD = 2000
+OL_LOG_INTERVAL = 50
 SUFFICIENT_COVER_HEIGHT = 500
 TARGET_COVER_RATIO = 2 / 3
 
@@ -1932,10 +1933,15 @@ async def run_full_sync(force: bool = False):
 
                     if books_need_ol_fetch:
                         ol_cached = len(ol_candidates) - len(books_need_ol_fetch)
+                        total_ol = len(books_need_ol_fetch)
                         scan_status.message = (
                             f"Fetching dates from Open Library... "
-                            f"{len(books_need_ol_fetch)} remaining "
-                            f"({ol_cached} cached)"
+                            f"0/{total_ol} ({ol_cached} cached)"
+                        )
+                        logger.info(
+                            "Open Library: fetching %d book(s) (%d cached)",
+                            total_ol,
+                            ol_cached,
                         )
                         ol_client = OpenLibraryClient()
                         try:
@@ -1952,11 +1958,15 @@ async def run_full_sync(force: bool = False):
                                     author_name = author_map.get(book.author_id, "")
                                     return await ol_client.search_book_with_result(book.title, author_name)
 
-                            results = await asyncio.gather(
-                                *[_fetch_ol_year(b) for b in books_need_ol_fetch]
-                            )
+                            async def _fetch_ol_year_tagged(book):
+                                return book, await _fetch_ol_year(book)
+
                             fetched_ol = 0
-                            for book, ol_lookup in zip(books_need_ol_fetch, results):
+                            completed_ol = 0
+                            tasks = [asyncio.create_task(_fetch_ol_year_tagged(b)) for b in books_need_ol_fetch]
+                            for coro in asyncio.as_completed(tasks):
+                                book, ol_lookup = await coro
+                                completed_ol += 1
                                 if ol_lookup.book:
                                     summary.openlibrary.record_match()
                                     ol_isbn_10, ol_isbn_13 = extract_isbn_variants(ol_lookup.book.isbn_list)
@@ -1974,6 +1984,19 @@ async def run_full_sync(force: bool = False):
                                 else:
                                     summary.openlibrary.record_failure(ol_lookup.reason)
                                     book.ol_edition_key = "_none"
+
+                                if completed_ol % OL_LOG_INTERVAL == 0 or completed_ol == total_ol:
+                                    scan_status.message = (
+                                        f"Fetching dates from Open Library... "
+                                        f"{completed_ol}/{total_ol} ({ol_cached} cached)"
+                                    )
+                                    logger.info(
+                                        "Open Library: %d/%d fetched, %d matched so far",
+                                        completed_ol,
+                                        total_ol,
+                                        fetched_ol,
+                                    )
+
                             await db.commit()
                             logger.info(
                                 "Open Library: fetched %d new, %d cached, %d no result",
@@ -2214,6 +2237,8 @@ async def run_full_sync(force: bool = False):
 
                     if books_need_ol_search:
                         ol_cover_map = {a.id: a.name for a in authors}
+                        total_ol_search = len(books_need_ol_search)
+                        logger.info("Open Library covers: searching %d book(s) with no cover", total_ol_search)
                         ol_client2 = OpenLibraryClient()
                         try:
                             sem = asyncio.Semaphore(10)
@@ -2233,10 +2258,14 @@ async def run_full_sync(force: bool = False):
                                         book.title, author_name
                                     )
 
-                            results = await asyncio.gather(
-                                *[_fetch_ol_cover(b) for b in books_need_ol_search]
-                            )
-                            for book, ol_lookup in zip(books_need_ol_search, results):
+                            async def _fetch_ol_cover_tagged(book):
+                                return book, await _fetch_ol_cover(book)
+
+                            completed_ol_search = 0
+                            tasks2 = [asyncio.create_task(_fetch_ol_cover_tagged(b)) for b in books_need_ol_search]
+                            for coro in asyncio.as_completed(tasks2):
+                                book, ol_lookup = await coro
+                                completed_ol_search += 1
                                 if ol_lookup.book:
                                     summary.openlibrary.record_match()
                                     ol_isbn_10, ol_isbn_13 = extract_isbn_variants(ol_lookup.book.isbn_list)
@@ -2253,6 +2282,17 @@ async def run_full_sync(force: bool = False):
                                 else:
                                     summary.openlibrary.record_failure(ol_lookup.reason)
                                     book.ol_edition_key = "_none"
+
+                                if completed_ol_search % OL_LOG_INTERVAL == 0 or completed_ol_search == total_ol_search:
+                                    scan_status.message = (
+                                        f"Fetching missing covers from Open Library... "
+                                        f"{completed_ol_search}/{total_ol_search}"
+                                    )
+                                    logger.info(
+                                        "Open Library covers: %d/%d searched",
+                                        completed_ol_search,
+                                        total_ol_search,
+                                    )
                         finally:
                             await ol_client2.close()
 
