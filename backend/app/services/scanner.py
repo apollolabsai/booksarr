@@ -50,7 +50,23 @@ class ScanResult:
         self.unchanged_files: int = 0
 
 
-async def scan_library(db: AsyncSession, library_path: Path) -> ScanResult:
+def _file_path_is_in_author_dirs(file_path: str, author_dir_names: set[str]) -> bool:
+    parts = Path(file_path).parts
+    return bool(parts) and parts[0] in author_dir_names
+
+
+def _normalize_author_dir_names(author_dir_names: set[str] | None) -> set[str] | None:
+    if author_dir_names is None:
+        return None
+    normalized = {name.strip() for name in author_dir_names if name and name.strip()}
+    return normalized or set()
+
+
+async def scan_library(
+    db: AsyncSession,
+    library_path: Path,
+    author_dir_names: set[str] | None = None,
+) -> ScanResult:
     """Scan the library directory using fast set-diff change detection.
 
     Instead of checking every file against the DB individually, we:
@@ -60,16 +76,33 @@ async def scan_library(db: AsyncSession, library_path: Path) -> ScanResult:
     4. Only create BookFile records and parse OPF for new files
     """
     result = ScanResult()
+    target_author_dirs = _normalize_author_dir_names(author_dir_names)
+
+    if target_author_dirs == set():
+        logger.info("Skipping targeted library scan: no author directories provided")
+        return result
 
     if not library_path.exists():
         logger.warning("Library path does not exist: %s", library_path)
         return result
 
-    logger.info("Starting library scan at: %s", library_path)
+    if target_author_dirs is None:
+        logger.info("Starting library scan at: %s", library_path)
+    else:
+        logger.info(
+            "Starting targeted library scan at: %s for author directories: %s",
+            library_path,
+            sorted(target_author_dirs),
+        )
 
     # Step 1: Load all known file paths from DB in one query
     db_result = await db.execute(select(BookFile.file_path))
     known_paths: set[str] = {row[0] for row in db_result.all()}
+    if target_author_dirs is not None:
+        known_paths = {
+            file_path for file_path in known_paths
+            if _file_path_is_in_author_dirs(file_path, target_author_dirs)
+        }
     logger.info("Known files in DB: %d", len(known_paths))
 
     # Also load known author names
@@ -83,6 +116,8 @@ async def scan_library(db: AsyncSession, library_path: Path) -> ScanResult:
 
     for author_dir in sorted(library_path.iterdir()):
         if not author_dir.is_dir() or author_dir.name.startswith("."):
+            continue
+        if target_author_dirs is not None and author_dir.name not in target_author_dirs:
             continue
 
         author_name = _clean_author_text(author_dir.name) or author_dir.name

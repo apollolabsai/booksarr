@@ -555,6 +555,31 @@ def _reparse_book_files(book: Book) -> tuple[str | None, str | None, str | None,
     return primary_title, primary_isbn, primary_publisher, primary_description
 
 
+def _get_author_scan_directories(author: Author | None) -> set[str]:
+    if author is None:
+        return set()
+
+    dir_names = {
+        directory.dir_path.strip()
+        for directory in author.author_directories
+        if directory.dir_path and directory.dir_path.strip()
+    }
+    if not BOOKS_DIR.exists():
+        return dir_names
+
+    normalized_author_name = _clean_author_text(author.name)
+    if not normalized_author_name:
+        return dir_names
+
+    for author_dir in BOOKS_DIR.iterdir():
+        if not author_dir.is_dir() or author_dir.name.startswith("."):
+            continue
+        if _clean_author_text(author_dir.name) == normalized_author_name:
+            dir_names.add(author_dir.name)
+
+    return dir_names
+
+
 def _linked_book_matches_local_metadata(
     book: Book,
     local_title: str | None,
@@ -2315,7 +2340,7 @@ async def refresh_single_book(book_id: int):
                 select(Book)
                 .where(Book.id == book_id)
                 .options(
-                    selectinload(Book.author),
+                    selectinload(Book.author).selectinload(Author.author_directories),
                     selectinload(Book.files),
                     selectinload(Book.book_series).selectinload(BookSeries.series),
                 )
@@ -2323,6 +2348,31 @@ async def refresh_single_book(book_id: int):
             book = result.scalar_one_or_none()
             if not book:
                 raise ValueError("Book not found")
+
+            author_scan_dirs = _get_author_scan_directories(book.author)
+            if author_scan_dirs:
+                await scan_library(db, BOOKS_DIR, author_dir_names=author_scan_dirs)
+                await _repair_local_file_links(db, author=book.author)
+                owned_count_result = await db.execute(
+                    select(func.count(Book.id)).where(
+                        Book.author_id == book.author_id,
+                        Book.is_owned == True,
+                    )
+                )
+                book.author.book_count_local = owned_count_result.scalar() or 0
+
+                refreshed_result = await db.execute(
+                    select(Book)
+                    .where(Book.id == book_id)
+                    .options(
+                        selectinload(Book.author).selectinload(Author.author_directories),
+                        selectinload(Book.files),
+                        selectinload(Book.book_series).selectinload(BookSeries.series),
+                    )
+                )
+                refreshed_book = refreshed_result.scalar_one_or_none()
+                if refreshed_book is not None:
+                    book = refreshed_book
 
             await _refresh_book_from_scratch(db, book)
 

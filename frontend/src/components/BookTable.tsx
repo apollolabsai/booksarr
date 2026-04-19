@@ -459,7 +459,7 @@ export default function BookTable({
                           </svg>
                         </ActionIconButton>
                         <ActionIconButton
-                          label="Delete and re-import metadata"
+                          label="Scan author folders and re-import metadata"
                           onClick={() => refreshBook.mutate(book.id)}
                           disabled={refreshBook.isPending}
                           preferBelow={index === 0}
