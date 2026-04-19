@@ -53,7 +53,7 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down Booksarr")
 
 
-app = FastAPI(title="Booksarr", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Booksarr", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -77,7 +77,7 @@ app.include_router(irc.router)
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "version": "0.1.0"}
+    return {"status": "ok", "version": "1.0.0"}
 
 
 @app.get("/api/images/{category}/{filename}")

@@ -33,7 +33,7 @@ export default function Layout() {
           <Outlet />
         </main>
         <footer className={`flex-shrink-0 border-t border-slate-800 text-xs text-slate-600 ${isMobile ? "px-4 py-2" : "px-6 py-2"}`}>
-          Booksarr v0.1.0{commitShort ? ` | ${branch} ${commitShort}` : ""}{buildDate ? ` (${buildDate})` : ""}
+          Booksarr v1.0.0{commitShort ? ` | ${branch} ${commitShort}` : ""}{buildDate ? ` (${buildDate})` : ""}
         </footer>
         {isMobile && <MobileNav />}
       </div>

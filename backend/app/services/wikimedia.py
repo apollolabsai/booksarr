@@ -53,7 +53,7 @@ class WikimediaClient:
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
                 timeout=15.0,
-                headers={"User-Agent": "Booksarr/0.1.0 (ebook library manager)"},
+                headers={"User-Agent": "Booksarr/1.0.0 (book library manager)"},
             )
         return self._client
 

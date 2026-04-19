@@ -10,7 +10,7 @@ from backend.app.utils.epub_cover import extract_cover, get_image_dimensions
 logger = logging.getLogger("booksarr.images")
 
 CACHE_DIR = CONFIG_DIR / "cache"
-DEFAULT_HEADERS = {"User-Agent": "Booksarr/0.1.0 (ebook library manager)"}
+DEFAULT_HEADERS = {"User-Agent": "Booksarr/1.0.0 (book library manager)"}
 
 # Local covers smaller than this are considered thumbnails and skipped
 MIN_COVER_BYTES = 20_000  # 20KB
