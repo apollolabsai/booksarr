@@ -64,35 +64,53 @@ function formatSeriesPosition(book: BookLike): string {
   return pos ? `${si.series_name} ${pos}` : si.series_name;
 }
 
-function MetadataBadges({ book }: { book: BookLike }) {
+const FORMAT_BADGES: { key: string; label: string; activeClass: string }[] = [
+  { key: "epub", label: "EPUB", activeClass: "bg-emerald-500/15 text-emerald-300" },
+  { key: "mobi", label: "MOBI", activeClass: "bg-blue-500/15 text-blue-300" },
+  { key: "audiobook", label: "AUDIO", activeClass: "bg-purple-500/15 text-purple-300" },
+];
+
+const FORMAT_BADGE_MAP: Record<string, { label: string; activeClass: string }> = Object.fromEntries(
+  FORMAT_BADGES.map(({ key, label, activeClass }) => [key, { label, activeClass }]),
+);
+
+function FileFormatTag({ format }: { format: string | null }) {
+  const key = (format || "").toLowerCase();
+  const entry = FORMAT_BADGE_MAP[key];
+  const label = entry?.label ?? (key ? key.toUpperCase() : "FILE");
+  const colorClass = entry?.activeClass ?? "bg-slate-700 text-slate-300";
+  return (
+    <span
+      className={`inline-flex flex-shrink-0 items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${colorClass}`}
+    >
+      {label}
+    </span>
+  );
+}
+
+function FormatBadges({ book }: { book: BookLike }) {
+  const ownedFormats = new Set(
+    book.local_files
+      .map((file) => (file.file_format || "").toLowerCase())
+      .filter(Boolean),
+  );
+
   return (
     <div className="mt-1.5 flex flex-wrap gap-1.5">
-      <span
-        className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${
-          book.has_valid_isbn
-            ? "bg-emerald-500/15 text-emerald-300"
-            : "bg-slate-700 text-slate-400"
-        }`}
-        title={book.has_valid_isbn ? "Valid ISBN present" : "No valid ISBN"}
-      >
-        ISBN {book.has_valid_isbn ? "✓" : "—"}
-      </span>
-      {book.matched_google && (
-        <span
-          className="inline-flex items-center rounded-full bg-blue-500/15 px-2 py-0.5 text-[10px] font-medium text-blue-300"
-          title="Matched with Google Books"
-        >
-          Google
-        </span>
-      )}
-      {book.matched_openlibrary && (
-        <span
-          className="inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-300"
-          title="Matched with Open Library"
-        >
-          OL
-        </span>
-      )}
+      {FORMAT_BADGES.map(({ key, label, activeClass }) => {
+        const owned = ownedFormats.has(key);
+        return (
+          <span
+            key={key}
+            className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${
+              owned ? activeClass : "bg-slate-800 text-slate-500"
+            }`}
+            title={owned ? `${label} file available` : `No ${label} file`}
+          >
+            {label}
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -375,7 +393,7 @@ export default function BookTable({
                       ) : (
                         <span className="font-medium text-slate-200">{book.title}</span>
                       )}
-                      <MetadataBadges book={book} />
+                      <FormatBadges book={book} />
                     </td>
                     {showAuthor && (
                       <td className="px-4 py-2">
@@ -490,8 +508,11 @@ export default function BookTable({
                                 key={file.id}
                                 className="flex items-start justify-between gap-4 px-0 py-1.5"
                               >
-                                <div className="min-w-0 flex-1">
-                                  <div className="break-all text-xs text-slate-300">{file.file_path}</div>
+                                <div className="flex min-w-0 flex-1 items-start gap-2">
+                                  <FileFormatTag format={file.file_format} />
+                                  <div className="min-w-0 flex-1 break-all text-xs text-slate-300">
+                                    {file.file_path}
+                                  </div>
                                 </div>
                                 <div className="shrink-0 whitespace-nowrap pl-4 text-xs text-slate-500">
                                   {formatFileSize(file.file_size)}

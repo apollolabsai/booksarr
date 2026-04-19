@@ -11,10 +11,32 @@ from backend.app.utils.opf_parser import OPFMetadata, parse_epub_opf, parse_opf
 
 logger = logging.getLogger("booksarr.scanner")
 
-EBOOK_EXTENSIONS = {".epub"}
+EBOOK_EXTENSIONS = {".epub", ".mobi"}
+AUDIO_EXTENSIONS = {".mp3", ".m4a", ".m4b", ".aac", ".flac", ".ogg", ".opus", ".wav"}
+AUDIOBOOK_ARCHIVE_EXTENSIONS = {".zip", ".rar"}
+_AUDIOBOOK_NAME_TOKENS = ("audiobook", "audio book", "audio-book")
 _TRAILING_PAREN_RE = re.compile(r"\s*\([^)]*\)\s*$")
 _SERIES_BRACKET_RE = re.compile(r"\s*-\s*\[[^\]]+\]\s*")
 _LEADING_SERIES_TOKEN_RE = re.compile(r"^\s*(?:\[[^\]]+\]|\([^)]*\))\s*-\s*")
+
+
+def _is_audiobook_archive(path: Path) -> bool:
+    if path.suffix.lower() not in AUDIOBOOK_ARCHIVE_EXTENSIONS:
+        return False
+    name = path.name.lower()
+    return any(token in name for token in _AUDIOBOOK_NAME_TOKENS)
+
+
+def _is_audio_file(path: Path) -> bool:
+    return path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS
+
+
+def _directory_audio_size(directory: Path) -> int:
+    total = 0
+    for entry in directory.iterdir():
+        if _is_audio_file(entry):
+            total += entry.stat().st_size
+    return total
 
 
 class ScanResult:
@@ -56,8 +78,8 @@ async def scan_library(db: AsyncSession, library_path: Path) -> ScanResult:
 
     # Step 2: Walk filesystem and collect current paths + metadata
     current_paths: set[str] = set()
-    # Map rel_path -> (author_name, fallback_book_name, standalone_in_author_root)
-    file_context: dict[str, tuple[str, str, bool]] = {}
+    # Map rel_path -> (author_name, fallback_book_name, standalone_in_author_root, file_format)
+    file_context: dict[str, tuple[str, str, bool, str]] = {}
 
     for author_dir in sorted(library_path.iterdir()):
         if not author_dir.is_dir() or author_dir.name.startswith("."):
@@ -67,38 +89,32 @@ async def scan_library(db: AsyncSession, library_path: Path) -> ScanResult:
         author = await _get_or_create_author(db, author_name)
         await _register_author_directory(db, author, author_dir.name)
 
-        # Support standalone ebooks directly inside the author folder.
-        for ebook_file in sorted(author_dir.iterdir()):
-            if (
-                not ebook_file.is_file()
-                or ebook_file.name.startswith(".")
-                or ebook_file.suffix.lower() not in EBOOK_EXTENSIONS
-            ):
+        # Support standalone files directly inside the author folder (one book per file).
+        for entry in sorted(author_dir.iterdir()):
+            if not entry.is_file() or entry.name.startswith("."):
+                continue
+            fmt = _classify_standalone_file(entry)
+            if fmt is None:
                 continue
 
-            rel_path = str(ebook_file.relative_to(library_path))
+            rel_path = str(entry.relative_to(library_path))
             current_paths.add(rel_path)
             if rel_path not in known_paths:
                 file_context[rel_path] = (
                     author_name,
-                    _clean_title_text(ebook_file.stem) or ebook_file.stem,
+                    _clean_title_text(entry.stem) or entry.stem,
                     True,
+                    fmt,
                 )
 
         for book_dir in sorted(author_dir.iterdir()):
             if not book_dir.is_dir() or book_dir.name.startswith("."):
                 continue
 
-            ebook_files = [
-                f for f in book_dir.iterdir()
-                if f.is_file() and f.suffix.lower() in EBOOK_EXTENSIONS
-            ]
-
-            for ebook_file in ebook_files:
-                rel_path = str(ebook_file.relative_to(library_path))
+            for rel_path, fmt in _collect_book_dir_artifacts(book_dir, library_path):
                 current_paths.add(rel_path)
                 if rel_path not in known_paths:
-                    file_context[rel_path] = (author_name, book_dir.name, False)
+                    file_context[rel_path] = (author_name, book_dir.name, False, fmt)
 
     result.total_files = len(current_paths)
 
@@ -121,7 +137,7 @@ async def scan_library(db: AsyncSession, library_path: Path) -> ScanResult:
     # Step 5: Process new files — create authors, parse OPF, create BookFile records
     if new_paths:
         for rel_path in sorted(new_paths):
-            author_name, fallback_book_name, is_standalone = file_context[rel_path]
+            author_name, fallback_book_name, is_standalone, fmt = file_context[rel_path]
 
             # Track new authors
             if author_name not in known_authors:
@@ -129,19 +145,22 @@ async def scan_library(db: AsyncSession, library_path: Path) -> ScanResult:
 
             known_authors.add(author_name)  # avoid re-flagging
 
-            ebook_file = library_path / rel_path
+            source_path = library_path / rel_path
 
-            opf = extract_best_metadata(ebook_file, author_name, fallback_book_name)
-
-            local_cover = _find_local_cover(ebook_file, standalone_in_author_root=is_standalone)
-
-            file_size = ebook_file.stat().st_size
+            if fmt == "audiobook" and source_path.is_dir():
+                file_size = _directory_audio_size(source_path)
+                local_cover = _find_local_cover_in_dir(source_path)
+                opf = _filename_fallback_metadata(source_path, author_name, fallback_book_name)
+            else:
+                opf = extract_best_metadata(source_path, author_name, fallback_book_name)
+                local_cover = _find_local_cover(source_path, standalone_in_author_root=is_standalone)
+                file_size = source_path.stat().st_size
 
             book_file = BookFile(
                 file_path=rel_path,
-                file_name=ebook_file.name,
+                file_name=source_path.name,
                 file_size=file_size,
-                file_format=ebook_file.suffix.lstrip(".").lower(),
+                file_format=fmt,
                 opf_title=opf.title or None,
                 opf_author=opf.author or author_name,
                 opf_isbn=opf.isbn or None,
@@ -330,3 +349,49 @@ def _find_local_cover(ebook_file: Path, standalone_in_author_root: bool) -> str 
             return str(candidate)
 
     return None
+
+
+def _find_local_cover_in_dir(directory: Path) -> str | None:
+    for name in ("cover.jpg", "cover.jpeg", "cover.png", "folder.jpg", "folder.png"):
+        candidate = directory / name
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def _classify_standalone_file(entry: Path) -> str | None:
+    suffix = entry.suffix.lower()
+    if suffix in EBOOK_EXTENSIONS:
+        return suffix.lstrip(".")
+    if _is_audiobook_archive(entry):
+        return "audiobook"
+    return None
+
+
+def _collect_book_dir_artifacts(book_dir: Path, library_path: Path) -> list[tuple[str, str]]:
+    """Return (rel_path, file_format) tuples for each distinct book artifact in a book directory.
+
+    A book directory may contain multiple formats of the same book (epub + mobi + audiobook).
+    Each artifact becomes one BookFile row.
+    """
+    artifacts: list[tuple[str, str]] = []
+    has_audiobook_artifact = False
+    has_audio_files = False
+
+    for entry in sorted(book_dir.iterdir()):
+        if entry.name.startswith("."):
+            continue
+        if entry.is_file():
+            suffix = entry.suffix.lower()
+            if suffix in EBOOK_EXTENSIONS:
+                artifacts.append((str(entry.relative_to(library_path)), suffix.lstrip(".")))
+            elif _is_audiobook_archive(entry):
+                artifacts.append((str(entry.relative_to(library_path)), "audiobook"))
+                has_audiobook_artifact = True
+            elif suffix in AUDIO_EXTENSIONS:
+                has_audio_files = True
+
+    if has_audio_files and not has_audiobook_artifact:
+        artifacts.append((str(book_dir.relative_to(library_path)), "audiobook"))
+
+    return artifacts
