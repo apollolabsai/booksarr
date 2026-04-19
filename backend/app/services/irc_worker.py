@@ -80,6 +80,7 @@ _reader_task: asyncio.Task | None = None
 _archive_task: asyncio.Task | None = None
 _book_download_task: asyncio.Task | None = None
 _writer: asyncio.StreamWriter | None = None
+_pending_import_refresh_tasks: dict[str, asyncio.Task] = {}
 
 
 @dataclass
@@ -2552,16 +2553,62 @@ def _normalize_author_key(author_name: str) -> str:
 
 async def _trigger_library_scan_after_irc_import(moved_path: Path, job_id: int | None = None):
     try:
-        from backend.app.services.library_sync import refresh_imported_library_file, run_full_sync, scan_status
+        from backend.app.services.library_sync import scan_status
     except Exception as exc:
         logger.warning("Could not import library sync after IRC move for %s: %s", moved_path, exc)
         return
 
+    pending_key = f"{job_id}:{moved_path}"
     if scan_status.status == "scanning":
-        logger.info(
-            "IRC import moved file into library but skipped auto-scan because a scan is already running: %s",
-            moved_path,
-        )
+        existing_task = _pending_import_refresh_tasks.get(pending_key)
+        if existing_task is None or existing_task.done():
+            logger.info(
+                "IRC import detected an active scan; queueing deferred ownership refresh after scan completes: %s",
+                moved_path,
+            )
+            _pending_import_refresh_tasks[pending_key] = asyncio.create_task(
+                _wait_for_active_scan_then_refresh_import(moved_path, job_id, pending_key),
+            )
+        else:
+            logger.info("IRC import already has a deferred ownership refresh queued: %s", moved_path)
+        return
+
+    await _refresh_library_state_for_import(moved_path, job_id)
+
+
+async def _wait_for_active_scan_then_refresh_import(
+    moved_path: Path,
+    job_id: int | None,
+    pending_key: str,
+):
+    try:
+        from backend.app.services.library_sync import scan_status
+    except Exception as exc:
+        logger.warning("Could not import library sync while deferring IRC refresh for %s: %s", moved_path, exc)
+        return
+
+    try:
+        for _ in range(120):
+            if scan_status.status != "scanning":
+                break
+            await asyncio.sleep(0.5)
+        else:
+            logger.warning(
+                "Deferred IRC ownership refresh timed out waiting for the active scan to finish: %s",
+                moved_path,
+            )
+            return
+
+        await _refresh_library_state_for_import(moved_path, job_id)
+    finally:
+        _pending_import_refresh_tasks.pop(pending_key, None)
+
+
+async def _refresh_library_state_for_import(moved_path: Path, job_id: int | None = None):
+    try:
+        from backend.app.services.library_sync import refresh_imported_library_file, run_full_sync
+    except Exception as exc:
+        logger.warning("Could not import library sync after IRC move for %s: %s", moved_path, exc)
         return
 
     expected_book_id = await _get_download_job_book_id(job_id) if job_id is not None else None
@@ -2581,7 +2628,10 @@ async def _trigger_library_scan_after_irc_import(moved_path: Path, job_id: int |
         imported_and_matched = False
 
     if imported_and_matched:
-        logger.info("Targeted IRC import refresh marked the book as owned without a full library scan: %s", moved_path)
+        logger.info(
+            "Targeted IRC import refresh marked the book as owned without a full library scan: %s",
+            moved_path,
+        )
         return
 
     logger.info("Targeted IRC import refresh did not fully resolve ownership; falling back to library scan: %s", moved_path)

@@ -628,6 +628,11 @@ async def _repair_local_file_links(
             bf.book_id is None
             or (bf.book and bf.book.hardcover_id is None)
             or (bf.book and not _linked_book_matches_local_metadata(bf.book, bf.opf_title, bf.opf_isbn))
+            or (
+                expected_book_ids is not None
+                and expected_book_ids.get(bf.file_path) is not None
+                and bf.book_id != expected_book_ids.get(bf.file_path)
+            )
         )
     ]
     if file_paths is not None:
@@ -751,7 +756,7 @@ async def _repair_local_file_links(
                     select(Book).where(Book.id == previous_book_id)
                 )
                 previous_book = previous_result.scalar_one_or_none()
-                if previous_book and not previous_book.hardcover_id:
+                if previous_book:
                     remaining = await db.execute(
                         select(func.count(BookFile.id)).where(
                             BookFile.book_id == previous_book_id,
@@ -759,7 +764,10 @@ async def _repair_local_file_links(
                         )
                     )
                     if (remaining.scalar() or 0) == 0:
-                        await db.delete(previous_book)
+                        if previous_book.hardcover_id:
+                            previous_book.is_owned = False
+                        else:
+                            await db.delete(previous_book)
         else:
             if current_book and not current_book.hardcover_id and author:
                 current_book.title = bf.opf_title or current_book.title
