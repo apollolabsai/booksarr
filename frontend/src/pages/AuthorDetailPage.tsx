@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { useAuthor, useMergeAuthorDirectories, useRefreshAuthor, useRemoveAuthor } from "../api/authors";
 import { getImageUrl } from "../types";
-import type { BookInAuthor, SeriesInAuthor } from "../types";
+import type { BookInAuthor, SeriesInAuthor, UnmatchedLocalFile } from "../types";
 import BookCard from "../components/BookCard";
 import BookTable from "../components/BookTable";
 import MobileBookList from "../components/MobileBookList";
@@ -20,6 +20,36 @@ const SORT_OPTIONS = [
   { value: "date", label: "Oldest First" },
   { value: "owned", label: "Owned First" },
 ];
+
+const UNMATCHED_FORMAT_STYLES: Record<string, string> = {
+  epub: "bg-emerald-500/15 text-emerald-300",
+  mobi: "bg-blue-500/15 text-blue-300",
+  audiobook: "bg-purple-500/15 text-purple-300",
+};
+
+function formatFileSize(size: number | null): string {
+  if (size == null || Number.isNaN(size)) return "Unknown size";
+  if (size < 1024) return `${size} B`;
+  const units = ["KB", "MB", "GB"];
+  let value = size / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2)} ${units[unitIndex]}`;
+}
+
+function UnmatchedFileTag({ format }: { format: string | null }) {
+  const key = (format || "").toLowerCase();
+  const label = key === "audiobook" ? "AUDIO" : (key || "FILE").toUpperCase();
+  const colorClass = UNMATCHED_FORMAT_STYLES[key] ?? "bg-slate-700 text-slate-300";
+  return (
+    <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${colorClass}`}>
+      {label}
+    </span>
+  );
+}
 
 export default function AuthorDetailPage() {
   const navigate = useNavigate();
@@ -69,6 +99,11 @@ export default function AuthorDetailPage() {
   const filteredBooks = searchNormalized
     ? (author?.books ?? []).filter((book) => book.title.toLowerCase().includes(searchNormalized))
     : (author?.books ?? []);
+  const filteredUnmatchedLocalFiles: UnmatchedLocalFile[] = searchNormalized
+    ? (author?.unmatched_local_files ?? []).filter((file) =>
+      file.file_path.toLowerCase().includes(searchNormalized)
+      || (file.linked_book_title ?? "").toLowerCase().includes(searchNormalized))
+    : (author?.unmatched_local_files ?? []);
 
   // Sort books
   const sortedBooks = [...filteredBooks].sort((a, b) => {
@@ -470,6 +505,37 @@ export default function AuthorDetailPage() {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+          {filteredUnmatchedLocalFiles.length > 0 && (
+            <div className="mb-4 rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
+              <div className="mb-1 flex items-center gap-3">
+                <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-amber-200">
+                  Unmatched Local Files
+                </h2>
+                <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-300">
+                  {filteredUnmatchedLocalFiles.length}
+                </span>
+              </div>
+              <p className="mb-3 text-sm text-slate-300">
+                Files currently present in this author&apos;s linked folder paths that are not attached to any shown book.
+              </p>
+              <div className="space-y-2">
+                {filteredUnmatchedLocalFiles.map((file) => (
+                  <div key={file.file_path} className="rounded-lg border border-slate-700 bg-slate-900/60 p-3">
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <UnmatchedFileTag format={file.file_format} />
+                      <span className="text-xs text-slate-400">{formatFileSize(file.file_size)}</span>
+                    </div>
+                    <code className="block break-all text-xs text-slate-200">{file.file_path}</code>
+                    {file.linked_book_title && (
+                      <div className="mt-2 text-xs text-amber-300">
+                        Linked to hidden book: {file.linked_book_title}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
           {author.bio && (

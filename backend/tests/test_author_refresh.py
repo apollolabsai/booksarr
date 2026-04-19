@@ -8,6 +8,7 @@ from backend.app.services.hardcover import HCBook, HCSeriesRef
 from backend.app.services import library_sync, scanner
 from backend.app.services.library_sync import refresh_single_author, refresh_single_book
 from backend.app.services.openlibrary import OLBook, OpenLibraryLookupResult
+from backend.app.routers import authors as authors_router
 
 
 class StubSessionFactory:
@@ -285,3 +286,73 @@ async def test_refresh_single_book_scans_linked_file_prefixes_and_clears_stale_o
     assert refreshed_book.is_owned is False
     assert refreshed_book.files == []
     assert remaining_files == []
+
+
+@pytest.mark.asyncio
+async def test_get_author_includes_local_files_not_matched_to_shown_books(
+    db_session,
+    monkeypatch,
+    tmp_path,
+):
+    author = Author(name="N. K. Jemisin")
+    db_session.add(author)
+    await db_session.flush()
+    db_session.add(AuthorDirectory(author_id=author.id, dir_path="N. K. Jemisin", is_primary=True))
+
+    shown_book = Book(
+        title="The Fifth Season",
+        author_id=author.id,
+        hardcover_id=101,
+        is_owned=True,
+    )
+    hidden_book = Book(
+        title="The Broken Kingdoms Sampler",
+        author_id=author.id,
+        hardcover_id=102,
+        is_owned=True,
+        manual_visibility="hidden",
+    )
+    db_session.add_all([shown_book, hidden_book])
+    await db_session.flush()
+    db_session.add_all([
+        BookFile(
+            book_id=shown_book.id,
+            file_path="N. K. Jemisin/The Fifth Season/The Fifth Season.epub",
+            file_name="The Fifth Season.epub",
+            file_format="epub",
+        ),
+        BookFile(
+            book_id=hidden_book.id,
+            file_path="N. K. Jemisin/The Broken Kingdoms Sampler/The Broken Kingdoms Sampler.epub",
+            file_name="The Broken Kingdoms Sampler.epub",
+            file_format="epub",
+        ),
+    ])
+    await db_session.commit()
+
+    shown_path = tmp_path / "N. K. Jemisin" / "The Fifth Season" / "The Fifth Season.epub"
+    shown_path.parent.mkdir(parents=True, exist_ok=True)
+    shown_path.write_text("shown", encoding="utf-8")
+
+    hidden_path = tmp_path / "N. K. Jemisin" / "The Broken Kingdoms Sampler" / "The Broken Kingdoms Sampler.epub"
+    hidden_path.parent.mkdir(parents=True, exist_ok=True)
+    hidden_path.write_text("hidden", encoding="utf-8")
+
+    orphan_path = tmp_path / "N. K. Jemisin" / "How Long 'til Black Future Month?" / "How Long 'til Black Future Month?.epub"
+    orphan_path.parent.mkdir(parents=True, exist_ok=True)
+    orphan_path.write_text("orphan", encoding="utf-8")
+
+    monkeypatch.setattr(authors_router, "BOOKS_DIR", tmp_path)
+
+    detail = await authors_router.get_author(author.id, db_session)
+    unmatched_by_path = {file.file_path: file for file in detail.unmatched_local_files}
+
+    assert "N. K. Jemisin/The Fifth Season/The Fifth Season.epub" not in unmatched_by_path
+    assert "N. K. Jemisin/The Broken Kingdoms Sampler/The Broken Kingdoms Sampler.epub" in unmatched_by_path
+    assert "N. K. Jemisin/How Long 'til Black Future Month?/How Long 'til Black Future Month?.epub" in unmatched_by_path
+    assert unmatched_by_path[
+        "N. K. Jemisin/The Broken Kingdoms Sampler/The Broken Kingdoms Sampler.epub"
+    ].linked_book_title == "The Broken Kingdoms Sampler"
+    assert unmatched_by_path[
+        "N. K. Jemisin/How Long 'til Black Future Month?/How Long 'til Black Future Month?.epub"
+    ].linked_book_title is None

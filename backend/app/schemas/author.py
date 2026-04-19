@@ -26,6 +26,7 @@ class AuthorDetail(AuthorSummary):
     author_directories: list["AuthorDirectoryEntry"]
     books: list["BookInAuthor"]
     series: list["SeriesInAuthor"]
+    unmatched_local_files: list["UnmatchedLocalFile"]
 
 
 class AuthorPortraitOption(BaseModel):
@@ -108,6 +109,15 @@ class LocalBookFile(BaseModel):
     file_name: str
     file_size: int | None
     file_format: str | None
+
+
+class UnmatchedLocalFile(BaseModel):
+    file_path: str
+    file_name: str
+    file_size: int | None
+    file_format: str | None
+    linked_book_id: int | None = None
+    linked_book_title: str | None = None
 
 
 class BookInAuthor(BaseModel):

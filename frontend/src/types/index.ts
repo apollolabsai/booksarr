@@ -82,6 +82,15 @@ export interface LocalBookFile {
   file_format: string | null;
 }
 
+export interface UnmatchedLocalFile {
+  file_path: string;
+  file_name: string;
+  file_size: number | null;
+  file_format: string | null;
+  linked_book_id: number | null;
+  linked_book_title: string | null;
+}
+
 export interface BookInAuthor {
   id: number;
   title: string;
@@ -135,6 +144,7 @@ export interface AuthorDetail extends Author {
   author_directories: AuthorDirectoryEntry[];
   books: BookInAuthor[];
   series: SeriesInAuthor[];
+  unmatched_local_files: UnmatchedLocalFile[];
 }
 
 export interface AuthorDirectoryMergeResponse {
