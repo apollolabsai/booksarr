@@ -596,6 +596,34 @@ export default function SettingsPage({ section }: { section: SettingsSection }) 
               </div>
             )}
 
+            {(lastScanSummary.new_books_list?.length > 0 || lastScanSummary.isbn_gains > 0) && (
+              <div className="grid gap-4 sm:grid-cols-2 mb-4">
+                {lastScanSummary.new_books_list?.length > 0 && (
+                  <div className="rounded-lg border border-slate-700 bg-slate-900/30 px-4 py-3">
+                    <div className="text-xs uppercase tracking-wide text-slate-500 mb-2">
+                      New Books Added ({lastScanSummary.new_books_list.length}{lastScanSummary.books_added > lastScanSummary.new_books_list.length ? "+" : ""})
+                    </div>
+                    <div className="space-y-0.5 max-h-48 overflow-y-auto">
+                      {lastScanSummary.new_books_list.map((b, i) => (
+                        <div key={i} className="flex items-baseline gap-1.5 text-xs">
+                          <span className="text-slate-300 truncate">{b.title}</span>
+                          <span className="shrink-0 text-slate-600">—</span>
+                          <span className="shrink-0 text-slate-500">{b.author}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {lastScanSummary.isbn_gains > 0 && (
+                  <div className="rounded-lg border border-slate-700 bg-slate-900/30 px-4 py-3">
+                    <div className="text-xs uppercase tracking-wide text-slate-500 mb-2">ISBN Gains</div>
+                    <div className="text-2xl font-semibold text-emerald-400">{lastScanSummary.isbn_gains}</div>
+                    <div className="text-xs text-slate-500 mt-1">books gained a valid ISBN this scan</div>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
                 {[
                 { key: "hardcover", label: "Hardcover", summary: lastScanSummary.hardcover ?? EMPTY_SCAN_SOURCE },

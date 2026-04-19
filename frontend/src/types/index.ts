@@ -273,6 +273,8 @@ export interface ScanSummary {
   books_added: number;
   books_hidden: number;
   hidden_by_category: HiddenCategorySummary[];
+  new_books_list: { title: string; author: string }[];
+  isbn_gains: number;
   hardcover: ScanSourceSummary;
   google: ScanSourceSummary;
   openlibrary: ScanSourceSummary;

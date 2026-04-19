@@ -6,7 +6,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -53,6 +53,21 @@ _ARTICLE_RE = re.compile(r"^(a|an|the)\s+", re.IGNORECASE)
 # Cover height threshold — stop looking for better covers once met
 COVER_HEIGHT_THRESHOLD = 2000
 OL_LOG_INTERVAL = 50
+
+
+def _no_valid_isbn_filter():
+    """SQLAlchemy WHERE clause: books with no valid ISBN from any source."""
+    def _nv(col):
+        return or_(col.is_(None), col == "")
+    return and_(
+        _nv(Book.isbn),
+        _nv(Book.hardcover_isbn_10),
+        _nv(Book.hardcover_isbn_13),
+        _nv(Book.google_isbn_10),
+        _nv(Book.google_isbn_13),
+        _nv(Book.ol_isbn_10),
+        _nv(Book.ol_isbn_13),
+    )
 SUFFICIENT_COVER_HEIGHT = 500
 TARGET_COVER_RATIO = 2 / 3
 
@@ -1101,6 +1116,8 @@ class ScanRunSummary:
     books_removed: int = 0
     books_hidden: int = 0
     hidden_by_category: list[dict[str, str | int]] = field(default_factory=list)
+    new_books_list: list[dict] = field(default_factory=list)
+    isbn_gains: int = 0
     hardcover: SourceRunSummary = field(default_factory=SourceRunSummary)
     google: SourceRunSummary = field(default_factory=SourceRunSummary)
     openlibrary: SourceRunSummary = field(default_factory=SourceRunSummary)
@@ -1122,6 +1139,8 @@ class ScanRunSummary:
             "books_added": self.books_added,
             "books_hidden": self.books_hidden,
             "hidden_by_category": self.hidden_by_category,
+            "new_books_list": self.new_books_list,
+            "isbn_gains": self.isbn_gains,
             "hardcover": self.hardcover.to_dict(),
             "google": self.google.to_dict(),
             "openlibrary": self.openlibrary.to_dict(),
@@ -1431,6 +1450,7 @@ async def run_full_sync(force: bool = False):
                 new_author_count = 0
                 books_added = 0
                 books_removed = 0
+                max_existing_book_id = (await db.execute(select(func.max(Book.id)))).scalar_one_or_none() or 0
                 for i, author in enumerate(authors):
                     author_has_manual_image = bool(author.manual_image_source and author.manual_image_url)
                     author_needs_cached_image = not author.image_cached_path
@@ -1766,6 +1786,22 @@ async def run_full_sync(force: bool = False):
                 summary.books_removed = books_removed
                 scan_status.progress = 80.0
 
+                if summary.books_added > 0 and max_existing_book_id > 0:
+                    new_books_q = await db.execute(
+                        select(Book.title, Author.name)
+                        .join(Author, Book.author_id == Author.id)
+                        .where(Book.id > max_existing_book_id)
+                        .order_by(Author.name, Book.title)
+                        .limit(200)
+                    )
+                    summary.new_books_list = [
+                        {"title": r[0], "author": r[1]} for r in new_books_q.all()
+                    ]
+
+                no_isbn_before = (await db.execute(
+                    select(func.count()).where(_no_valid_isbn_filter())
+                )).scalar_one()
+
                 # Phase 5: Publish date enrichment
                 # Hardcover remains the authoritative release_date.
                 # Google Books and Open Library dates are stored separately.
@@ -2033,6 +2069,11 @@ async def run_full_sync(force: bool = False):
                             )
                     else:
                         logger.info("Publish date sources already finalized for all books; skipping phase 5")
+
+                no_isbn_after = (await db.execute(
+                    select(func.count()).where(_no_valid_isbn_filter())
+                )).scalar_one()
+                summary.isbn_gains = max(0, no_isbn_before - no_isbn_after)
 
                 scan_status.progress = 87.0
 
