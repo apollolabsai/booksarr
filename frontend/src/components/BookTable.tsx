@@ -30,30 +30,6 @@ function formatFileSize(size: number | null): string {
   return `${value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2)} ${units[unitIndex]}`;
 }
 
-function OwnedIndicator({ count }: { count: number }) {
-  if (count > 1) {
-    return (
-      <div
-        className="inline-flex min-w-5 items-center justify-center rounded-full bg-emerald-500 px-1.5 py-0.5 text-[10px] font-semibold text-white"
-        title={`${count} owned copies`}
-      >
-        {count}
-      </div>
-    );
-  }
-
-  return (
-    <div className="inline-flex bg-emerald-500 rounded-full p-0.5" title="Owned">
-      <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
-        <path
-          fillRule="evenodd"
-          d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-          clipRule="evenodd"
-        />
-      </svg>
-    </div>
-  );
-}
 
 function formatSeriesPosition(book: BookLike): string {
   if (!("series_info" in book) || !book.series_info || book.series_info.length === 0) return "";
@@ -287,7 +263,7 @@ export default function BookTable({
     });
   };
 
-  const detailColSpan = (showAuthor ? 9 : 8) + (showSelectionColumn ? 1 : 0);
+  const detailColSpan = (showAuthor ? 8 : 7) + (showSelectionColumn ? 1 : 0);
 
   return (
     <>
@@ -296,7 +272,6 @@ export default function BookTable({
           <thead className="border-b border-slate-700 bg-slate-800/80 text-[11px] uppercase tracking-wide text-slate-400">
             <tr>
               {showSelectionColumn && <th className="px-4 py-2 w-10"></th>}
-              <th className="px-4 py-2 w-10"></th>
               <th className="px-4 py-2 w-12"></th>
               <th className="px-4 py-2">
                 <button type="button" onClick={() => handleSort("title")} className="hover:text-slate-200 transition-colors">
@@ -356,13 +331,6 @@ export default function BookTable({
                         />
                       </td>
                     )}
-                    <td className="px-4 py-2 text-center">
-                      {book.is_owned ? (
-                        <OwnedIndicator count={book.owned_copy_count} />
-                      ) : (
-                        <div className="w-4 h-4 rounded-full border border-dashed border-slate-500 mx-auto" />
-                      )}
-                    </td>
                     <td className="px-4 py-2">
                       <div className={`w-8 h-12 rounded overflow-hidden flex-shrink-0 ${coverPresentation.frameClassName}`}>
                         {imgUrl ? (
