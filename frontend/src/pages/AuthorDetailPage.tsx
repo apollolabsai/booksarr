@@ -507,37 +507,6 @@ export default function AuthorDetailPage() {
               )}
             </div>
           )}
-          {filteredUnmatchedLocalFiles.length > 0 && (
-            <div className="mb-4 rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
-              <div className="mb-1 flex items-center gap-3">
-                <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-amber-200">
-                  Unmatched Local Files
-                </h2>
-                <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-300">
-                  {filteredUnmatchedLocalFiles.length}
-                </span>
-              </div>
-              <p className="mb-3 text-sm text-slate-300">
-                Files currently present in this author&apos;s linked folder paths that are not attached to any shown book.
-              </p>
-              <div className="space-y-2">
-                {filteredUnmatchedLocalFiles.map((file) => (
-                  <div key={file.file_path} className="rounded-lg border border-slate-700 bg-slate-900/60 p-3">
-                    <div className="mb-2 flex flex-wrap items-center gap-2">
-                      <UnmatchedFileTag format={file.file_format} />
-                      <span className="text-xs text-slate-400">{formatFileSize(file.file_size)}</span>
-                    </div>
-                    <code className="block break-all text-xs text-slate-200">{file.file_path}</code>
-                    {file.linked_book_title && (
-                      <div className="mt-2 text-xs text-amber-300">
-                        Linked to hidden book: {file.linked_book_title}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
           {author.bio && (
             <div className="text-sm text-slate-300 leading-relaxed">
               <p className="whitespace-pre-line">{displayBio}{bioTruncated && !bioExpanded ? "..." : ""}</p>
@@ -553,6 +522,32 @@ export default function AuthorDetailPage() {
           )}
         </div>
       </div>
+
+      {/* Unmatched Local Files */}
+      {filteredUnmatchedLocalFiles.length > 0 && (
+        <div className="mb-6 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3">
+          <div className="mb-2 flex items-center gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-200">
+              Unmatched Local Files
+            </span>
+            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-300">
+              {filteredUnmatchedLocalFiles.length}
+            </span>
+          </div>
+          <div className="divide-y divide-slate-700/50">
+            {filteredUnmatchedLocalFiles.map((file) => (
+              <div key={file.file_path} className="flex items-center gap-2 py-1.5">
+                <UnmatchedFileTag format={file.file_format} />
+                <code className="min-w-0 flex-1 truncate text-xs text-slate-300">{file.file_path}</code>
+                {file.linked_book_title && (
+                  <span className="shrink-0 text-[11px] text-amber-400">hidden: {file.linked_book_title}</span>
+                )}
+                <span className="shrink-0 text-xs text-slate-500">{formatFileSize(file.file_size)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Sort + View Controls */}
       <div className={`mb-6 ${isMobile ? "space-y-3" : "flex items-center justify-between"}`}>
