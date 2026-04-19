@@ -6,7 +6,7 @@ Booksarr is a Docker-based ebook library manager inspired by Radarr/Sonarr. It s
 
 ![Authors view](media/authorpng.png)
 
-![Author detail view](media/authordetail.png)
+![Author detail view](media/danbrown.png)
 
 ![Books view](media/books.png)
 

@@ -1,15 +1,12 @@
 import { Link } from "react-router-dom";
 import type { Book, BookInAuthor } from "../types";
 import { getBookCoverPresentation, getImageUrl } from "../types";
+import BookDownloadSelector from "./BookDownloadSelector";
 
 type BookLike = Book | BookInAuthor;
 
 function isFullBook(book: BookLike): book is Book {
   return "author_name" in book;
-}
-
-function downloadBook(bookId: number) {
-  window.location.assign(`/api/books/${bookId}/download`);
 }
 
 function getSeriesLabel(book: BookLike): string | null {
@@ -101,14 +98,25 @@ export default function MobileBookList({
                       Details
                     </a>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => downloadBook(book.id)}
+                  <BookDownloadSelector
+                    bookId={book.id}
+                    localFiles={book.local_files}
                     disabled={!book.is_owned}
-                    className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
-                  >
-                    Download
-                  </button>
+                    target="location"
+                    align="left"
+                    direction="down"
+                    menuWidthClassName="w-[18rem]"
+                    renderTrigger={({ toggle, disabled, hasMultiple }) => (
+                      <button
+                        type="button"
+                        onClick={toggle}
+                        disabled={disabled}
+                        className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+                      >
+                        {hasMultiple ? "Download..." : "Download"}
+                      </button>
+                    )}
+                  />
                 </div>
               </div>
             </div>

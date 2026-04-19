@@ -5,16 +5,13 @@ import { getBookCoverPresentation, getImageUrl } from "../types";
 import { useRefreshBook, useSetBookVisibility } from "../api/books";
 import CoverPickerDialog from "./CoverPickerDialog";
 import IrcSearchDialog from "./IrcSearchDialog";
+import BookDownloadSelector from "./BookDownloadSelector";
 
 type BookLike = Book | BookInAuthor;
 type TableSortKey = "title" | "series" | "year" | "rating" | "size";
 
 function isFullBook(book: BookLike): book is Book {
   return "author_name" in book;
-}
-
-function downloadBook(bookId: number) {
-  window.open(`/api/books/${bookId}/download`, "_blank", "noopener,noreferrer");
 }
 
 function formatFileSize(size: number | null): string {
@@ -416,16 +413,30 @@ export default function BookTable({
                             <circle cx="11" cy="11" r="6" strokeWidth={2} />
                           </svg>
                         </ActionIconButton>
-                        <ActionIconButton
-                          label={book.is_owned ? "Download book" : "No local file available"}
-                          onClick={() => downloadBook(book.id)}
+                        <BookDownloadSelector
+                          bookId={book.id}
+                          localFiles={localFiles}
                           disabled={!book.is_owned}
-                          preferBelow={index === 0}
-                        >
-                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14" />
-                          </svg>
-                        </ActionIconButton>
+                          direction={index === 0 ? "down" : "up"}
+                          renderTrigger={({ toggle, disabled, hasMultiple }) => (
+                            <ActionIconButton
+                              label={
+                                disabled
+                                  ? "No local file available"
+                                  : hasMultiple
+                                    ? "Choose file to download"
+                                    : "Download file"
+                              }
+                              onClick={toggle}
+                              disabled={disabled}
+                              preferBelow={index === 0}
+                            >
+                              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14" />
+                              </svg>
+                            </ActionIconButton>
+                          )}
+                        />
                         <ActionIconButton
                           label="Scan author folders and re-import metadata"
                           onClick={() => refreshBook.mutate(book.id)}
