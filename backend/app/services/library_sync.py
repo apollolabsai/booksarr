@@ -556,19 +556,24 @@ def _reparse_book_files(book: Book) -> tuple[str | None, str | None, str | None,
     return primary_title, primary_isbn, primary_publisher, primary_description
 
 
-def _get_author_scan_directories(author: Author | None) -> set[str]:
-    if author is None:
+def _get_author_scan_directories(author: Author | None, book: Book | None = None) -> set[str]:
+    if author is None and book is None:
         return set()
 
     dir_names = {
         directory.dir_path.strip()
-        for directory in author.author_directories
+        for directory in (author.author_directories if author is not None else [])
         if directory.dir_path and directory.dir_path.strip()
     }
+    for book_file in (book.files if book is not None else []):
+        path_parts = book_file.file_path.split("/", 1)
+        if path_parts and path_parts[0].strip():
+            dir_names.add(path_parts[0].strip())
+
     if not BOOKS_DIR.exists():
         return dir_names
 
-    normalized_author_name = _clean_author_text(author.name)
+    normalized_author_name = _clean_author_text(author.name if author is not None else "")
     if not normalized_author_name:
         return dir_names
 
@@ -2360,7 +2365,7 @@ async def refresh_single_book(book_id: int):
             if not book:
                 raise ValueError("Book not found")
 
-            author_scan_dirs = _get_author_scan_directories(book.author)
+            author_scan_dirs = _get_author_scan_directories(book.author, book)
             if author_scan_dirs:
                 await scan_library(db, BOOKS_DIR, author_dir_names=author_scan_dirs)
                 await _repair_local_file_links(db, author=book.author)
@@ -2375,6 +2380,7 @@ async def refresh_single_book(book_id: int):
                 refreshed_result = await db.execute(
                     select(Book)
                     .where(Book.id == book_id)
+                    .execution_options(populate_existing=True)
                     .options(
                         selectinload(Book.author).selectinload(Author.author_directories),
                         selectinload(Book.files),

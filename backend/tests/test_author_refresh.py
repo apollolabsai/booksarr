@@ -2,7 +2,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from backend.app.models import Author, AuthorDirectory, Book, BookSeries, Setting, Series
+from backend.app.models import Author, AuthorDirectory, Book, BookFile, BookSeries, Setting, Series
 from backend.app.services.google_books import GBook, GoogleLookupResult
 from backend.app.services.hardcover import HCBook, HCSeriesRef
 from backend.app.services import library_sync, scanner
@@ -231,3 +231,57 @@ async def test_refresh_single_book_scans_matching_author_directory_and_links_new
     assert len(refreshed_book.files) == 1
     assert refreshed_book.files[0].file_path == "Levitt, Steven D./Freakonomics/Freakonomics.epub"
     assert author_directories == ["Levitt, Steven D."]
+
+
+@pytest.mark.asyncio
+async def test_refresh_single_book_scans_linked_file_prefixes_and_clears_stale_ownership(
+    db_session,
+    monkeypatch,
+    tmp_path,
+):
+    author = Author(name="Robert Jordan")
+    db_session.add(author)
+    await db_session.flush()
+    db_session.add(AuthorDirectory(author_id=author.id, dir_path="Robert Jordan", is_primary=True))
+
+    book = Book(
+        title="The Eye of the World",
+        author_id=author.id,
+        hardcover_id=5188,
+        is_owned=True,
+    )
+    db_session.add(book)
+    await db_session.flush()
+    db_session.add(
+        BookFile(
+            book_id=book.id,
+            file_path=(
+                "Chuck Dixon/Robert Jordan's Wheel of Time_ Eye of the World #3 (413)/"
+                "Robert Jordan's Wheel of Time_ Eye of the - Chuck Dixon.epub"
+            ),
+            file_name="Robert Jordan's Wheel of Time_ Eye of the - Chuck Dixon.epub",
+            file_format="epub",
+        )
+    )
+    await db_session.commit()
+
+    monkeypatch.setattr("backend.app.services.library_sync.async_session", StubSessionFactory(db_session))
+    monkeypatch.setattr(library_sync, "BOOKS_DIR", tmp_path)
+
+    (tmp_path / "Robert Jordan").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "Chuck Dixon").mkdir(parents=True, exist_ok=True)
+
+    await refresh_single_book(book.id)
+
+    db_session.expire_all()
+    refreshed = await db_session.execute(
+        select(Book)
+        .where(Book.id == book.id)
+        .options(selectinload(Book.files))
+    )
+    refreshed_book = refreshed.scalar_one()
+    remaining_files = (await db_session.execute(select(BookFile))).scalars().all()
+
+    assert refreshed_book.is_owned is False
+    assert refreshed_book.files == []
+    assert remaining_files == []
