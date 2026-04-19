@@ -27,6 +27,7 @@ from backend.app.utils.book_visibility import get_book_visibility_settings, is_b
 from backend.app.utils.isbn import has_any_valid_isbn
 from backend.app.services.image_cache import get_cached_cover_aspect_ratio
 from backend.app.services.author_images import get_author_portrait_options, set_author_portrait_selection
+from backend.app.services.author_management import remove_author_and_books
 from backend.app.services.library_sync import (
     _get_or_create_series,
     _deduplicate_books,
@@ -297,6 +298,20 @@ async def refresh_author_route(author_id: int):
         raise HTTPException(status_code=502, detail=f"Hardcover lookup failed: {exc}") from exc
 
     return {"status": "ok", "message": "Author refreshed"}
+
+
+@router.delete("/{author_id}")
+async def delete_author_route(author_id: int, db: AsyncSession = Depends(get_db)):
+    try:
+        removed_book_count = await remove_author_and_books(db, author_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {
+        "status": "ok",
+        "message": "Author removed from database",
+        "removed_book_count": removed_book_count,
+    }
 
 
 def _find_merge_conflicts(source_dir: Path, target_dir: Path, relative_path: Path | None = None) -> list[str]:

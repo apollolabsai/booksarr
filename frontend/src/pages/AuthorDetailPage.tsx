@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
-import { useAuthor, useMergeAuthorDirectories, useRefreshAuthor } from "../api/authors";
+import { useAuthor, useMergeAuthorDirectories, useRefreshAuthor, useRemoveAuthor } from "../api/authors";
 import { getImageUrl } from "../types";
 import type { BookInAuthor, SeriesInAuthor } from "../types";
 import BookCard from "../components/BookCard";
@@ -26,6 +26,7 @@ export default function AuthorDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { data: author, isLoading } = useAuthor(Number(id));
   const refreshAuthor = useRefreshAuthor();
+  const removeAuthor = useRemoveAuthor();
   const mergeAuthorDirectories = useMergeAuthorDirectories();
   const isMobile = useIsMobile();
   const [sort, setSort] = useState("series");
@@ -156,6 +157,17 @@ export default function AuthorDetailPage() {
       },
     });
   }, [authorName, navigate, selectedBooks]);
+
+  const handleRemoveAuthor = useCallback(async () => {
+    if (!author) return;
+    const confirmed = window.confirm(
+      `Remove ${author.name} and all of this author's books from the database?\n\nThis will not delete any files or folders.`,
+    );
+    if (!confirmed) return;
+
+    await removeAuthor.mutateAsync(author.id);
+    navigate("/", { replace: true });
+  }, [author, navigate, removeAuthor]);
 
   if (isLoading || !author) {
     return (
@@ -333,7 +345,26 @@ export default function AuthorDetailPage() {
                 </svg>
                 {refreshAuthor.isPending ? "Refreshing..." : "Refresh Author"}
               </button>
+              <button
+                type="button"
+                onClick={handleRemoveAuthor}
+                disabled={removeAuthor.isPending}
+                className="inline-flex items-center gap-2 rounded-md border border-rose-700 bg-rose-950/40 px-3 py-1.5 text-sm text-rose-200 transition-colors hover:bg-rose-900/50 disabled:cursor-not-allowed disabled:opacity-50"
+                title="Remove this author and all linked books from the database without deleting files"
+              >
+                <svg className={`h-4 w-4 ${removeAuthor.isPending ? "animate-pulse" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 7h12M9 7V5h6v2m-7 4v6m4-6v6m4-6v6M5 7l1 12h12l1-12" />
+                </svg>
+                {removeAuthor.isPending ? "Removing..." : "Remove Author"}
+              </button>
             </div>
+            {removeAuthor.error && (
+              <div className="mt-2 text-sm text-rose-300">
+                {removeAuthor.error instanceof Error
+                  ? removeAuthor.error.message
+                  : "Unable to remove author"}
+              </div>
+            )}
           </div>
           <div className="flex gap-4 text-sm text-slate-400 mb-4">
             <span><span className="text-emerald-400 font-semibold">{author.book_count_local}</span> owned</span>
