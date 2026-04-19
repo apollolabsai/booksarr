@@ -7,9 +7,13 @@ const links = [
   { to: "/irc-downloads", label: "IRC Downloads", icon: "M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-4l-3 3-3-3z" },
 ];
 
-const settingsLinks = [
+const settingsLinks: { to: string; label: string; children?: { to: string; label: string }[] }[] = [
   { to: "/settings/api-keys", label: "API Keys" },
-  { to: "/settings/profiles", label: "Profiles" },
+  {
+    to: "/settings/profiles",
+    label: "Profiles",
+    children: [{ to: "/books/hidden", label: "Hidden Books" }],
+  },
   { to: "/settings/metadata-refreshes", label: "Metadata Refreshes" },
   { to: "/settings/irc", label: "IRC" },
   { to: "/settings/logs", label: "Logs" },
@@ -63,23 +67,42 @@ export default function Sidebar() {
             </svg>
             Settings
           </NavLink>
-          <div className="mt-1 ml-5 space-y-1 border-l border-slate-700 pl-3">
+          <div className="mt-1 ml-5 space-y-0.5 border-l border-slate-700 pl-3">
             {settingsLinks.map((link) => {
               const active = location.pathname === link.to;
               return (
-                <NavLink
-                  key={link.to}
-                  to={link.to}
-                  className={() =>
-                    `block rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                      active
-                        ? "bg-slate-700/70 text-emerald-400"
-                        : "text-slate-400 hover:bg-slate-700/40 hover:text-slate-200"
-                    }`
-                  }
-                >
-                  {link.label}
-                </NavLink>
+                <div key={link.to}>
+                  <NavLink
+                    to={link.to}
+                    className={() =>
+                      `block rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                        active
+                          ? "bg-slate-700/70 text-emerald-400"
+                          : "text-slate-400 hover:bg-slate-700/40 hover:text-slate-200"
+                      }`
+                    }
+                  >
+                    {link.label}
+                  </NavLink>
+                  {link.children?.map((child) => {
+                    const childActive = location.pathname === child.to;
+                    return (
+                      <NavLink
+                        key={child.to}
+                        to={child.to}
+                        className={() =>
+                          `block rounded-md py-1 pl-5 pr-3 text-xs font-medium transition-colors ${
+                            childActive
+                              ? "text-emerald-400"
+                              : "text-slate-500 hover:text-slate-300"
+                          }`
+                        }
+                      >
+                        {child.label}
+                      </NavLink>
+                    );
+                  })}
+                </div>
               );
             })}
           </div>
