@@ -6,7 +6,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -42,6 +42,7 @@ from backend.app.services.google_books import (
 )
 from backend.app.utils.epub_cover import get_image_dimensions
 from backend.app.utils.api_usage import begin_api_usage_batch, clear_api_usage_batch, flush_api_usage_batch
+from backend.app.utils.author_name import normalize_author_key
 from backend.app.utils.isbn import normalize_isbn, normalized_valid_isbn, extract_isbn_variants
 
 logger = logging.getLogger("booksarr.sync")
@@ -51,6 +52,22 @@ _ARTICLE_RE = re.compile(r"^(a|an|the)\s+", re.IGNORECASE)
 
 # Cover height threshold — stop looking for better covers once met
 COVER_HEIGHT_THRESHOLD = 2000
+OL_LOG_INTERVAL = 50
+
+
+def _no_valid_isbn_filter():
+    """SQLAlchemy WHERE clause: books with no valid ISBN from any source."""
+    def _nv(col):
+        return or_(col.is_(None), col == "")
+    return and_(
+        _nv(Book.isbn),
+        _nv(Book.hardcover_isbn_10),
+        _nv(Book.hardcover_isbn_13),
+        _nv(Book.google_isbn_10),
+        _nv(Book.google_isbn_13),
+        _nv(Book.ol_isbn_10),
+        _nv(Book.ol_isbn_13),
+    )
 SUFFICIENT_COVER_HEIGHT = 500
 TARGET_COVER_RATIO = 2 / 3
 
@@ -555,6 +572,36 @@ def _reparse_book_files(book: Book) -> tuple[str | None, str | None, str | None,
     return primary_title, primary_isbn, primary_publisher, primary_description
 
 
+def _get_author_scan_directories(author: Author | None, book: Book | None = None) -> set[str]:
+    if author is None and book is None:
+        return set()
+
+    dir_names = {
+        directory.dir_path.strip()
+        for directory in (author.author_directories if author is not None else [])
+        if directory.dir_path and directory.dir_path.strip()
+    }
+    for book_file in (book.files if book is not None else []):
+        path_parts = book_file.file_path.split("/", 1)
+        if path_parts and path_parts[0].strip():
+            dir_names.add(path_parts[0].strip())
+
+    if not BOOKS_DIR.exists():
+        return dir_names
+
+    normalized_author_name = _clean_author_text(author.name if author is not None else "")
+    if not normalized_author_name:
+        return dir_names
+
+    for author_dir in BOOKS_DIR.iterdir():
+        if not author_dir.is_dir() or author_dir.name.startswith("."):
+            continue
+        if _clean_author_text(author_dir.name) == normalized_author_name:
+            dir_names.add(author_dir.name)
+
+    return dir_names
+
+
 def _linked_book_matches_local_metadata(
     book: Book,
     local_title: str | None,
@@ -628,21 +675,27 @@ async def _repair_local_file_links(
             bf.book_id is None
             or (bf.book and bf.book.hardcover_id is None)
             or (bf.book and not _linked_book_matches_local_metadata(bf.book, bf.opf_title, bf.opf_isbn))
+            or (
+                expected_book_ids is not None
+                and expected_book_ids.get(bf.file_path) is not None
+                and bf.book_id != expected_book_ids.get(bf.file_path)
+            )
         )
     ]
     if file_paths is not None:
         candidate_files = [bf for bf in candidate_files if bf.file_path in file_paths]
     if author is not None:
         author_dir_paths = {directory.dir_path for directory in author.author_directories}
+        author_key = normalize_author_key(author.name)
         candidate_files = [
             bf for bf in candidate_files
             if (
                 (bf.book and bf.book.author_id == author.id)
-                or ((bf.opf_author or "").strip() == author.name)
+                or (normalize_author_key(bf.opf_author) == author_key)
                 or (bf.file_path and bf.file_path.split("/")[0] in author_dir_paths)
                 or (
                     bf.file_path
-                    and _clean_author_text(bf.file_path.split("/")[0]) == author.name
+                    and normalize_author_key(bf.file_path.split("/")[0]) == author_key
                 )
             )
         ]
@@ -688,17 +741,46 @@ async def _repair_local_file_links(
                     matched_book.title,
                 )
 
+        author_key = normalize_author_key(bf.opf_author)
         author_result = await db.execute(
-            select(Author).where(Author.name == bf.opf_author)
+            select(Author)
+            .where(Author.author_key == author_key)
+            .order_by(
+                Author.hardcover_id.is_(None),
+                Author.book_count_local.desc(),
+                Author.book_count_total.desc(),
+                Author.id,
+            )
         )
-        author = author_result.scalar_one_or_none()
-        if not author and not matched_book:
+        matching_authors = author_result.scalars().all()
+        author = matching_authors[0] if matching_authors else None
+
+        # If opf_author didn't resolve to any known author, try the path-derived
+        # folder name instead. This handles epubs whose dc:creator is corrupt
+        # (e.g. set to the book title rather than the author name).
+        if not matching_authors and not matched_book:
+            fallback_key = normalize_author_key(fallback_author)
+            if fallback_key and fallback_key != author_key:
+                fallback_author_result = await db.execute(
+                    select(Author)
+                    .where(Author.author_key == fallback_key)
+                    .order_by(
+                        Author.hardcover_id.is_(None),
+                        Author.book_count_local.desc(),
+                        Author.book_count_total.desc(),
+                        Author.id,
+                    )
+                )
+                matching_authors = fallback_author_result.scalars().all()
+                author = matching_authors[0] if matching_authors else None
+
+        if not matching_authors and not matched_book:
             continue
 
         candidate_books: list[Book] = []
-        if author:
+        if matching_authors:
             books_result = await db.execute(
-                select(Book).where(Book.author_id == author.id)
+                select(Book).where(Book.author_id.in_([candidate.id for candidate in matching_authors]))
             )
             author_books = sorted(
                 books_result.scalars().all(),
@@ -751,7 +833,7 @@ async def _repair_local_file_links(
                     select(Book).where(Book.id == previous_book_id)
                 )
                 previous_book = previous_result.scalar_one_or_none()
-                if previous_book and not previous_book.hardcover_id:
+                if previous_book:
                     remaining = await db.execute(
                         select(func.count(BookFile.id)).where(
                             BookFile.book_id == previous_book_id,
@@ -759,7 +841,10 @@ async def _repair_local_file_links(
                         )
                     )
                     if (remaining.scalar() or 0) == 0:
-                        await db.delete(previous_book)
+                        if previous_book.hardcover_id:
+                            previous_book.is_owned = False
+                        else:
+                            await db.delete(previous_book)
         else:
             if current_book and not current_book.hardcover_id and author:
                 current_book.title = bf.opf_title or current_book.title
@@ -1031,6 +1116,8 @@ class ScanRunSummary:
     books_removed: int = 0
     books_hidden: int = 0
     hidden_by_category: list[dict[str, str | int]] = field(default_factory=list)
+    new_books_list: list[dict] = field(default_factory=list)
+    isbn_gains: int = 0
     hardcover: SourceRunSummary = field(default_factory=SourceRunSummary)
     google: SourceRunSummary = field(default_factory=SourceRunSummary)
     openlibrary: SourceRunSummary = field(default_factory=SourceRunSummary)
@@ -1052,6 +1139,8 @@ class ScanRunSummary:
             "books_added": self.books_added,
             "books_hidden": self.books_hidden,
             "hidden_by_category": self.hidden_by_category,
+            "new_books_list": self.new_books_list,
+            "isbn_gains": self.isbn_gains,
             "hardcover": self.hardcover.to_dict(),
             "google": self.google.to_dict(),
             "openlibrary": self.openlibrary.to_dict(),
@@ -1361,6 +1450,7 @@ async def run_full_sync(force: bool = False):
                 new_author_count = 0
                 books_added = 0
                 books_removed = 0
+                max_existing_book_id = (await db.execute(select(func.max(Book.id)))).scalar_one_or_none() or 0
                 for i, author in enumerate(authors):
                     author_has_manual_image = bool(author.manual_image_source and author.manual_image_url)
                     author_needs_cached_image = not author.image_cached_path
@@ -1696,6 +1786,22 @@ async def run_full_sync(force: bool = False):
                 summary.books_removed = books_removed
                 scan_status.progress = 80.0
 
+                if summary.books_added > 0 and max_existing_book_id > 0:
+                    new_books_q = await db.execute(
+                        select(Book.title, Author.name)
+                        .join(Author, Book.author_id == Author.id)
+                        .where(Book.id > max_existing_book_id)
+                        .order_by(Author.name, Book.title)
+                        .limit(200)
+                    )
+                    summary.new_books_list = [
+                        {"title": r[0], "author": r[1]} for r in new_books_q.all()
+                    ]
+
+                no_isbn_before = (await db.execute(
+                    select(func.count()).where(_no_valid_isbn_filter())
+                )).scalar_one()
+
                 # Phase 5: Publish date enrichment
                 # Hardcover remains the authoritative release_date.
                 # Google Books and Open Library dates are stored separately.
@@ -1863,10 +1969,15 @@ async def run_full_sync(force: bool = False):
 
                     if books_need_ol_fetch:
                         ol_cached = len(ol_candidates) - len(books_need_ol_fetch)
+                        total_ol = len(books_need_ol_fetch)
                         scan_status.message = (
                             f"Fetching dates from Open Library... "
-                            f"{len(books_need_ol_fetch)} remaining "
-                            f"({ol_cached} cached)"
+                            f"0/{total_ol} ({ol_cached} cached)"
+                        )
+                        logger.info(
+                            "Open Library: fetching %d book(s) (%d cached)",
+                            total_ol,
+                            ol_cached,
                         )
                         ol_client = OpenLibraryClient()
                         try:
@@ -1883,11 +1994,15 @@ async def run_full_sync(force: bool = False):
                                     author_name = author_map.get(book.author_id, "")
                                     return await ol_client.search_book_with_result(book.title, author_name)
 
-                            results = await asyncio.gather(
-                                *[_fetch_ol_year(b) for b in books_need_ol_fetch]
-                            )
+                            async def _fetch_ol_year_tagged(book):
+                                return book, await _fetch_ol_year(book)
+
                             fetched_ol = 0
-                            for book, ol_lookup in zip(books_need_ol_fetch, results):
+                            completed_ol = 0
+                            tasks = [asyncio.create_task(_fetch_ol_year_tagged(b)) for b in books_need_ol_fetch]
+                            for coro in asyncio.as_completed(tasks):
+                                book, ol_lookup = await coro
+                                completed_ol += 1
                                 if ol_lookup.book:
                                     summary.openlibrary.record_match()
                                     ol_isbn_10, ol_isbn_13 = extract_isbn_variants(ol_lookup.book.isbn_list)
@@ -1905,6 +2020,19 @@ async def run_full_sync(force: bool = False):
                                 else:
                                     summary.openlibrary.record_failure(ol_lookup.reason)
                                     book.ol_edition_key = "_none"
+
+                                if completed_ol % OL_LOG_INTERVAL == 0 or completed_ol == total_ol:
+                                    scan_status.message = (
+                                        f"Fetching dates from Open Library... "
+                                        f"{completed_ol}/{total_ol} ({ol_cached} cached)"
+                                    )
+                                    logger.info(
+                                        "Open Library: %d/%d fetched, %d matched so far",
+                                        completed_ol,
+                                        total_ol,
+                                        fetched_ol,
+                                    )
+
                             await db.commit()
                             logger.info(
                                 "Open Library: fetched %d new, %d cached, %d no result",
@@ -1941,6 +2069,11 @@ async def run_full_sync(force: bool = False):
                             )
                     else:
                         logger.info("Publish date sources already finalized for all books; skipping phase 5")
+
+                no_isbn_after = (await db.execute(
+                    select(func.count()).where(_no_valid_isbn_filter())
+                )).scalar_one()
+                summary.isbn_gains = max(0, no_isbn_before - no_isbn_after)
 
                 scan_status.progress = 87.0
 
@@ -2145,6 +2278,8 @@ async def run_full_sync(force: bool = False):
 
                     if books_need_ol_search:
                         ol_cover_map = {a.id: a.name for a in authors}
+                        total_ol_search = len(books_need_ol_search)
+                        logger.info("Open Library covers: searching %d book(s) with no cover", total_ol_search)
                         ol_client2 = OpenLibraryClient()
                         try:
                             sem = asyncio.Semaphore(10)
@@ -2164,10 +2299,14 @@ async def run_full_sync(force: bool = False):
                                         book.title, author_name
                                     )
 
-                            results = await asyncio.gather(
-                                *[_fetch_ol_cover(b) for b in books_need_ol_search]
-                            )
-                            for book, ol_lookup in zip(books_need_ol_search, results):
+                            async def _fetch_ol_cover_tagged(book):
+                                return book, await _fetch_ol_cover(book)
+
+                            completed_ol_search = 0
+                            tasks2 = [asyncio.create_task(_fetch_ol_cover_tagged(b)) for b in books_need_ol_search]
+                            for coro in asyncio.as_completed(tasks2):
+                                book, ol_lookup = await coro
+                                completed_ol_search += 1
                                 if ol_lookup.book:
                                     summary.openlibrary.record_match()
                                     ol_isbn_10, ol_isbn_13 = extract_isbn_variants(ol_lookup.book.isbn_list)
@@ -2184,6 +2323,17 @@ async def run_full_sync(force: bool = False):
                                 else:
                                     summary.openlibrary.record_failure(ol_lookup.reason)
                                     book.ol_edition_key = "_none"
+
+                                if completed_ol_search % OL_LOG_INTERVAL == 0 or completed_ol_search == total_ol_search:
+                                    scan_status.message = (
+                                        f"Fetching missing covers from Open Library... "
+                                        f"{completed_ol_search}/{total_ol_search}"
+                                    )
+                                    logger.info(
+                                        "Open Library covers: %d/%d searched",
+                                        completed_ol_search,
+                                        total_ol_search,
+                                    )
                         finally:
                             await ol_client2.close()
 
@@ -2307,7 +2457,7 @@ async def refresh_single_book(book_id: int):
                 select(Book)
                 .where(Book.id == book_id)
                 .options(
-                    selectinload(Book.author),
+                    selectinload(Book.author).selectinload(Author.author_directories),
                     selectinload(Book.files),
                     selectinload(Book.book_series).selectinload(BookSeries.series),
                 )
@@ -2315,6 +2465,32 @@ async def refresh_single_book(book_id: int):
             book = result.scalar_one_or_none()
             if not book:
                 raise ValueError("Book not found")
+
+            author_scan_dirs = _get_author_scan_directories(book.author, book)
+            if author_scan_dirs:
+                await scan_library(db, BOOKS_DIR, author_dir_names=author_scan_dirs)
+                await _repair_local_file_links(db, author=book.author)
+                owned_count_result = await db.execute(
+                    select(func.count(Book.id)).where(
+                        Book.author_id == book.author_id,
+                        Book.is_owned == True,
+                    )
+                )
+                book.author.book_count_local = owned_count_result.scalar() or 0
+
+                refreshed_result = await db.execute(
+                    select(Book)
+                    .where(Book.id == book_id)
+                    .execution_options(populate_existing=True)
+                    .options(
+                        selectinload(Book.author).selectinload(Author.author_directories),
+                        selectinload(Book.files),
+                        selectinload(Book.book_series).selectinload(BookSeries.series),
+                    )
+                )
+                refreshed_book = refreshed_result.scalar_one_or_none()
+                if refreshed_book is not None:
+                    book = refreshed_book
 
             await _refresh_book_from_scratch(db, book)
 

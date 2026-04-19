@@ -19,14 +19,16 @@ from backend.app.schemas.author import (
     AuthorPortraitOption, AuthorPortraitOptionsResponse, AuthorPortraitSelectionRequest,
     AuthorPortraitSearchResponse, AuthorPortraitSearchResult,
     AuthorSearchCandidate, AuthorSearchResponse, AuthorAddRequest, LocalBookFile, AuthorDirectoryEntry,
-    AuthorDirectoryMergeRequest, AuthorDirectoryMergeResponse,
+    AuthorDirectoryMergeRequest, AuthorDirectoryMergeResponse, UnmatchedLocalFile,
 )
 from backend.app.services.hardcover import HardcoverClient, HardcoverLookupError
 from backend.app.services.google_image_search import search_author_portraits
+from backend.app.services.scanner import _classify_standalone_file, _collect_book_dir_artifacts
 from backend.app.utils.book_visibility import get_book_visibility_settings, is_book_visible
 from backend.app.utils.isbn import has_any_valid_isbn
 from backend.app.services.image_cache import get_cached_cover_aspect_ratio
 from backend.app.services.author_images import get_author_portrait_options, set_author_portrait_selection
+from backend.app.services.author_management import remove_author_and_books
 from backend.app.services.library_sync import (
     _get_or_create_series,
     _deduplicate_books,
@@ -35,6 +37,7 @@ from backend.app.services.library_sync import (
     get_api_key,
     refresh_single_author,
 )
+from backend.app.utils.author_name import normalize_author_key
 from backend.app.utils.hardcover_metadata import get_book_category_name, get_literary_type_name
 from backend.app.utils.isbn import normalized_valid_isbn
 from backend.app.utils.api_usage import begin_api_usage_batch, clear_api_usage_batch, flush_api_usage_batch
@@ -99,7 +102,17 @@ async def add_author_from_hardcover(
         result = await db.execute(select(Author).where(Author.hardcover_id == hc_author.id))
         author = result.scalar_one_or_none()
         if author is None:
-            result = await db.execute(select(Author).where(Author.name == hc_author.name))
+            result = await db.execute(
+                select(Author)
+                .where(Author.author_key == normalize_author_key(hc_author.name))
+                .order_by(
+                    Author.hardcover_id.is_(None),
+                    Author.book_count_local.desc(),
+                    Author.book_count_total.desc(),
+                    Author.id,
+                )
+                .limit(1)
+            )
             author = result.scalar_one_or_none()
 
         if author is None:
@@ -288,6 +301,20 @@ async def refresh_author_route(author_id: int):
     return {"status": "ok", "message": "Author refreshed"}
 
 
+@router.delete("/{author_id}")
+async def delete_author_route(author_id: int, db: AsyncSession = Depends(get_db)):
+    try:
+        removed_book_count = await remove_author_and_books(db, author_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {
+        "status": "ok",
+        "message": "Author removed from database",
+        "removed_book_count": removed_book_count,
+    }
+
+
 def _find_merge_conflicts(source_dir: Path, target_dir: Path, relative_path: Path | None = None) -> list[str]:
     rel_root = relative_path or Path(".")
     conflicts: list[str] = []
@@ -356,6 +383,40 @@ def _replace_absolute_dir_prefix(path_text: str, source_dir_path: Path, target_d
 
 def _is_ignorable_folder_merge_path(path: Path) -> bool:
     return path.name.lower() in _IGNORABLE_FOLDER_MERGE_FILES
+
+
+def _collect_current_author_local_files(author_directories: list[AuthorDirectory]) -> list[tuple[str, str, int | None, str | None]]:
+    artifacts: dict[str, tuple[str, int | None, str | None]] = {}
+
+    for directory in sorted(author_directories, key=lambda item: item.dir_path.lower()):
+        author_root = BOOKS_DIR / directory.dir_path
+        if not author_root.exists() or not author_root.is_dir():
+            continue
+
+        for entry in sorted(author_root.iterdir(), key=lambda item: item.name.lower()):
+            if entry.name.startswith("."):
+                continue
+
+            if entry.is_file():
+                file_format = _classify_standalone_file(entry)
+                if file_format is None:
+                    continue
+                rel_path = str(entry.relative_to(BOOKS_DIR))
+                artifacts.setdefault(rel_path, (entry.name, entry.stat().st_size, file_format))
+                continue
+
+            if not entry.is_dir():
+                continue
+
+            for rel_path, file_format in _collect_book_dir_artifacts(entry, BOOKS_DIR):
+                source_path = BOOKS_DIR / rel_path
+                file_size = source_path.stat().st_size if source_path.exists() and source_path.is_file() else None
+                artifacts.setdefault(rel_path, (source_path.name, file_size, file_format))
+
+    return [
+        (file_path, file_name, file_size, file_format)
+        for file_path, (file_name, file_size, file_format) in sorted(artifacts.items())
+    ]
 
 
 @router.post("/{author_id}/merge-directories", response_model=AuthorDirectoryMergeResponse)
@@ -561,6 +622,30 @@ async def get_author(author_id: int, db: AsyncSession = Depends(get_db)):
     # Filter to visible books only
     visibility_settings = await get_book_visibility_settings(db)
     books = [b for b in all_books if is_book_visible(b, visibility_settings)]
+    hidden_books_count = sum(1 for b in all_books if not is_book_visible(b, visibility_settings))
+    visible_book_file_paths = {
+        book_file.file_path
+        for book in books
+        for book_file in book.files
+    }
+    local_file_book_map = {
+        book_file.file_path: book
+        for book in all_books
+        for book_file in book.files
+    }
+    unmatched_local_files = [
+        UnmatchedLocalFile(
+            file_path=file_path,
+            file_name=file_name,
+            file_size=file_size,
+            file_format=file_format,
+            linked_book_id=linked_book.id if linked_book else None,
+            linked_book_title=linked_book.title if linked_book else None,
+        )
+        for file_path, file_name, file_size, file_format in _collect_current_author_local_files(author.author_directories)
+        if file_path not in visible_book_file_paths
+        for linked_book in [local_file_book_map.get(file_path)]
+    ]
 
     # Build series map
     series_map: dict[int, dict] = {}
@@ -657,6 +742,7 @@ async def get_author(author_id: int, db: AsyncSession = Depends(get_db)):
         image_cached_path=author.image_cached_path,
         book_count_local=sum(1 for book in books if book.is_owned),
         book_count_total=len(books),
+        book_count_hidden=hidden_books_count,
         author_directories=[
             AuthorDirectoryEntry(
                 id=directory.id,
@@ -670,6 +756,7 @@ async def get_author(author_id: int, db: AsyncSession = Depends(get_db)):
         ],
         books=books_out,
         series=series_out,
+        unmatched_local_files=unmatched_local_files,
     )
 
 

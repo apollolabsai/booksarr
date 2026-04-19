@@ -109,6 +109,22 @@ export function useRefreshAuthor() {
   });
 }
 
+export function useRemoveAuthor() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (authorId: number) =>
+      fetchApi(`/authors/${authorId}`, {
+        method: "DELETE",
+      }),
+    onSuccess: (_, authorId) => {
+      queryClient.invalidateQueries({ queryKey: ["authors"] });
+      queryClient.removeQueries({ queryKey: ["authors", authorId] });
+      queryClient.invalidateQueries({ queryKey: ["books"] });
+      queryClient.invalidateQueries({ queryKey: ["hiddenBooks"] });
+    },
+  });
+}
+
 export function useMergeAuthorDirectories() {
   const queryClient = useQueryClient();
   return useMutation({

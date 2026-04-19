@@ -1,9 +1,10 @@
 from datetime import datetime
 
 from sqlalchemy import Integer, String, Text, DateTime
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from backend.app.database import Base
+from backend.app.utils.author_name import clean_author_name, normalize_author_key
 
 
 class Author(Base):
@@ -11,6 +12,7 @@ class Author(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    author_key: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     hardcover_id: Mapped[int | None] = mapped_column(Integer, unique=True, nullable=True)
     hardcover_slug: Mapped[str | None] = mapped_column(String, nullable=True)
     bio: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -31,3 +33,9 @@ class Author(Base):
         back_populates="author",
         lazy="selectin",
     )
+
+    @validates("name")
+    def _set_name(self, _key: str, value: str) -> str:
+        cleaned = clean_author_name(value)
+        self.author_key = normalize_author_key(cleaned)
+        return cleaned

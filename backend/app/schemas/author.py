@@ -11,6 +11,7 @@ class AuthorSummary(BaseModel):
     image_cached_path: str | None
     book_count_local: int
     book_count_total: int
+    book_count_hidden: int = 0
 
     class Config:
         from_attributes = True
@@ -26,6 +27,7 @@ class AuthorDetail(AuthorSummary):
     author_directories: list["AuthorDirectoryEntry"]
     books: list["BookInAuthor"]
     series: list["SeriesInAuthor"]
+    unmatched_local_files: list["UnmatchedLocalFile"]
 
 
 class AuthorPortraitOption(BaseModel):
@@ -108,6 +110,17 @@ class LocalBookFile(BaseModel):
     file_name: str
     file_size: int | None
     file_format: str | None
+
+
+class UnmatchedLocalFile(BaseModel):
+    file_path: str
+    file_name: str
+    file_size: int | None
+    file_format: str | None
+    linked_book_id: int | None = None
+    linked_book_title: str | None = None
+    author_id: int | None = None
+    author_name: str | None = None
 
 
 class BookInAuthor(BaseModel):

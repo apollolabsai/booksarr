@@ -48,6 +48,8 @@ class ScanSummary(BaseModel):
     books_added: int = 0
     books_hidden: int = 0
     hidden_by_category: list[HiddenCategorySummary] = Field(default_factory=list)
+    new_books_list: list[dict] = Field(default_factory=list)
+    isbn_gains: int = 0
     hardcover: ScanSourceSummary = Field(default_factory=ScanSourceSummary)
     google: ScanSourceSummary = Field(default_factory=ScanSourceSummary)
     openlibrary: ScanSourceSummary = Field(default_factory=ScanSourceSummary)

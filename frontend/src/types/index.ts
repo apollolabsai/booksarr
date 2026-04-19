@@ -8,6 +8,7 @@ export interface Author {
   image_cached_path: string | null;
   book_count_local: number;
   book_count_total: number;
+  book_count_hidden: number;
 }
 
 export interface AuthorDirectoryEntry {
@@ -82,6 +83,17 @@ export interface LocalBookFile {
   file_format: string | null;
 }
 
+export interface UnmatchedLocalFile {
+  file_path: string;
+  file_name: string;
+  file_size: number | null;
+  file_format: string | null;
+  linked_book_id: number | null;
+  linked_book_title: string | null;
+  author_id: number | null;
+  author_name: string | null;
+}
+
 export interface BookInAuthor {
   id: number;
   title: string;
@@ -135,6 +147,7 @@ export interface AuthorDetail extends Author {
   author_directories: AuthorDirectoryEntry[];
   books: BookInAuthor[];
   series: SeriesInAuthor[];
+  unmatched_local_files: UnmatchedLocalFile[];
 }
 
 export interface AuthorDirectoryMergeResponse {
@@ -261,6 +274,8 @@ export interface ScanSummary {
   books_added: number;
   books_hidden: number;
   hidden_by_category: HiddenCategorySummary[];
+  new_books_list: { title: string; author: string }[];
+  isbn_gains: number;
   hardcover: ScanSourceSummary;
   google: ScanSourceSummary;
   openlibrary: ScanSourceSummary;

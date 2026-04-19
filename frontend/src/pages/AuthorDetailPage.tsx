@@ -1,8 +1,8 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
-import { useAuthor, useMergeAuthorDirectories, useRefreshAuthor } from "../api/authors";
+import { useAuthor, useMergeAuthorDirectories, useRefreshAuthor, useRemoveAuthor } from "../api/authors";
 import { getImageUrl } from "../types";
-import type { BookInAuthor, SeriesInAuthor } from "../types";
+import type { BookInAuthor, SeriesInAuthor, UnmatchedLocalFile } from "../types";
 import BookCard from "../components/BookCard";
 import BookTable from "../components/BookTable";
 import MobileBookList from "../components/MobileBookList";
@@ -21,11 +21,42 @@ const SORT_OPTIONS = [
   { value: "owned", label: "Owned First" },
 ];
 
+const UNMATCHED_FORMAT_STYLES: Record<string, string> = {
+  epub: "bg-emerald-500/15 text-emerald-300",
+  mobi: "bg-blue-500/15 text-blue-300",
+  audiobook: "bg-purple-500/15 text-purple-300",
+};
+
+function formatFileSize(size: number | null): string {
+  if (size == null || Number.isNaN(size)) return "Unknown size";
+  if (size < 1024) return `${size} B`;
+  const units = ["KB", "MB", "GB"];
+  let value = size / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2)} ${units[unitIndex]}`;
+}
+
+function UnmatchedFileTag({ format }: { format: string | null }) {
+  const key = (format || "").toLowerCase();
+  const label = key === "audiobook" ? "AUDIO" : (key || "FILE").toUpperCase();
+  const colorClass = UNMATCHED_FORMAT_STYLES[key] ?? "bg-slate-700 text-slate-300";
+  return (
+    <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${colorClass}`}>
+      {label}
+    </span>
+  );
+}
+
 export default function AuthorDetailPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const { data: author, isLoading } = useAuthor(Number(id));
   const refreshAuthor = useRefreshAuthor();
+  const removeAuthor = useRemoveAuthor();
   const mergeAuthorDirectories = useMergeAuthorDirectories();
   const isMobile = useIsMobile();
   const [sort, setSort] = useState("series");
@@ -68,6 +99,11 @@ export default function AuthorDetailPage() {
   const filteredBooks = searchNormalized
     ? (author?.books ?? []).filter((book) => book.title.toLowerCase().includes(searchNormalized))
     : (author?.books ?? []);
+  const filteredUnmatchedLocalFiles: UnmatchedLocalFile[] = searchNormalized
+    ? (author?.unmatched_local_files ?? []).filter((file) =>
+      file.file_path.toLowerCase().includes(searchNormalized)
+      || (file.linked_book_title ?? "").toLowerCase().includes(searchNormalized))
+    : (author?.unmatched_local_files ?? []);
 
   // Sort books
   const sortedBooks = [...filteredBooks].sort((a, b) => {
@@ -156,6 +192,17 @@ export default function AuthorDetailPage() {
       },
     });
   }, [authorName, navigate, selectedBooks]);
+
+  const handleRemoveAuthor = useCallback(async () => {
+    if (!author) return;
+    const confirmed = window.confirm(
+      `Remove ${author.name} and all of this author's books from the database?\n\nThis will not delete any files or folders.`,
+    );
+    if (!confirmed) return;
+
+    await removeAuthor.mutateAsync(author.id);
+    navigate("/", { replace: true });
+  }, [author, navigate, removeAuthor]);
 
   if (isLoading || !author) {
     return (
@@ -333,12 +380,39 @@ export default function AuthorDetailPage() {
                 </svg>
                 {refreshAuthor.isPending ? "Refreshing..." : "Refresh Author"}
               </button>
+              <button
+                type="button"
+                onClick={handleRemoveAuthor}
+                disabled={removeAuthor.isPending}
+                className="inline-flex items-center gap-2 rounded-md border border-rose-700 bg-rose-950/40 px-3 py-1.5 text-sm text-rose-200 transition-colors hover:bg-rose-900/50 disabled:cursor-not-allowed disabled:opacity-50"
+                title="Remove this author and all linked books from the database without deleting files"
+              >
+                <svg className={`h-4 w-4 ${removeAuthor.isPending ? "animate-pulse" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 7h12M9 7V5h6v2m-7 4v6m4-6v6m4-6v6M5 7l1 12h12l1-12" />
+                </svg>
+                {removeAuthor.isPending ? "Removing..." : "Remove Author"}
+              </button>
             </div>
+            {removeAuthor.error && (
+              <div className="mt-2 text-sm text-rose-300">
+                {removeAuthor.error instanceof Error
+                  ? removeAuthor.error.message
+                  : "Unable to remove author"}
+              </div>
+            )}
           </div>
           <div className="flex gap-4 text-sm text-slate-400 mb-4">
             <span><span className="text-emerald-400 font-semibold">{author.book_count_local}</span> owned</span>
             <span><span className="text-slate-200 font-semibold">{author.book_count_total}</span> total books</span>
             <span><span className="text-slate-200 font-semibold">{author.series.length}</span> series</span>
+            {author.book_count_hidden > 0 && (
+              <Link
+                to={`/books/hidden?author=${encodeURIComponent(author.name)}`}
+                className="text-amber-400 hover:text-amber-300 transition-colors"
+              >
+                <span className="font-semibold">{author.book_count_hidden}</span> hidden
+              </Link>
+            )}
           </div>
           {author.author_directories.length > 0 && (
             <div className="mb-4">
@@ -456,6 +530,32 @@ export default function AuthorDetailPage() {
           )}
         </div>
       </div>
+
+      {/* Unmatched Local Files */}
+      {filteredUnmatchedLocalFiles.length > 0 && (
+        <div className="mb-6 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3">
+          <div className="mb-2 flex items-center gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-200">
+              Unmatched Local Files
+            </span>
+            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-300">
+              {filteredUnmatchedLocalFiles.length}
+            </span>
+          </div>
+          <div className="divide-y divide-slate-700/50">
+            {filteredUnmatchedLocalFiles.map((file) => (
+              <div key={file.file_path} className="flex items-center gap-2 py-1.5">
+                <UnmatchedFileTag format={file.file_format} />
+                <code className="min-w-0 flex-1 truncate text-xs text-slate-300">{file.file_path}</code>
+                {file.linked_book_title && (
+                  <span className="shrink-0 text-[11px] text-amber-400">hidden: {file.linked_book_title}</span>
+                )}
+                <span className="shrink-0 text-xs text-slate-500">{formatFileSize(file.file_size)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Sort + View Controls */}
       <div className={`mb-6 ${isMobile ? "space-y-3" : "flex items-center justify-between"}`}>

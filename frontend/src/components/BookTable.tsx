@@ -7,7 +7,7 @@ import CoverPickerDialog from "./CoverPickerDialog";
 import IrcSearchDialog from "./IrcSearchDialog";
 
 type BookLike = Book | BookInAuthor;
-type TableSortKey = "title" | "series" | "year" | "rating";
+type TableSortKey = "title" | "series" | "year" | "rating" | "size";
 
 function isFullBook(book: BookLike): book is Book {
   return "author_name" in book;
@@ -30,30 +30,6 @@ function formatFileSize(size: number | null): string {
   return `${value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2)} ${units[unitIndex]}`;
 }
 
-function OwnedIndicator({ count }: { count: number }) {
-  if (count > 1) {
-    return (
-      <div
-        className="inline-flex min-w-5 items-center justify-center rounded-full bg-emerald-500 px-1.5 py-0.5 text-[10px] font-semibold text-white"
-        title={`${count} owned copies`}
-      >
-        {count}
-      </div>
-    );
-  }
-
-  return (
-    <div className="inline-flex bg-emerald-500 rounded-full p-0.5" title="Owned">
-      <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
-        <path
-          fillRule="evenodd"
-          d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-          clipRule="evenodd"
-        />
-      </svg>
-    </div>
-  );
-}
 
 function formatSeriesPosition(book: BookLike): string {
   if (!("series_info" in book) || !book.series_info || book.series_info.length === 0) return "";
@@ -64,35 +40,53 @@ function formatSeriesPosition(book: BookLike): string {
   return pos ? `${si.series_name} ${pos}` : si.series_name;
 }
 
-function MetadataBadges({ book }: { book: BookLike }) {
+const FORMAT_BADGES: { key: string; label: string; activeClass: string }[] = [
+  { key: "epub", label: "EPUB", activeClass: "bg-emerald-500/15 text-emerald-300" },
+  { key: "mobi", label: "MOBI", activeClass: "bg-blue-500/15 text-blue-300" },
+  { key: "audiobook", label: "AUDIO", activeClass: "bg-purple-500/15 text-purple-300" },
+];
+
+const FORMAT_BADGE_MAP: Record<string, { label: string; activeClass: string }> = Object.fromEntries(
+  FORMAT_BADGES.map(({ key, label, activeClass }) => [key, { label, activeClass }]),
+);
+
+function FileFormatTag({ format }: { format: string | null }) {
+  const key = (format || "").toLowerCase();
+  const entry = FORMAT_BADGE_MAP[key];
+  const label = entry?.label ?? (key ? key.toUpperCase() : "FILE");
+  const colorClass = entry?.activeClass ?? "bg-slate-700 text-slate-300";
+  return (
+    <span
+      className={`inline-flex flex-shrink-0 items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${colorClass}`}
+    >
+      {label}
+    </span>
+  );
+}
+
+function FormatBadges({ book }: { book: BookLike }) {
+  const ownedFormats = new Set(
+    book.local_files
+      .map((file) => (file.file_format || "").toLowerCase())
+      .filter(Boolean),
+  );
+
   return (
     <div className="mt-1.5 flex flex-wrap gap-1.5">
-      <span
-        className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${
-          book.has_valid_isbn
-            ? "bg-emerald-500/15 text-emerald-300"
-            : "bg-slate-700 text-slate-400"
-        }`}
-        title={book.has_valid_isbn ? "Valid ISBN present" : "No valid ISBN"}
-      >
-        ISBN {book.has_valid_isbn ? "✓" : "—"}
-      </span>
-      {book.matched_google && (
-        <span
-          className="inline-flex items-center rounded-full bg-blue-500/15 px-2 py-0.5 text-[10px] font-medium text-blue-300"
-          title="Matched with Google Books"
-        >
-          Google
-        </span>
-      )}
-      {book.matched_openlibrary && (
-        <span
-          className="inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-300"
-          title="Matched with Open Library"
-        >
-          OL
-        </span>
-      )}
+      {FORMAT_BADGES.map(({ key, label, activeClass }) => {
+        const owned = ownedFormats.has(key);
+        return (
+          <span
+            key={key}
+            className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${
+              owned ? activeClass : "bg-slate-800 text-slate-500"
+            }`}
+            title={owned ? `${label} file available` : `No ${label} file`}
+          >
+            {label}
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -241,6 +235,10 @@ export default function BookTable({
         comparison = (a.release_date || "").localeCompare(b.release_date || "") || a.title.localeCompare(b.title);
       } else if (sortKey === "rating") {
         comparison = (a.rating || 0) - (b.rating || 0) || a.title.localeCompare(b.title);
+      } else if (sortKey === "size") {
+        const sizeA = a.local_files.reduce((sum, f) => sum + (f.file_size ?? 0), 0);
+        const sizeB = b.local_files.reduce((sum, f) => sum + (f.file_size ?? 0), 0);
+        comparison = sizeA - sizeB || a.title.localeCompare(b.title);
       }
       return sortDirection === "asc" ? comparison : -comparison;
     });
@@ -274,7 +272,6 @@ export default function BookTable({
           <thead className="border-b border-slate-700 bg-slate-800/80 text-[11px] uppercase tracking-wide text-slate-400">
             <tr>
               {showSelectionColumn && <th className="px-4 py-2 w-10"></th>}
-              <th className="px-4 py-2 w-10"></th>
               <th className="px-4 py-2 w-12"></th>
               <th className="px-4 py-2">
                 <button type="button" onClick={() => handleSort("title")} className="hover:text-slate-200 transition-colors">
@@ -295,6 +292,11 @@ export default function BookTable({
               <th className="px-4 py-2 text-right">
                 <button type="button" onClick={() => handleSort("rating")} className="hover:text-slate-200 transition-colors">
                   Rating{renderSortIndicator("rating")}
+                </button>
+              </th>
+              <th className="px-4 py-2 text-right">
+                <button type="button" onClick={() => handleSort("size")} className="hover:text-slate-200 transition-colors">
+                  Size{renderSortIndicator("size")}
                 </button>
               </th>
               <th className="px-4 py-2 text-right"></th>
@@ -329,13 +331,6 @@ export default function BookTable({
                         />
                       </td>
                     )}
-                    <td className="px-4 py-2 text-center">
-                      {book.is_owned ? (
-                        <OwnedIndicator count={book.owned_copy_count} />
-                      ) : (
-                        <div className="w-4 h-4 rounded-full border border-dashed border-slate-500 mx-auto" />
-                      )}
-                    </td>
                     <td className="px-4 py-2">
                       <div className={`w-8 h-12 rounded overflow-hidden flex-shrink-0 ${coverPresentation.frameClassName}`}>
                         {imgUrl ? (
@@ -366,7 +361,7 @@ export default function BookTable({
                       ) : (
                         <span className="font-medium text-slate-200">{book.title}</span>
                       )}
-                      <MetadataBadges book={book} />
+                      <FormatBadges book={book} />
                     </td>
                     {showAuthor && (
                       <td className="px-4 py-2">
@@ -390,6 +385,11 @@ export default function BookTable({
                     </td>
                     <td className="px-4 py-2 text-right text-slate-400">
                       {book.rating ? book.rating.toFixed(1) : "-"}
+                    </td>
+                    <td className="px-4 py-2 text-right text-slate-400 whitespace-nowrap">
+                      {localFiles.length > 0
+                        ? formatFileSize(localFiles.reduce((sum, f) => sum + (f.file_size ?? 0), 0))
+                        : "-"}
                     </td>
                     <td className="px-4 py-2 text-right">
                       <div className="flex items-center justify-end gap-2">
@@ -427,7 +427,7 @@ export default function BookTable({
                           </svg>
                         </ActionIconButton>
                         <ActionIconButton
-                          label="Delete and re-import metadata"
+                          label="Scan author folders and re-import metadata"
                           onClick={() => refreshBook.mutate(book.id)}
                           disabled={refreshBook.isPending}
                           preferBelow={index === 0}
@@ -476,8 +476,11 @@ export default function BookTable({
                                 key={file.id}
                                 className="flex items-start justify-between gap-4 px-0 py-1.5"
                               >
-                                <div className="min-w-0 flex-1">
-                                  <div className="break-all text-xs text-slate-300">{file.file_path}</div>
+                                <div className="flex min-w-0 flex-1 items-start gap-2">
+                                  <FileFormatTag format={file.file_format} />
+                                  <div className="min-w-0 flex-1 break-all text-xs text-slate-300">
+                                    {file.file_path}
+                                  </div>
                                 </div>
                                 <div className="shrink-0 whitespace-nowrap pl-4 text-xs text-slate-500">
                                   {formatFileSize(file.file_size)}

@@ -1,4 +1,115 @@
+from collections import defaultdict
+
 from sqlalchemy.engine import Connection
+
+from backend.app.utils.author_name import clean_author_name, normalize_author_key
+
+
+def _author_priority(row: dict) -> tuple:
+    return (
+        0 if row["hardcover_id"] is not None else 1,
+        -(row["book_count_local"] or 0),
+        -(row["book_count_total"] or 0),
+        row["id"],
+    )
+
+
+def _preferred_author_value(rows: list[dict], field_name: str):
+    for row in sorted(rows, key=_author_priority):
+        value = row[field_name]
+        if value not in {None, ""}:
+            return value
+    return None
+
+
+def _merge_duplicate_authors(conn: Connection) -> None:
+    author_rows = [
+        dict(row._mapping)
+        for row in conn.exec_driver_sql(
+            """
+            SELECT
+                id,
+                name,
+                author_key,
+                hardcover_id,
+                hardcover_slug,
+                bio,
+                image_url,
+                image_cached_path,
+                manual_image_source,
+                manual_image_url,
+                manual_image_page_url,
+                book_count_local,
+                book_count_total,
+                last_synced_at
+            FROM authors
+            ORDER BY id
+            """
+        ).fetchall()
+    ]
+
+    grouped_rows: dict[str, list[dict]] = defaultdict(list)
+    for row in author_rows:
+        author_key = normalize_author_key(row["name"] or row["author_key"] or "")
+        if not author_key:
+            continue
+        row["author_key"] = author_key
+        row["name"] = clean_author_name(row["name"] or "")
+        grouped_rows[author_key].append(row)
+
+    for author_key, rows in grouped_rows.items():
+        rows.sort(key=_author_priority)
+        canonical = rows[0]
+        canonical_id = canonical["id"]
+
+        conn.exec_driver_sql(
+            """
+            UPDATE authors
+            SET
+                name = ?,
+                author_key = ?,
+                hardcover_id = ?,
+                hardcover_slug = ?,
+                bio = ?,
+                image_url = ?,
+                image_cached_path = ?,
+                manual_image_source = ?,
+                manual_image_url = ?,
+                manual_image_page_url = ?,
+                book_count_local = ?,
+                book_count_total = ?,
+                last_synced_at = ?
+            WHERE id = ?
+            """,
+            (
+                canonical["name"],
+                author_key,
+                _preferred_author_value(rows, "hardcover_id"),
+                _preferred_author_value(rows, "hardcover_slug"),
+                _preferred_author_value(rows, "bio"),
+                _preferred_author_value(rows, "image_url"),
+                _preferred_author_value(rows, "image_cached_path"),
+                _preferred_author_value(rows, "manual_image_source"),
+                _preferred_author_value(rows, "manual_image_url"),
+                _preferred_author_value(rows, "manual_image_page_url"),
+                max((row["book_count_local"] or 0) for row in rows),
+                max((row["book_count_total"] or 0) for row in rows),
+                _preferred_author_value(rows, "last_synced_at"),
+                canonical_id,
+            ),
+        )
+
+        for duplicate in rows[1:]:
+            duplicate_id = duplicate["id"]
+            conn.exec_driver_sql(
+                "UPDATE books SET author_id = ? WHERE author_id = ?",
+                (canonical_id, duplicate_id),
+            )
+            conn.exec_driver_sql(
+                "UPDATE author_directories SET author_id = ? WHERE author_id = ?",
+                (canonical_id, duplicate_id),
+            )
+            conn.exec_driver_sql("DELETE FROM authors WHERE id = ?", (duplicate_id,))
 
 
 def run_schema_migrations(conn: Connection) -> None:
@@ -31,6 +142,7 @@ def run_schema_migrations(conn: Connection) -> None:
         conn.exec_driver_sql(f"ALTER TABLE books ADD COLUMN {column_name} {column_type}")
 
     author_column_defs = {
+        "author_key": "VARCHAR",
         "manual_image_source": "VARCHAR",
         "manual_image_url": "VARCHAR",
         "manual_image_page_url": "VARCHAR",
@@ -57,6 +169,14 @@ def run_schema_migrations(conn: Connection) -> None:
     )
     conn.exec_driver_sql(
         "CREATE INDEX IF NOT EXISTS ix_author_directories_author_id ON author_directories (author_id)"
+    )
+    _merge_duplicate_authors(conn)
+    conn.exec_driver_sql(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_authors_author_key
+        ON authors (author_key)
+        WHERE author_key IS NOT NULL AND author_key != ''
+        """
     )
 
     conn.exec_driver_sql(

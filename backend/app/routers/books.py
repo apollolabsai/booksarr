@@ -395,12 +395,22 @@ async def download_book(book_id: int, db: AsyncSession = Depends(get_db)):
     if not book.is_owned or not book.files:
         raise HTTPException(status_code=404, detail="No local file available for this book")
 
-    book_file = sorted(book.files, key=lambda file: file.id)[0]
+    preferred_formats = ("epub", "mobi", "audiobook")
+    files_by_format = {(f.file_format or "").lower(): f for f in sorted(book.files, key=lambda f: f.id)}
+    book_file = next(
+        (files_by_format[fmt] for fmt in preferred_formats if fmt in files_by_format),
+        sorted(book.files, key=lambda file: file.id)[0],
+    )
     file_path = BOOKS_DIR / book_file.file_path
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="Local file not found")
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Local file not available for download")
 
-    media_type = "application/epub+zip" if (book_file.file_format or "").lower() == "epub" else "application/octet-stream"
+    fmt = (book_file.file_format or "").lower()
+    media_types = {
+        "epub": "application/epub+zip",
+        "mobi": "application/x-mobipocket-ebook",
+    }
+    media_type = media_types.get(fmt, "application/octet-stream")
     return FileResponse(
         str(file_path),
         media_type=media_type,
