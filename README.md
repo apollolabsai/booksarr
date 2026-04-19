@@ -1,6 +1,6 @@
 # Booksarr
 
-Booksarr is a Docker-based ebook library manager inspired by Radarr/Sonarr. It scans your local ebook collection, matches files against full author catalogs, and gives you visibility into all the books an author has written, not just the ones you already own. It highlights owned titles inside that larger catalog, enriches metadata from multiple sources, and gives you tools to selectively show or hide books based on profiles or manually. You can override covers, refresh individual titles, search IRC for missing books, and track scan outcomes.
+Booksarr is a Docker-based book library manager inspired by Radarr/Sonarr. It scans your local collection, matches files against full author catalogs, and gives you visibility into all the books an author has written, not just the ones you already own. It highlights owned titles inside that larger catalog, enriches metadata from multiple sources, and gives you tools to selectively show or hide books based on profiles or manually. You can override covers, refresh individual titles, search IRC for missing books, and track scan outcomes.
 
 ## Screenshots
 
@@ -15,7 +15,7 @@ Booksarr is a Docker-based ebook library manager inspired by Radarr/Sonarr. It s
 
 ## Features
 
-- **Local library scanning** — Discovers EPUBs from your mounted library, reads sidecar `metadata.opf` when present, and falls back to internal EPUB metadata and filename parsing.
+- **Local library scanning** — Discovers EPUB, MOBI, and audiobook files from your mounted library, reads sidecar `metadata.opf` when present, and falls back to embedded metadata and filename parsing.
 - **Full author catalog visibility** — Shows the broader author bibliography alongside your collection so you can see what you own, what is missing, and where you are complete.
 - **Multi-source metadata** — Uses [Hardcover](https://hardcover.app), Google Books, Open Library, and Wikimedia where appropriate for books, covers, publish dates, ISBNs, and author portraits.
 - **Configurable visibility profiles** — Control which books are shown with profile rules such as non-English, upcoming releases, pending Hardcover records, likely collections, and valid ISBN requirements.
@@ -23,7 +23,7 @@ Booksarr is a Docker-based ebook library manager inspired by Radarr/Sonarr. It s
 - **Series-aware browsing** — Author pages group books by series and preserve reading-order positions.
 - **Owned-book highlighting** — Marks which books you own inside the full visible catalog, including duplicate copy counts when the same title exists more than once locally.
 - **Poster and portrait management** — Manually choose a book poster or author portrait from available candidates and keep that choice through future refreshes.
-- **Per-book actions** — Refresh one book from scratch, download its local file, hide it, or launch an IRC search from either table or grid view.
+- **Per-book actions** — Refresh one book from scratch, download a specific local file or format, hide it, or launch an IRC search from either table or grid view.
 - **IRC book acquisition workflow** — Search for a missing book from the book UI, get parsed results back in the app, download a selection over DCC, extract supported archives, and optionally move the result straight into your library.
 - **API usage and scan summaries** — Settings shows daily API call counts plus a persisted last-run dashboard with counts for owned books found, authors added, books added, hidden books, and lookup failures.
 - **Grid and table views** — Browse books in poster view or compact table view, with badges for owned copies, ISBN validity, and Google/Open Library matches.
@@ -51,7 +51,7 @@ services:
     volumes:
       - ./config:/config
       - ./downloads:/downloads
-      - /path/to/your/ebooks:/books
+      - /path/to/your/books:/books
     ports:
       - 8889:8889
     restart: unless-stopped
@@ -73,18 +73,22 @@ Then open `http://localhost:8889`.
 
 ### Library Structure
 
-Booksarr expects ebooks under your `/books` mount, typically organized by author:
+Booksarr expects book files under your `/books` mount, typically organized by author:
 
 ```text
 /books/
   Brandon Sanderson/
     The Way of Kings (123)/
       The Way of Kings - Brandon Sanderson.epub
+      The Way of Kings - Brandon Sanderson.mobi
       metadata.opf
       cover.jpg
   John Grisham/
     Theodore Boone 04 - The Activist/
       John Grisham - [Theodore Boone 04] - The Activist.epub
+  Andy Weir/
+    Project Hail Mary/
+      Project Hail Mary - Andy Weir.audiobook.zip
 ```
 
 ### Setup
@@ -107,7 +111,7 @@ Booksarr expects ebooks under your `/books` mount, typically organized by author
 | `HARDCOVER_API_KEY` | | Hardcover API key, also configurable in the UI |
 | `GOOGLE_BOOKS_API_KEY` | | Optional Google Books API key, also configurable in the UI |
 | `CONFIG_DIR` | `/config` | Config, SQLite database, cache, and app state directory |
-| `BOOKS_DIR` | `/books` | Mounted ebook library directory |
+| `BOOKS_DIR` | `/books` | Mounted book library directory |
 | `DOWNLOADS_DIR` | `/downloads` | IRC download staging directory |
 | `IRC_STATE_DIR` | `/config/irc` | IRC worker state directory |
 | `PORT` | `8889` | Web UI port |
@@ -126,7 +130,7 @@ Booksarr expects ebooks under your `/books` mount, typically organized by author
 - **Manual poster selection** — Use the poster picker from table view or the three-dot grid menu to compare cover candidates by source, resolution, and ratio fit.
 - **Manual portrait selection** — On author pages, use the hover menu on the portrait to choose a replacement author image.
 - **Single-book refresh** — Refresh one book from scratch to re-parse local metadata, clear imported metadata, and rerun external lookups and cover selection.
-- **Book download** — Download an owned local file directly from table view or from the grid action menu.
+- **Book download** — Download an owned local file directly from table view or from the grid action menu, with a format picker when multiple files are available.
 - **IRC search and import** — Launch a book search from the magnifying-glass action, review parsed results inside the dialog, watch live download/import status, and let Booksarr mark the title owned after import.
 
 ## IRC Integration
