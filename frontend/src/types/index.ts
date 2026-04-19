@@ -8,6 +8,7 @@ export interface Author {
   image_cached_path: string | null;
   book_count_local: number;
   book_count_total: number;
+  book_count_hidden: number;
 }
 
 export interface AuthorDirectoryEntry {

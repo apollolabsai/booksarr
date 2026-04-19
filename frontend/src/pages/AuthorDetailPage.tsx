@@ -405,6 +405,14 @@ export default function AuthorDetailPage() {
             <span><span className="text-emerald-400 font-semibold">{author.book_count_local}</span> owned</span>
             <span><span className="text-slate-200 font-semibold">{author.book_count_total}</span> total books</span>
             <span><span className="text-slate-200 font-semibold">{author.series.length}</span> series</span>
+            {author.book_count_hidden > 0 && (
+              <Link
+                to={`/books/hidden?author=${encodeURIComponent(author.name)}`}
+                className="text-amber-400 hover:text-amber-300 transition-colors"
+              >
+                <span className="font-semibold">{author.book_count_hidden}</span> hidden
+              </Link>
+            )}
           </div>
           {author.author_directories.length > 0 && (
             <div className="mb-4">

@@ -622,6 +622,7 @@ async def get_author(author_id: int, db: AsyncSession = Depends(get_db)):
     # Filter to visible books only
     visibility_settings = await get_book_visibility_settings(db)
     books = [b for b in all_books if is_book_visible(b, visibility_settings)]
+    hidden_books_count = sum(1 for b in all_books if not is_book_visible(b, visibility_settings))
     visible_book_file_paths = {
         book_file.file_path
         for book in books
@@ -741,6 +742,7 @@ async def get_author(author_id: int, db: AsyncSession = Depends(get_db)):
         image_cached_path=author.image_cached_path,
         book_count_local=sum(1 for book in books if book.is_owned),
         book_count_total=len(books),
+        book_count_hidden=hidden_books_count,
         author_directories=[
             AuthorDirectoryEntry(
                 id=directory.id,

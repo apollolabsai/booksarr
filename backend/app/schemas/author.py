@@ -11,6 +11,7 @@ class AuthorSummary(BaseModel):
     image_cached_path: str | None
     book_count_local: int
     book_count_total: int
+    book_count_hidden: int = 0
 
     class Config:
         from_attributes = True

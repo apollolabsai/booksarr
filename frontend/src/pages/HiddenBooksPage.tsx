@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useHiddenBooks, useSetBookVisibility } from "../api/books";
 import SearchBar from "../components/SearchBar";
 import { getBookCoverPresentation, getImageUrl } from "../types";
@@ -81,7 +81,8 @@ function MultiSelectReasonFilter({
 }
 
 export default function HiddenBooksPage() {
-  const [search, setSearch] = useState("");
+  const [searchParams] = useSearchParams();
+  const [search, setSearch] = useState(() => searchParams.get("author") ?? "");
   const [sortKey, setSortKey] = useState<SortKey>("title");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [selectedReasonLabels, setSelectedReasonLabels] = useState<string[]>([]);
