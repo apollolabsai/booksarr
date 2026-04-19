@@ -42,6 +42,7 @@ from backend.app.services.google_books import (
 )
 from backend.app.utils.epub_cover import get_image_dimensions
 from backend.app.utils.api_usage import begin_api_usage_batch, clear_api_usage_batch, flush_api_usage_batch
+from backend.app.utils.author_name import normalize_author_key
 from backend.app.utils.isbn import normalize_isbn, normalized_valid_isbn, extract_isbn_variants
 
 logger = logging.getLogger("booksarr.sync")
@@ -664,15 +665,16 @@ async def _repair_local_file_links(
         candidate_files = [bf for bf in candidate_files if bf.file_path in file_paths]
     if author is not None:
         author_dir_paths = {directory.dir_path for directory in author.author_directories}
+        author_key = normalize_author_key(author.name)
         candidate_files = [
             bf for bf in candidate_files
             if (
                 (bf.book and bf.book.author_id == author.id)
-                or ((bf.opf_author or "").strip() == author.name)
+                or (normalize_author_key(bf.opf_author) == author_key)
                 or (bf.file_path and bf.file_path.split("/")[0] in author_dir_paths)
                 or (
                     bf.file_path
-                    and _clean_author_text(bf.file_path.split("/")[0]) == author.name
+                    and normalize_author_key(bf.file_path.split("/")[0]) == author_key
                 )
             )
         ]
@@ -718,17 +720,26 @@ async def _repair_local_file_links(
                     matched_book.title,
                 )
 
+        author_key = normalize_author_key(bf.opf_author)
         author_result = await db.execute(
-            select(Author).where(Author.name == bf.opf_author)
+            select(Author)
+            .where(Author.author_key == author_key)
+            .order_by(
+                Author.hardcover_id.is_(None),
+                Author.book_count_local.desc(),
+                Author.book_count_total.desc(),
+                Author.id,
+            )
         )
-        author = author_result.scalar_one_or_none()
-        if not author and not matched_book:
+        matching_authors = author_result.scalars().all()
+        author = matching_authors[0] if matching_authors else None
+        if not matching_authors and not matched_book:
             continue
 
         candidate_books: list[Book] = []
-        if author:
+        if matching_authors:
             books_result = await db.execute(
-                select(Book).where(Book.author_id == author.id)
+                select(Book).where(Book.author_id.in_([candidate.id for candidate in matching_authors]))
             )
             author_books = sorted(
                 books_result.scalars().all(),

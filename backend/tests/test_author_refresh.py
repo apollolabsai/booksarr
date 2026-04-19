@@ -157,6 +157,20 @@ async def test_refresh_single_author_rebuilds_existing_series_links_without_dupl
 
 
 @pytest.mark.asyncio
+async def test_get_or_create_author_reuses_existing_normalized_author(db_session):
+    existing_author = Author(name="Nir   Eyal")
+    db_session.add(existing_author)
+    await db_session.commit()
+
+    resolved_author = await scanner._get_or_create_author(db_session, "Eyal, Nir")
+    author_count = (await db_session.execute(select(Author))).scalars().all()
+
+    assert resolved_author.id == existing_author.id
+    assert resolved_author.name == "Nir Eyal"
+    assert len(author_count) == 1
+
+
+@pytest.mark.asyncio
 async def test_refresh_single_book_scans_matching_author_directory_and_links_new_file(
     db_session,
     monkeypatch,

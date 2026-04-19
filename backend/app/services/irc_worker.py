@@ -36,6 +36,7 @@ from backend.app.services.irc_parser import (
     result_archive_matches_query,
 )
 from backend.app.services.matcher import normalize_title
+from backend.app.utils.author_name import normalize_author_key
 from backend.app.utils.opf_parser import parse_epub_opf
 
 logger = logging.getLogger("booksarr.irc")
@@ -2423,8 +2424,14 @@ async def _resolve_import_names(download_path: Path, job_id: int) -> tuple[str, 
             author_result = await db.execute(
                 select(Author)
                 .options(selectinload(Author.author_directories))
+                .where(Author.author_key == normalize_author_key(author_name))
+                .order_by(
+                    Author.hardcover_id.is_(None),
+                    Author.book_count_local.desc(),
+                    Author.book_count_total.desc(),
+                    Author.id,
+                )
                 .limit(1)
-                .where(Author.name == author_name)
             )
             mapped_author = author_result.scalar_one_or_none()
             if mapped_author and mapped_author.author_directories:
@@ -2542,13 +2549,7 @@ def _resolve_existing_book_dir_name(author_dir_name: str, book_name: str | None,
 
 
 def _normalize_author_key(author_name: str) -> str:
-    cleaned = author_name.strip()
-    if "," in cleaned:
-        parts = [part.strip() for part in cleaned.split(",") if part.strip()]
-        if len(parts) == 2:
-            cleaned = f"{parts[1]} {parts[0]}"
-    cleaned = re.sub(r"\s+", " ", cleaned).strip().lower()
-    return cleaned
+    return normalize_author_key(author_name)
 
 
 async def _trigger_library_scan_after_irc_import(moved_path: Path, job_id: int | None = None):

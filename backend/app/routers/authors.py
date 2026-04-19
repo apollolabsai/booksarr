@@ -35,6 +35,7 @@ from backend.app.services.library_sync import (
     get_api_key,
     refresh_single_author,
 )
+from backend.app.utils.author_name import normalize_author_key
 from backend.app.utils.hardcover_metadata import get_book_category_name, get_literary_type_name
 from backend.app.utils.isbn import normalized_valid_isbn
 from backend.app.utils.api_usage import begin_api_usage_batch, clear_api_usage_batch, flush_api_usage_batch
@@ -99,7 +100,17 @@ async def add_author_from_hardcover(
         result = await db.execute(select(Author).where(Author.hardcover_id == hc_author.id))
         author = result.scalar_one_or_none()
         if author is None:
-            result = await db.execute(select(Author).where(Author.name == hc_author.name))
+            result = await db.execute(
+                select(Author)
+                .where(Author.author_key == normalize_author_key(hc_author.name))
+                .order_by(
+                    Author.hardcover_id.is_(None),
+                    Author.book_count_local.desc(),
+                    Author.book_count_total.desc(),
+                    Author.id,
+                )
+                .limit(1)
+            )
             author = result.scalar_one_or_none()
 
         if author is None:

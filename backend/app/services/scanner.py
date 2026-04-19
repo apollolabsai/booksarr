@@ -3,10 +3,11 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import select, func
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models import Author, AuthorDirectory, Book, BookFile
+from backend.app.utils.author_name import clean_author_name, normalize_author_key
 from backend.app.utils.opf_parser import OPFMetadata, parse_epub_opf, parse_opf
 
 logger = logging.getLogger("booksarr.scanner")
@@ -258,12 +259,26 @@ async def _process_deletions(db: AsyncSession, deleted_paths: set[str]):
 
 
 async def _get_or_create_author(db: AsyncSession, name: str) -> Author:
-    result = await db.execute(select(Author).where(Author.name == name))
+    clean_name = clean_author_name(name) or name.strip()
+    author_key = normalize_author_key(clean_name)
+    result = await db.execute(
+        select(Author)
+        .where(Author.author_key == author_key)
+        .order_by(
+            Author.hardcover_id.is_(None),
+            desc(Author.book_count_local),
+            desc(Author.book_count_total),
+            Author.id,
+        )
+        .limit(1)
+    )
     author = result.scalar_one_or_none()
     if not author:
-        author = Author(name=name)
+        author = Author(name=clean_name)
         db.add(author)
         await db.flush()
+    elif author.name != clean_name:
+        author.name = clean_name
     return author
 
 
@@ -361,13 +376,7 @@ def _clean_title_text(title: str) -> str:
 
 
 def _clean_author_text(author: str) -> str:
-    cleaned = author.strip()
-    if "," in cleaned:
-        parts = [part.strip() for part in cleaned.split(",") if part.strip()]
-        if len(parts) == 2:
-            cleaned = f"{parts[1]} {parts[0]}"
-    cleaned = cleaned.rstrip(" ;,")
-    return re.sub(r"\s+", " ", cleaned).strip()
+    return clean_author_name(author)
 
 
 def _find_local_cover(ebook_file: Path, standalone_in_author_root: bool) -> str | None:
