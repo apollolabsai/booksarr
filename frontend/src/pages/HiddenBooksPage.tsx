@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useHiddenBooks, useSetBookVisibility } from "../api/books";
 import SearchBar from "../components/SearchBar";
@@ -6,12 +6,89 @@ import { getBookCoverPresentation, getImageUrl } from "../types";
 
 type SortKey = "title" | "author" | "hidden_by" | "year";
 
+function getFilterLabel(selectedLabels: string[]) {
+  if (selectedLabels.length === 0) return "All Hidden Reasons";
+  if (selectedLabels.length === 1) return selectedLabels[0];
+  return `${selectedLabels.length} Reasons`;
+}
+
+function MultiSelectReasonFilter({
+  labels,
+  selectedLabels,
+  open,
+  onToggleOpen,
+  onToggleValue,
+  onClear,
+  menuRef,
+}: {
+  labels: string[];
+  selectedLabels: string[];
+  open: boolean;
+  onToggleOpen: () => void;
+  onToggleValue: (label: string) => void;
+  onClear: () => void;
+  menuRef: { current: HTMLDivElement | null };
+}) {
+  return (
+    <div ref={(node) => { menuRef.current = node; }} className="relative">
+      <button
+        type="button"
+        onClick={onToggleOpen}
+        className="min-w-[200px] rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-slate-200 flex items-center justify-between gap-3"
+      >
+        <span className="truncate">{getFilterLabel(selectedLabels)}</span>
+        <svg className="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute right-0 z-20 mt-2 w-80 rounded-lg border border-slate-600 bg-slate-800 p-2 shadow-xl">
+          <div className="mb-2 flex items-center justify-between px-1">
+            <span className="text-xs font-medium text-slate-400">
+              {selectedLabels.length === 0 ? "All reasons shown" : `${selectedLabels.length} selected`}
+            </span>
+            <button
+              type="button"
+              onClick={onClear}
+              className="text-xs text-emerald-400 hover:text-emerald-300"
+            >
+              Clear
+            </button>
+          </div>
+          <div className="max-h-64 space-y-1 overflow-y-auto">
+            {labels.map((label) => (
+              <label
+                key={label}
+                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm text-slate-200 hover:bg-slate-700"
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedLabels.includes(label)}
+                  onChange={() => onToggleValue(label)}
+                  className="rounded border-slate-600 bg-slate-700 text-emerald-500 focus:ring-emerald-500"
+                />
+                <span className="truncate">{label}</span>
+              </label>
+            ))}
+            {labels.length === 0 && (
+              <div className="px-2 py-1.5 text-sm text-slate-500">No hidden reasons available.</div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function HiddenBooksPage() {
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("title");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const [selectedReasonLabels, setSelectedReasonLabels] = useState<string[]>([]);
+  const [reasonMenuOpen, setReasonMenuOpen] = useState(false);
   const { data: books, isLoading } = useHiddenBooks(search);
   const setBookVisibility = useSetBookVisibility();
+  const reasonMenuRef = useRef<HTMLDivElement | null>(null);
 
   const handleSearch = useCallback((value: string) => setSearch(value), []);
   const handleSort = useCallback((nextKey: SortKey) => {
@@ -24,9 +101,32 @@ export default function HiddenBooksPage() {
       return nextKey;
     });
   }, []);
+  const hiddenReasonLabels = useMemo(() => (
+    Array.from(new Set((books ?? []).flatMap((book) => book.hidden_categories.map((category) => category.label)))).sort()
+  ), [books]);
+
+  useEffect(() => {
+    const handlePointerDown = (event: MouseEvent) => {
+      if (reasonMenuRef.current && !reasonMenuRef.current.contains(event.target as Node)) {
+        setReasonMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, []);
+
+  useEffect(() => {
+    setSelectedReasonLabels((current) => current.filter((label) => hiddenReasonLabels.includes(label)));
+  }, [hiddenReasonLabels]);
 
   const sortedBooks = useMemo(() => {
-    const items = [...(books ?? [])];
+    const visibleBooks = selectedReasonLabels.length === 0
+      ? (books ?? [])
+      : (books ?? []).filter((book) => (
+        book.hidden_categories.some((category) => selectedReasonLabels.includes(category.label))
+      ));
+    const items = [...visibleBooks];
     items.sort((a, b) => {
       let comparison = 0;
       if (sortKey === "title") {
@@ -41,7 +141,7 @@ export default function HiddenBooksPage() {
       return sortDirection === "asc" ? comparison : -comparison;
     });
     return items;
-  }, [books, sortDirection, sortKey]);
+  }, [books, selectedReasonLabels, sortDirection, sortKey]);
 
   const renderSortIndicator = (key: SortKey) => {
     if (sortKey !== key) return null;
@@ -76,8 +176,23 @@ export default function HiddenBooksPage() {
         </Link>
       </div>
 
-      <div className="mb-4 max-w-sm">
-        <SearchBar value={search} onChange={handleSearch} placeholder="Search hidden books or authors..." />
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <div className="max-w-sm flex-1 min-w-[280px]">
+          <SearchBar value={search} onChange={handleSearch} placeholder="Search hidden books or authors..." />
+        </div>
+        <MultiSelectReasonFilter
+          labels={hiddenReasonLabels}
+          selectedLabels={selectedReasonLabels}
+          open={reasonMenuOpen}
+          onToggleOpen={() => setReasonMenuOpen((current) => !current)}
+          onToggleValue={(label) => setSelectedReasonLabels((current) => (
+            current.includes(label)
+              ? current.filter((item) => item !== label)
+              : [...current, label]
+          ))}
+          onClear={() => setSelectedReasonLabels([])}
+          menuRef={reasonMenuRef}
+        />
       </div>
 
       {!sortedBooks || sortedBooks.length === 0 ? (
