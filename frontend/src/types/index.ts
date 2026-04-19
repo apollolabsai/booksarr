@@ -89,6 +89,8 @@ export interface UnmatchedLocalFile {
   file_format: string | null;
   linked_book_id: number | null;
   linked_book_title: string | null;
+  author_id: number | null;
+  author_name: string | null;
 }
 
 export interface BookInAuthor {

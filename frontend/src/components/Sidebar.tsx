@@ -14,7 +14,11 @@ const settingsLinks: { to: string; label: string; children?: { to: string; label
     label: "Profiles",
     children: [{ to: "/books/hidden", label: "Hidden Books" }],
   },
-  { to: "/settings/metadata-refreshes", label: "Metadata Refreshes" },
+  {
+    to: "/settings/metadata-refreshes",
+    label: "Metadata Refreshes",
+    children: [{ to: "/settings/unmatched-files", label: "Unmatched Files" }],
+  },
   { to: "/settings/irc", label: "IRC" },
   { to: "/settings/logs", label: "Logs" },
 ];

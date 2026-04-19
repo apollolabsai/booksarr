@@ -1,6 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchApi } from "./client";
-import type { Book, HiddenBook, BookCoverOptionsResponse, BookCoverSearchResponse } from "../types";
+import type { Book, HiddenBook, BookCoverOptionsResponse, BookCoverSearchResponse, UnmatchedLocalFile } from "../types";
 
 export function useBooks(sort: string = "title", owned?: boolean, search: string = "") {
   return useQuery({
@@ -23,6 +23,14 @@ export function useHiddenBooks(search: string = "") {
       if (search) params.set("search", search);
       return fetchApi<HiddenBook[]>(`/books/hidden${params.toString() ? `?${params}` : ""}`);
     },
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useUnmatchedFiles() {
+  return useQuery({
+    queryKey: ["unmatchedFiles"],
+    queryFn: () => fetchApi<UnmatchedLocalFile[]>("/library/unmatched-files"),
     placeholderData: keepPreviousData,
   });
 }

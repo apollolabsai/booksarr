@@ -118,6 +118,8 @@ class UnmatchedLocalFile(BaseModel):
     file_format: str | None
     linked_book_id: int | None = None
     linked_book_title: str | None = None
+    author_id: int | None = None
+    author_name: str | None = None
 
 
 class BookInAuthor(BaseModel):
