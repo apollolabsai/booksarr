@@ -660,6 +660,25 @@ async def _count_authors_needing_images(db: AsyncSession) -> int:
     return result.scalar() or 0
 
 
+def _shared_book_folder_key(book_file: BookFile) -> str | None:
+    path_parts = [part for part in book_file.file_path.split("/") if part]
+    if len(path_parts) >= 3:
+        return "/".join(path_parts[:2])
+    if len(path_parts) == 2 and (book_file.file_format or "").lower() == "audiobook":
+        return "/".join(path_parts)
+    return None
+
+
+def _shared_folder_book_sort_key(book: Book, visibility_settings: dict[str, bool]) -> tuple[bool, bool, bool, int]:
+    return (
+        book.manual_visibility == "hidden",
+        not is_book_visible(book, visibility_settings),
+        book.hardcover_id is None,
+        not book.is_owned,
+        book.id,
+    )
+
+
 async def _repair_local_file_links(
     db: AsyncSession,
     author: Author | None = None,
@@ -669,8 +688,30 @@ async def _repair_local_file_links(
     result = await db.execute(
         select(BookFile).options(selectinload(BookFile.book))
     )
+    all_book_files = result.scalars().all()
+    visibility_settings = await get_book_visibility_settings(db)
+    books_by_id = {
+        bf.book.id: bf.book
+        for bf in all_book_files
+        if bf.book is not None
+    }
+    sibling_book_ids_by_folder: dict[str, set[int]] = {}
+    for bf in all_book_files:
+        folder_key = _shared_book_folder_key(bf)
+        if folder_key is None or bf.book is None:
+            continue
+        sibling_book_ids_by_folder.setdefault(folder_key, set()).add(bf.book.id)
+    preferred_sibling_book_id_by_folder = {
+        folder_key: sorted(
+            [books_by_id[book_id] for book_id in book_ids if book_id in books_by_id],
+            key=lambda candidate: _shared_folder_book_sort_key(candidate, visibility_settings),
+        )[0].id
+        for folder_key, book_ids in sibling_book_ids_by_folder.items()
+        if book_ids
+    }
+
     candidate_files = [
-        bf for bf in result.scalars().all()
+        bf for bf in all_book_files
         if (
             bf.book_id is None
             or (bf.book and bf.book.hardcover_id is None)
@@ -679,6 +720,11 @@ async def _repair_local_file_links(
                 expected_book_ids is not None
                 and expected_book_ids.get(bf.file_path) is not None
                 and bf.book_id != expected_book_ids.get(bf.file_path)
+            )
+            or (
+                _shared_book_folder_key(bf) is not None
+                and preferred_sibling_book_id_by_folder.get(_shared_book_folder_key(bf)) is not None
+                and bf.book_id != preferred_sibling_book_id_by_folder.get(_shared_book_folder_key(bf))
             )
         )
     ]
@@ -710,6 +756,7 @@ async def _repair_local_file_links(
         path_parts = bf.file_path.split("/")
         fallback_author = path_parts[0] if path_parts else (bf.opf_author or "")
         fallback_book_dir = path_parts[1] if len(path_parts) > 1 else (current_book.title if current_book else bf.file_name)
+        folder_key = _shared_book_folder_key(bf)
 
         if ebook_path.exists():
             opf = extract_best_metadata(ebook_path, fallback_author, fallback_book_dir)
@@ -737,6 +784,27 @@ async def _repair_local_file_links(
                 logger.info(
                     "Using expected imported file match: file=%s expected_book_id=%s title=%r",
                     bf.file_path,
+                    matched_book.id,
+                    matched_book.title,
+                )
+
+        if not matched_book and folder_key:
+            sibling_book_ids = sibling_book_ids_by_folder.get(folder_key, set())
+            sibling_books = [
+                books_by_id[sibling_book_id]
+                for sibling_book_id in sibling_book_ids
+                if sibling_book_id in books_by_id
+                and (not current_book or sibling_book_id != current_book.id)
+            ]
+            if sibling_books:
+                matched_book = sorted(
+                    sibling_books,
+                    key=lambda candidate: _shared_folder_book_sort_key(candidate, visibility_settings),
+                )[0]
+                logger.info(
+                    "Using shared folder match: file=%s folder=%s matched_book_id=%s title=%r",
+                    bf.file_path,
+                    folder_key,
                     matched_book.id,
                     matched_book.title,
                 )
@@ -816,6 +884,13 @@ async def _repair_local_file_links(
             previous_book_id = bf.book_id
             bf.book = matched_book
             matched_book.is_owned = True
+            books_by_id[matched_book.id] = matched_book
+            if folder_key:
+                sibling_book_ids_by_folder.setdefault(folder_key, set()).add(matched_book.id)
+                preferred_sibling_book_id_by_folder[folder_key] = sorted(
+                    [books_by_id[book_id] for book_id in sibling_book_ids_by_folder[folder_key] if book_id in books_by_id],
+                    key=lambda candidate: _shared_folder_book_sort_key(candidate, visibility_settings),
+                )[0].id
             if bf.opf_isbn and (
                 not matched_book.isbn
                 or (previous_book_id and previous_book_id != matched_book.id)
@@ -865,6 +940,13 @@ async def _repair_local_file_links(
                 db.add(local_book)
                 await db.flush()
                 bf.book = local_book
+                books_by_id[local_book.id] = local_book
+                if folder_key:
+                    sibling_book_ids_by_folder.setdefault(folder_key, set()).add(local_book.id)
+                    preferred_sibling_book_id_by_folder[folder_key] = sorted(
+                        [books_by_id[book_id] for book_id in sibling_book_ids_by_folder[folder_key] if book_id in books_by_id],
+                        key=lambda candidate: _shared_folder_book_sort_key(candidate, visibility_settings),
+                    )[0].id
                 books_added += 1
 
     await db.commit()
