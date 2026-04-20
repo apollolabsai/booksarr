@@ -176,6 +176,99 @@ async def test_repair_local_file_links_prefers_canonical_author_for_normalized_n
 
 
 @pytest.mark.asyncio
+async def test_repair_local_file_links_prefers_shown_sibling_book_in_same_folder(
+    db_session,
+    monkeypatch,
+    tmp_path,
+):
+    author = Author(name="Dan Brown")
+    db_session.add(author)
+    await db_session.flush()
+
+    hidden_book = Book(
+        title="Angels and Demons",
+        author_id=author.id,
+        hardcover_id=201,
+        hardcover_isbn_13="9780000000201",
+        manual_visibility="hidden",
+        is_owned=True,
+    )
+    shown_book = Book(
+        title="Angels & Demons",
+        author_id=author.id,
+        hardcover_id=202,
+        hardcover_isbn_13="9780000000202",
+        is_owned=True,
+    )
+    db_session.add_all([hidden_book, shown_book])
+    await db_session.flush()
+
+    epub_path = (
+        "Dan Brown/Angels & Demons/"
+        "Dan Brown - Angels & Demons.epub"
+    )
+    audio_path = (
+        "Dan Brown/Angels & Demons/"
+        "Brown, Dan - Angels and Demons (audiobook).zip"
+    )
+    (tmp_path / epub_path).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / epub_path).write_text("epub", encoding="utf-8")
+    (tmp_path / audio_path).write_text("audio", encoding="utf-8")
+
+    db_session.add_all([
+        BookFile(
+            file_path=epub_path,
+            file_name="Dan Brown - Angels & Demons.epub",
+            book_id=shown_book.id,
+            file_format="epub",
+            opf_title="Angels & Demons",
+            opf_author="Dan Brown",
+            opf_isbn="9780000000202",
+        ),
+        BookFile(
+            file_path=audio_path,
+            file_name="Brown, Dan - Angels and Demons (audiobook).zip",
+            book_id=hidden_book.id,
+            file_format="audiobook",
+            opf_title="Angels and Demons",
+            opf_author="Dan Brown",
+            opf_isbn="9780000000201",
+        ),
+    ])
+    await db_session.commit()
+
+    class AudioStubMetadata:
+        title = "Angels and Demons"
+        author = "Dan Brown"
+        isbn = "9780000000201"
+        series = None
+        series_index = None
+        publisher = None
+        description = None
+
+    monkeypatch.setattr(library_sync, "BOOKS_DIR", tmp_path)
+    monkeypatch.setattr(library_sync, "extract_best_metadata", lambda *_args, **_kwargs: AudioStubMetadata())
+
+    matched_count, repaired_count, books_added = await library_sync._repair_local_file_links(
+        db_session,
+        file_paths={audio_path},
+    )
+
+    refreshed_audio = (
+        await db_session.execute(select(BookFile).where(BookFile.file_path == audio_path))
+    ).scalar_one()
+    refreshed_hidden = await db_session.get(Book, hidden_book.id)
+    refreshed_shown = await db_session.get(Book, shown_book.id)
+
+    assert matched_count == 1
+    assert repaired_count == 1
+    assert books_added == 0
+    assert refreshed_audio.book_id == shown_book.id
+    assert refreshed_shown.is_owned is True
+    assert refreshed_hidden.is_owned is False
+
+
+@pytest.mark.asyncio
 async def test_trigger_library_scan_after_irc_import_waits_for_active_scan(monkeypatch):
     calls: list[tuple[Path, int | None]] = []
     original_sleep = irc_worker.asyncio.sleep
