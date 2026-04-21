@@ -10,7 +10,7 @@ import {
   useIrcSearchResults,
   useIrcStatus,
 } from "../api/irc";
-import type { IrcDownloadJob } from "../types";
+import type { IrcDownloadJob, IrcSearchResult } from "../types";
 
 export default function IrcSearchDialog({
   bookId,
@@ -225,19 +225,11 @@ export default function IrcSearchDialog({
                   </div>
                 )
               ) : (
-                <div className="divide-y divide-slate-700 overflow-hidden rounded-lg border border-slate-700 bg-slate-900/40">
+                <div className="divide-y divide-slate-700 rounded-lg border border-slate-700 bg-slate-900/40">
                   {results?.map((result) => (
                     <div key={result.id} className="px-3 py-2.5">
                       <div className="flex items-center gap-3">
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-sm text-slate-100">
-                            <span className={getBotStatusClassName(result.bot_online)}>
-                              {result.bot_name || "unknown_bot"}
-                            </span>
-                            <span className="text-slate-500"> | </span>
-                            <span>{getResultLabel(result.display_name, result.download_command)}</span>
-                          </div>
-                        </div>
+                        <SearchResultName result={result} />
                         <div className="shrink-0 rounded border border-slate-600 bg-slate-800 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-300">
                           {result.file_format || "unknown"}
                         </div>
@@ -307,6 +299,58 @@ export default function IrcSearchDialog({
 
 function isTerminalDownloadStatus(status: string | null): boolean {
   return status === "moved" || status === "failed" || status === "cancelled";
+}
+
+function SearchResultName({ result }: { result: IrcSearchResult }) {
+  const [showTooltip, setShowTooltip] = useState(false);
+  const timerRef = useRef<number | null>(null);
+  const resultLabel = getResultLabel(result.display_name, result.download_command);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) {
+        window.clearTimeout(timerRef.current);
+      }
+    };
+  }, []);
+
+  const handleEnter = () => {
+    if (timerRef.current) {
+      window.clearTimeout(timerRef.current);
+    }
+    timerRef.current = window.setTimeout(() => setShowTooltip(true), 350);
+  };
+
+  const handleLeave = () => {
+    if (timerRef.current) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    setShowTooltip(false);
+  };
+
+  return (
+    <div
+      className="relative min-w-0 flex-1"
+      onMouseEnter={handleEnter}
+      onMouseLeave={handleLeave}
+      onFocus={handleEnter}
+      onBlur={handleLeave}
+    >
+      <div className="truncate text-sm text-slate-100">
+        <span className={getBotStatusClassName(result.bot_online)}>
+          {result.bot_name || "unknown_bot"}
+        </span>
+        <span className="text-slate-500"> | </span>
+        <span tabIndex={0}>{resultLabel}</span>
+      </div>
+      {showTooltip && (
+        <div className="pointer-events-none absolute left-0 top-full z-50 mt-2 max-w-[min(44rem,calc(100vw-4rem))] rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-xs font-medium leading-relaxed text-slate-100 shadow-2xl ring-1 ring-black/40">
+          <div className="break-words">{resultLabel}</div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function DownloadStageList({
