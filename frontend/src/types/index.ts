@@ -398,7 +398,7 @@ export interface IrcBulkSearchResponse {
   skipped: IrcBulkSearchSkippedItem[];
 }
 
-export type IrcBulkFileTypeKey = "epub" | "mobi" | "zip" | "rar" | "audiobook";
+export type IrcBulkFileTypeKey = "epub" | "mobi" | "pdf" | "zip" | "rar" | "audiobook";
 
 export interface IrcBulkFileTypePreference {
   key: IrcBulkFileTypeKey;

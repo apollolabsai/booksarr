@@ -35,6 +35,7 @@ def test_normalize_bulk_file_type_preferences_preserves_enabled_order():
     normalized = normalize_bulk_file_type_preferences([
         {"key": "mobi", "enabled": True},
         {"key": "epub", "enabled": True},
+        {"key": "pdf", "enabled": True},
         {"key": "zip", "enabled": False},
         {"key": "rar", "enabled": False},
         {"key": "audiobook", "enabled": True},
@@ -43,6 +44,7 @@ def test_normalize_bulk_file_type_preferences_preserves_enabled_order():
     assert normalized == [
         {"key": "mobi", "enabled": True},
         {"key": "epub", "enabled": True},
+        {"key": "pdf", "enabled": True},
         {"key": "zip", "enabled": False},
         {"key": "rar", "enabled": False},
         {"key": "audiobook", "enabled": True},
@@ -58,6 +60,17 @@ def test_classify_bulk_result_type_detects_audiobook_from_title_and_size():
     )
 
     assert _classify_bulk_result_type(result) == "audiobook"
+
+
+def test_classify_bulk_result_type_detects_pdf():
+    result = _make_result(
+        result_id=1,
+        display_name="Freakonomics - Steven D. Levitt.pdf",
+        file_format="pdf",
+        file_size_text="2.5MB",
+    )
+
+    assert _classify_bulk_result_type(result) == "pdf"
 
 
 def test_choose_best_bulk_result_respects_enabled_priority_order():
@@ -85,6 +98,7 @@ def test_choose_best_bulk_result_respects_enabled_priority_order():
         file_type_preferences=[
             {"key": "mobi", "enabled": True},
             {"key": "epub", "enabled": True},
+            {"key": "pdf", "enabled": False},
             {"key": "zip", "enabled": False},
             {"key": "rar", "enabled": False},
             {"key": "audiobook", "enabled": False},
@@ -114,6 +128,7 @@ def test_choose_best_bulk_result_excludes_disabled_types():
         file_type_preferences=[
             {"key": "epub", "enabled": True},
             {"key": "mobi", "enabled": False},
+            {"key": "pdf", "enabled": False},
             {"key": "zip", "enabled": False},
             {"key": "rar", "enabled": False},
             {"key": "audiobook", "enabled": False},

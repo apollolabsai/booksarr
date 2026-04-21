@@ -422,7 +422,7 @@ async def download_book(
         if book_file is None:
             raise HTTPException(status_code=404, detail="Requested local file not found for this book")
     else:
-        preferred_formats = ("epub", "mobi", "audiobook")
+        preferred_formats = ("epub", "mobi", "pdf", "audiobook")
         files_by_format = {(f.file_format or "").lower(): f for f in sorted(book.files, key=lambda f: f.id)}
         book_file = next(
             (files_by_format[fmt] for fmt in preferred_formats if fmt in files_by_format),
@@ -448,6 +448,7 @@ async def download_book(
     media_types = {
         "epub": "application/epub+zip",
         "mobi": "application/x-mobipocket-ebook",
+        "pdf": "application/pdf",
     }
     media_type = media_types.get(fmt, "application/octet-stream")
     return FileResponse(

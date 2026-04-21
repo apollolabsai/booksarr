@@ -71,8 +71,9 @@ _AUDIO_TOKENS = {
     "abridged",
     "narrated",
 }
-_BULK_FILE_TYPE_KEYS = ("epub", "mobi", "zip", "rar", "audiobook")
-_DIRECT_BULK_FILE_TYPES = {"epub", "mobi", "zip", "rar"}
+_BULK_FILE_TYPE_KEYS = ("epub", "mobi", "pdf", "zip", "rar", "audiobook")
+_DIRECT_BULK_FILE_TYPES = {"epub", "mobi", "pdf", "zip", "rar"}
+_ARCHIVED_BOOK_EXTENSIONS = (".epub", ".pdf")
 _AUDIOBOOK_MIN_SIZE_MB = 15.0
 
 _worker_task: asyncio.Task | None = None
@@ -896,6 +897,7 @@ def _score_bulk_result(book: Book | None, result: IrcSearchResult, matched_type:
     score = {
         "epub": 120,
         "mobi": 100,
+        "pdf": 95,
         "zip": 90,
         "rar": 80,
         "audiobook": 70,
@@ -1844,9 +1846,9 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
                 saved_path=saved_relative_path,
                 error_message=None,
             )
-            _runtime.last_message = f"Extracting EPUB from archive for download job {job_id}"
-            logger.info("IRC download job %s extracting archive to locate EPUB: %s", job_id, download_path)
-            import_path = await _extract_epub_from_rar(download_path, job_id)
+            _runtime.last_message = f"Extracting book file from archive for download job {job_id}"
+            logger.info("IRC download job %s extracting archive to locate book file: %s", job_id, download_path)
+            import_path = await _extract_book_file_from_rar(download_path, job_id)
             saved_relative_path = str(import_path.relative_to(DOWNLOADS_DIR))
             await _update_download_job(
                 job_id,
@@ -1857,9 +1859,9 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
                 saved_path=saved_relative_path,
                 error_message=None,
             )
-            _runtime.last_message = f"Archive extracted for download job {job_id}; EPUB ready for import"
+            _runtime.last_message = f"Archive extracted for download job {job_id}; book file ready for import"
             logger.info(
-                "IRC download job %s extracted EPUB from archive: archive=%s epub=%s",
+                "IRC download job %s extracted book file from archive: archive=%s file=%s",
                 job_id,
                 download_path,
                 import_path,
@@ -1959,7 +1961,7 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
                 pass
 
 
-async def _extract_epub_from_rar(archive_path: Path, job_id: int) -> Path:
+async def _extract_book_file_from_rar(archive_path: Path, job_id: int) -> Path:
     extract_dir = DOWNLOADS_DIR / "irc" / "extracted_books" / f"job_{job_id}"
     extract_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2029,18 +2031,23 @@ async def _extract_epub_from_rar(archive_path: Path, job_id: int) -> Path:
             f"Could not extract RAR archive {archive_path.name}: " + " | ".join(backend_errors)
         )
 
-    epub_candidates = [path for path in extract_dir.rglob("*") if path.is_file() and path.suffix.lower() == ".epub"]
-    if not epub_candidates:
-        raise RuntimeError(f"No EPUB file found in archive {archive_path.name}")
+    book_candidates = [
+        path for path in extract_dir.rglob("*")
+        if path.is_file() and path.suffix.lower() in _ARCHIVED_BOOK_EXTENSIONS
+    ]
+    if not book_candidates:
+        raise RuntimeError(f"No EPUB or PDF file found in archive {archive_path.name}")
 
-    epub_candidates.sort(key=lambda path: path.stat().st_size, reverse=True)
-    extracted_path = epub_candidates[0]
-    if len(epub_candidates) > 1:
+    book_candidates.sort(
+        key=lambda path: (_ARCHIVED_BOOK_EXTENSIONS.index(path.suffix.lower()), -path.stat().st_size)
+    )
+    extracted_path = book_candidates[0]
+    if len(book_candidates) > 1:
         logger.info(
-            "RAR archive contains multiple EPUBs; selecting largest extracted file for import: archive=%s selected=%s candidates=%s",
+            "RAR archive contains multiple book files; selecting preferred extracted file for import: archive=%s selected=%s candidates=%s",
             archive_path,
             extracted_path,
-            [str(path.relative_to(extract_dir)) for path in epub_candidates],
+            [str(path.relative_to(extract_dir)) for path in book_candidates],
         )
 
     return extracted_path
