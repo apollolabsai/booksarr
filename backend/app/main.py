@@ -1,5 +1,4 @@
 import logging
-import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -12,21 +11,16 @@ from backend.app.config import CONFIG_DIR
 from backend.app.database import engine, Base
 from backend.app.models import *  # noqa: F401, F403
 from backend.app.utils.db_migrations import run_schema_migrations
-from backend.app.utils.logging_config import apply_persisted_log_level
+from backend.app.utils.logging_config import RedactingFormatter, apply_persisted_log_level, configure_logging
 
 # --- Logging setup ---
-LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, stream=sys.stdout)
-
-# Quiet down noisy libraries
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("httpcore").setLevel(logging.WARNING)
-logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+configure_logging()
 
 # Attach in-memory log store for the UI
 from backend.app.utils.log_store import log_store  # noqa: E402
-log_store.setFormatter(logging.Formatter("%(message)s"))
-logging.getLogger("booksarr").addHandler(log_store)
+log_store.setFormatter(RedactingFormatter("%(message)s"))
+if not any(handler is log_store for handler in logging.getLogger("booksarr").handlers):
+    logging.getLogger("booksarr").addHandler(log_store)
 
 logger = logging.getLogger("booksarr.main")
 

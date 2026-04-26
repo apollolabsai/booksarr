@@ -99,7 +99,7 @@ async def test_refresh_single_author_rebuilds_existing_series_links_without_dupl
         return None
 
     async def fake_sync_author_hardcover_catalog(*_args, **_kwargs):
-        return (0, 0)
+        return (0, 0, [])
 
     async def fake_repair_local_file_links(*_args, **_kwargs):
         return (0, 0, 0)

@@ -37,7 +37,9 @@ export default function AuthorRefreshStatusToast() {
   if (!status || !isVisible) return null;
 
   const isFailed = status.status === "failed";
-  const title = status.author_name ? `Refreshing ${status.author_name}` : "Refreshing Author";
+  const title = status.mode === "new_releases"
+    ? status.author_name ? `Searching ${status.author_name}` : "Searching New Releases"
+    : status.author_name ? `Refreshing ${status.author_name}` : "Refreshing Author";
   const progress = Math.max(0, Math.min(100, Math.round(status.progress)));
 
   return (
@@ -50,7 +52,9 @@ export default function AuthorRefreshStatusToast() {
         />
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium text-slate-100">
-            {status.status === "completed" ? "Author refresh complete" : title}
+            {status.status === "completed"
+              ? status.mode === "new_releases" ? "New release search complete" : "Author refresh complete"
+              : title}
           </div>
           <div className={`mt-0.5 line-clamp-2 text-xs ${isFailed ? "text-rose-300" : "text-slate-400"}`}>
             {status.message || (isFailed ? status.error : "Working...")}
