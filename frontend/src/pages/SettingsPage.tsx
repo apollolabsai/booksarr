@@ -466,6 +466,22 @@ export default function SettingsPage({ section }: { section: SettingsSection }) 
           </div>
         </div>
 
+        {lastScanSummary?.hidden_by_category.length ? (
+          <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
+            <div className="text-sm font-medium text-slate-200 mb-3">Hidden By Category</div>
+            <div className="flex flex-wrap gap-2">
+              {lastScanSummary.hidden_by_category.map((item) => (
+                <span
+                  key={item.key}
+                  className="rounded-full border border-slate-700 bg-slate-900/40 px-3 py-1 text-xs text-slate-300"
+                >
+                  {item.label}: {item.count}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
         {/* Library Info */}
         <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
           <h3 className="text-lg font-semibold mb-4">Library</h3>
@@ -579,22 +595,6 @@ export default function SettingsPage({ section }: { section: SettingsSection }) 
             <div className="rounded-lg border border-slate-700 bg-slate-900/30 px-4 py-3 mb-4 text-sm text-slate-300">
               Files processed: {lastScanSummary.files_total} total, {lastScanSummary.files_new} new, {lastScanSummary.files_deleted} deleted, {lastScanSummary.files_unchanged} unchanged.
             </div>
-
-            {lastScanSummary.hidden_by_category.length > 0 && (
-              <div className="mb-4">
-                <div className="text-sm font-medium text-slate-200 mb-2">Hidden By Category</div>
-                <div className="flex flex-wrap gap-2">
-                  {lastScanSummary.hidden_by_category.map((item) => (
-                    <span
-                      key={item.key}
-                      className="rounded-full border border-slate-700 bg-slate-900/40 px-3 py-1 text-xs text-slate-300"
-                    >
-                      {item.label}: {item.count}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
 
             {(lastScanSummary.new_books_list?.length > 0 || lastScanSummary.isbn_gains > 0) && (
               <div className="grid gap-4 sm:grid-cols-2 mb-4">
