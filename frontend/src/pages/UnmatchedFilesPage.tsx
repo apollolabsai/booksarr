@@ -7,6 +7,7 @@ import type { UnmatchedLocalFile } from "../types";
 const FORMAT_STYLES: Record<string, string> = {
   epub: "bg-emerald-500/15 text-emerald-300",
   mobi: "bg-blue-500/15 text-blue-300",
+  pdf: "bg-amber-500/15 text-amber-300",
   audiobook: "bg-purple-500/15 text-purple-300",
 };
 

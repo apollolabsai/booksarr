@@ -3,7 +3,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-IrcBulkFileTypeKey = Literal["epub", "mobi", "zip", "rar", "audiobook"]
+IrcBulkFileTypeKey = Literal["epub", "mobi", "pdf", "zip", "rar", "audiobook"]
 
 
 class IrcBulkFileTypePreference(BaseModel):

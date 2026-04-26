@@ -12,7 +12,7 @@ from backend.app.utils.opf_parser import OPFMetadata, parse_epub_opf, parse_opf
 
 logger = logging.getLogger("booksarr.scanner")
 
-EBOOK_EXTENSIONS = {".epub", ".mobi"}
+EBOOK_EXTENSIONS = {".epub", ".mobi", ".pdf"}
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".m4b", ".aac", ".flac", ".ogg", ".opus", ".wav"}
 AUDIOBOOK_ARCHIVE_EXTENSIONS = {".zip", ".rar"}
 _AUDIOBOOK_NAME_TOKENS = ("audiobook", "audio book", "audio-book")
@@ -415,7 +415,7 @@ def _classify_standalone_file(entry: Path) -> str | None:
 def _collect_book_dir_artifacts(book_dir: Path, library_path: Path) -> list[tuple[str, str]]:
     """Return (rel_path, file_format) tuples for each distinct book artifact in a book directory.
 
-    A book directory may contain multiple formats of the same book (epub + mobi + audiobook).
+    A book directory may contain multiple formats of the same book (epub + mobi + pdf + audiobook).
     Each artifact becomes one BookFile row.
     """
     artifacts: list[tuple[str, str]] = []

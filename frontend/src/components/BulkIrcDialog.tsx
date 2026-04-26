@@ -27,6 +27,7 @@ const ITEM_PROGRESS_ORDER = [
 const DEFAULT_IRC_BULK_FILE_TYPE_PREFERENCES: IrcBulkFileTypePreference[] = [
   { key: "epub", enabled: true },
   { key: "mobi", enabled: true },
+  { key: "pdf", enabled: true },
   { key: "zip", enabled: true },
   { key: "rar", enabled: true },
   { key: "audiobook", enabled: true },

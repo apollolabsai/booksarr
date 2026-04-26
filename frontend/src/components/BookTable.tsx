@@ -40,6 +40,7 @@ function formatSeriesPosition(book: BookLike): string {
 const FORMAT_BADGES: { key: string; label: string; activeClass: string }[] = [
   { key: "epub", label: "EPUB", activeClass: "bg-emerald-500/15 text-emerald-300" },
   { key: "mobi", label: "MOBI", activeClass: "bg-blue-500/15 text-blue-300" },
+  { key: "pdf", label: "PDF", activeClass: "bg-amber-500/15 text-amber-300" },
   { key: "audiobook", label: "AUDIO", activeClass: "bg-purple-500/15 text-purple-300" },
 ];
 

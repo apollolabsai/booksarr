@@ -23,6 +23,7 @@ const FILTER_OPTIONS = [
   { value: "missing", label: "Missing" },
   { value: "epub", label: "EPUB" },
   { value: "mobi", label: "MOBI" },
+  { value: "pdf", label: "PDF" },
   { value: "audiobook", label: "Audiobook" },
 ] as const;
 

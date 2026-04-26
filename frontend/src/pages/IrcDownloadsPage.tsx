@@ -43,6 +43,7 @@ const IRC_BULK_FILE_TYPE_OPTIONS: Array<{
 }> = [
   { key: "epub", label: "EPUB", description: "Standard ebook file." },
   { key: "mobi", label: "MOBI", description: "Kindle-compatible ebook file." },
+  { key: "pdf", label: "PDF", description: "Portable document file." },
   { key: "zip", label: "ZIP", description: "Compressed archive that may contain book files." },
   { key: "rar", label: "RAR", description: "Compressed archive that may contain book files." },
   {

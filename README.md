@@ -15,7 +15,7 @@ Booksarr is a Docker-based book library manager inspired by Radarr/Sonarr. It sc
 
 ## Features
 
-- **Local library scanning** — Discovers EPUB, MOBI, and audiobook files from your mounted library, reads sidecar `metadata.opf` when present, and falls back to embedded metadata and filename parsing.
+- **Local library scanning** — Discovers EPUB, MOBI, PDF, and audiobook files from your mounted library, reads sidecar `metadata.opf` when present, and falls back to embedded metadata where available and filename parsing.
 - **Full author catalog visibility** — Shows the broader author bibliography alongside your collection so you can see what you own, what is missing, and where you are complete.
 - **Multi-source metadata** — Uses [Hardcover](https://hardcover.app), Google Books, Open Library, and Wikimedia where appropriate for books, covers, publish dates, ISBNs, and author portraits.
 - **Configurable visibility profiles** — Control which books are shown with profile rules such as non-English, upcoming releases, pending Hardcover records, likely collections, and valid ISBN requirements.
@@ -81,6 +81,7 @@ Booksarr expects book files under your `/books` mount, typically organized by au
     The Way of Kings (123)/
       The Way of Kings - Brandon Sanderson.epub
       The Way of Kings - Brandon Sanderson.mobi
+      The Way of Kings - Brandon Sanderson.pdf
       metadata.opf
       cover.jpg
   John Grisham/
