@@ -4,6 +4,7 @@ import type {
   Author,
   AuthorDetail,
   AuthorDirectoryMergeResponse,
+  AuthorRefreshStatus,
   AuthorPortraitSearchResponse,
   AuthorPortraitOptionsResponse,
   AuthorSearchResponse,
@@ -101,11 +102,21 @@ export function useRefreshAuthor() {
         method: "POST",
       }),
     onSuccess: (_, authorId) => {
+      queryClient.invalidateQueries({ queryKey: ["authorRefreshStatus"] });
       queryClient.invalidateQueries({ queryKey: ["authors"] });
       queryClient.invalidateQueries({ queryKey: ["authors", authorId] });
       queryClient.invalidateQueries({ queryKey: ["books"] });
       queryClient.invalidateQueries({ queryKey: ["hiddenBooks"] });
     },
+  });
+}
+
+export function useAuthorRefreshStatus() {
+  return useQuery({
+    queryKey: ["authorRefreshStatus"],
+    queryFn: () => fetchApi<AuthorRefreshStatus>("/authors/refresh/status"),
+    refetchInterval: 1000,
+    refetchIntervalInBackground: true,
   });
 }
 

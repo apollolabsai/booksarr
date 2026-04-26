@@ -244,6 +244,17 @@ export interface ScanStatus {
   message: string;
 }
 
+export interface AuthorRefreshStatus {
+  status: "idle" | "refreshing" | "completed" | "failed";
+  author_id: number | null;
+  author_name: string | null;
+  progress: number;
+  message: string;
+  started_at: string | null;
+  completed_at: string | null;
+  error: string | null;
+}
+
 export interface HiddenCategorySummary {
   key: string;
   label: string;

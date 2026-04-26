@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
-import { useAuthor, useMergeAuthorDirectories, useRefreshAuthor, useRemoveAuthor } from "../api/authors";
+import { useAuthor, useAuthorRefreshStatus, useMergeAuthorDirectories, useRefreshAuthor, useRemoveAuthor } from "../api/authors";
 import { getImageUrl } from "../types";
 import type { BookInAuthor, SeriesInAuthor, UnmatchedLocalFile } from "../types";
 import BookCard from "../components/BookCard";
@@ -55,8 +55,10 @@ function UnmatchedFileTag({ format }: { format: string | null }) {
 export default function AuthorDetailPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
-  const { data: author, isLoading } = useAuthor(Number(id));
+  const authorId = Number(id);
+  const { data: author, isLoading } = useAuthor(authorId);
   const refreshAuthor = useRefreshAuthor();
+  const { data: authorRefreshStatus } = useAuthorRefreshStatus();
   const removeAuthor = useRemoveAuthor();
   const mergeAuthorDirectories = useMergeAuthorDirectories();
   const isMobile = useIsMobile();
@@ -71,6 +73,8 @@ export default function AuthorDetailPage() {
   const [selectedBookIds, setSelectedBookIds] = useState<Set<number>>(new Set());
   const portraitMenuRef = useRef<HTMLDivElement | null>(null);
   const authorName = author?.name ?? "Unknown author";
+  const isAuthorRefreshRunning = authorRefreshStatus?.status === "refreshing";
+  const isThisAuthorRefreshing = isAuthorRefreshRunning && authorRefreshStatus?.author_id === authorId;
   const handleSearch = useCallback((value: string) => setSearch(value), []);
 
   useEffect(() => {
@@ -372,14 +376,14 @@ export default function AuthorDetailPage() {
               <button
                 type="button"
                 onClick={() => refreshAuthor.mutate(author.id)}
-                disabled={refreshAuthor.isPending}
+                disabled={refreshAuthor.isPending || isAuthorRefreshRunning}
                 className="inline-flex items-center gap-2 rounded-md border border-slate-600 bg-slate-800 px-3 py-1.5 text-sm text-slate-200 transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
                 title="Refresh this author and rescan local files for newly added books"
               >
-                <svg className={`h-4 w-4 ${refreshAuthor.isPending ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className={`h-4 w-4 ${refreshAuthor.isPending || isThisAuthorRefreshing ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m14.836 2A8.001 8.001 0 005.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.356-2m15.356 2H15" />
                 </svg>
-                {refreshAuthor.isPending ? "Refreshing..." : "Refresh Author"}
+                {isThisAuthorRefreshing ? "Refreshing..." : isAuthorRefreshRunning ? "Refresh In Progress" : refreshAuthor.isPending ? "Starting..." : "Refresh Author"}
               </button>
               <button
                 type="button"

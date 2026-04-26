@@ -35,7 +35,8 @@ from backend.app.services.library_sync import (
     _is_valid_title,
     enrich_imported_books_metadata,
     get_api_key,
-    refresh_single_author,
+    author_refresh_status,
+    trigger_author_refresh,
 )
 from backend.app.utils.author_name import normalize_author_key
 from backend.app.utils.hardcover_metadata import get_book_category_name, get_literary_type_name
@@ -290,15 +291,25 @@ async def _upsert_author_directory(db: AsyncSession, author: Author, dir_name: s
 
 
 @router.post("/{author_id}/refresh")
-async def refresh_author_route(author_id: int):
-    try:
-        await refresh_single_author(author_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except HardcoverLookupError as exc:
-        raise HTTPException(status_code=502, detail=f"Hardcover lookup failed: {exc}") from exc
+async def refresh_author_route(author_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Author.id).where(Author.id == author_id))
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Author not found")
 
-    return {"status": "ok", "message": "Author refreshed"}
+    started = trigger_author_refresh(author_id)
+    if not started:
+        return {
+            "status": "already_refreshing",
+            "message": "An author refresh is already in progress",
+            "refresh": author_refresh_status.to_dict(),
+        }
+
+    return {"status": "started", "message": "Author refresh started", "refresh": author_refresh_status.to_dict()}
+
+
+@router.get("/refresh/status")
+async def get_author_refresh_status():
+    return author_refresh_status.to_dict()
 
 
 @router.delete("/{author_id}")

@@ -1144,6 +1144,71 @@ class ScanStatus:
 scan_status = ScanStatus()
 
 
+class AuthorRefreshStatus:
+    def __init__(self):
+        self.status: str = "idle"
+        self.author_id: int | None = None
+        self.author_name: str | None = None
+        self.progress: float = 0.0
+        self.message: str = ""
+        self.started_at: str | None = None
+        self.completed_at: str | None = None
+        self.error: str | None = None
+
+    def start(self, author_id: int):
+        self.status = "refreshing"
+        self.author_id = author_id
+        self.author_name = None
+        self.progress = 0.0
+        self.message = "Starting author refresh..."
+        self.started_at = datetime.utcnow().isoformat()
+        self.completed_at = None
+        self.error = None
+
+    def update(
+        self,
+        *,
+        progress: float | None = None,
+        message: str | None = None,
+        author_name: str | None = None,
+    ):
+        if progress is not None:
+            self.progress = max(0.0, min(100.0, progress))
+        if message is not None:
+            self.message = message
+        if author_name is not None:
+            self.author_name = author_name
+
+    def complete(self):
+        self.status = "completed"
+        self.progress = 100.0
+        self.message = f"Finished refreshing {self.author_name or 'author'}."
+        self.completed_at = datetime.utcnow().isoformat()
+        self.error = None
+
+    def fail(self, error: str):
+        self.status = "failed"
+        self.progress = 0.0
+        self.message = f"Author refresh failed: {error}"
+        self.completed_at = datetime.utcnow().isoformat()
+        self.error = error
+
+    def to_dict(self) -> dict:
+        return {
+            "status": self.status,
+            "author_id": self.author_id,
+            "author_name": self.author_name,
+            "progress": self.progress,
+            "message": self.message,
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+            "error": self.error,
+        }
+
+
+author_refresh_status = AuthorRefreshStatus()
+
+
 @dataclass
 class SourceRunSummary:
     lookups_attempted: int = 0
@@ -2586,7 +2651,9 @@ async def refresh_single_author(author_id: int):
     usage_batch_token = begin_api_usage_batch()
     try:
         async with async_session() as db:
+            author_refresh_status.update(progress=3.0, message="Scanning local library files...")
             await scan_library(db, BOOKS_DIR)
+            author_refresh_status.update(progress=12.0, message="Loading author details...")
 
             result = await db.execute(
                 select(Author)
@@ -2599,20 +2666,37 @@ async def refresh_single_author(author_id: int):
             author = result.scalar_one_or_none()
             if not author:
                 raise ValueError("Author not found")
+            author_refresh_status.update(
+                progress=18.0,
+                message=f"Refreshing {author.name}...",
+                author_name=author.name,
+            )
 
             api_key = await get_api_key(db)
             books_added = 0
             books_removed = 0
             if api_key:
+                author_refresh_status.update(
+                    progress=25.0,
+                    message=f"Fetching Hardcover catalog for {author.name}...",
+                )
                 client = HardcoverClient(api_key)
                 try:
                     books_added, books_removed = await _sync_author_hardcover_catalog(db, author, client)
                 finally:
                     await client.close()
 
+            author_refresh_status.update(
+                progress=55.0,
+                message=f"Matching local files for {author.name}...",
+            )
             matched_count, repaired_count, new_local_books = await _repair_local_file_links(db, author=author)
             books_added += new_local_books
 
+            author_refresh_status.update(
+                progress=62.0,
+                message=f"Updating ownership counts for {author.name}...",
+            )
             count_result = await db.execute(
                 select(func.count(Book.id)).where(
                     Book.author_id == author.id,
@@ -2632,9 +2716,20 @@ async def refresh_single_author(author_id: int):
                 )
             )
             refreshed_author = refreshed_author_result.scalar_one()
-            for book in refreshed_author.books:
+            books_to_refresh = list(refreshed_author.books)
+            total_books = max(len(books_to_refresh), 1)
+            for index, book in enumerate(books_to_refresh, start=1):
+                book_progress = 65.0 + ((index - 1) / total_books) * 30.0
+                author_refresh_status.update(
+                    progress=book_progress,
+                    message=f"Refreshing book metadata {index}/{len(books_to_refresh)}: {book.title}",
+                )
                 await _refresh_book_from_scratch(db, book)
 
+            author_refresh_status.update(
+                progress=98.0,
+                message=f"Finalizing refresh for {refreshed_author.name}...",
+            )
             await flush_api_usage_batch(db)
             await db.commit()
             logger.info(
@@ -2649,6 +2744,25 @@ async def refresh_single_author(author_id: int):
             )
     finally:
         clear_api_usage_batch(usage_batch_token)
+
+
+async def _run_author_refresh_task(author_id: int):
+    try:
+        await refresh_single_author(author_id)
+    except Exception as exc:
+        author_refresh_status.fail(str(exc))
+        logger.exception("Author refresh failed: author_id=%s", author_id)
+    else:
+        author_refresh_status.complete()
+
+
+def trigger_author_refresh(author_id: int) -> bool:
+    if author_refresh_status.status == "refreshing":
+        return False
+
+    author_refresh_status.start(author_id)
+    asyncio.create_task(_run_author_refresh_task(author_id))
+    return True
 
 
 async def _refresh_book_from_scratch(db: AsyncSession, book: Book) -> None:
