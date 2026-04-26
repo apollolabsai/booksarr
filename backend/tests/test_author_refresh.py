@@ -6,9 +6,22 @@ from backend.app.models import Author, AuthorDirectory, Book, BookFile, BookSeri
 from backend.app.services.google_books import GBook, GoogleLookupResult
 from backend.app.services.hardcover import HCBook, HCSeriesRef
 from backend.app.services import library_sync, scanner
-from backend.app.services.library_sync import refresh_single_author, refresh_single_book
+from backend.app.services.library_sync import AuthorRefreshStatus, refresh_single_author, refresh_single_book
 from backend.app.services.openlibrary import OLBook, OpenLibraryLookupResult
 from backend.app.routers import authors as authors_router
+
+
+def test_author_refresh_status_reports_new_release_count():
+    status = AuthorRefreshStatus()
+    status.start(42, mode="new_releases")
+    status.update(author_name="David Baldacci")
+
+    status.complete(new_books_added=2)
+
+    payload = status.to_dict()
+    assert payload["status"] == "completed"
+    assert payload["new_books_added"] == 2
+    assert payload["message"] == "Found and added 2 new books for David Baldacci."
 
 
 class StubSessionFactory:

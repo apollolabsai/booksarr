@@ -1159,6 +1159,7 @@ class AuthorRefreshStatus:
         self.started_at: str | None = None
         self.completed_at: str | None = None
         self.error: str | None = None
+        self.new_books_added: int | None = None
 
     def start(self, author_id: int, mode: str = "full"):
         self.status = "refreshing"
@@ -1170,6 +1171,7 @@ class AuthorRefreshStatus:
         self.started_at = datetime.utcnow().isoformat()
         self.completed_at = None
         self.error = None
+        self.new_books_added = None
 
     def update(
         self,
@@ -1185,14 +1187,21 @@ class AuthorRefreshStatus:
         if author_name is not None:
             self.author_name = author_name
 
-    def complete(self):
+    def complete(self, *, new_books_added: int | None = None):
         self.status = "completed"
         self.progress = 100.0
-        self.message = (
-            f"Finished searching new releases for {self.author_name or 'author'}."
-            if self.mode == "new_releases"
-            else f"Finished refreshing {self.author_name or 'author'}."
-        )
+        if new_books_added is not None:
+            self.new_books_added = new_books_added
+        if self.mode == "new_releases":
+            count = self.new_books_added or 0
+            if count == 1:
+                self.message = f"Found and added 1 new book for {self.author_name or 'author'}."
+            elif count > 1:
+                self.message = f"Found and added {count} new books for {self.author_name or 'author'}."
+            else:
+                self.message = f"No new books found for {self.author_name or 'author'}."
+        else:
+            self.message = f"Finished refreshing {self.author_name or 'author'}."
         self.completed_at = datetime.utcnow().isoformat()
         self.error = None
 
@@ -1214,6 +1223,7 @@ class AuthorRefreshStatus:
             "started_at": self.started_at,
             "completed_at": self.completed_at,
             "error": self.error,
+            "new_books_added": self.new_books_added,
         }
 
 
@@ -2787,18 +2797,26 @@ async def refresh_single_author(author_id: int, mode: str = "full"):
                 repaired_count,
                 len(books_to_refresh),
             )
+            return {
+                "books_added": books_added,
+                "books_removed": books_removed,
+                "new_books_added": len(added_hardcover_book_ids) if new_releases_only else None,
+                "refreshed_books": len(books_to_refresh),
+            }
     finally:
         clear_api_usage_batch(usage_batch_token)
 
 
 async def _run_author_refresh_task(author_id: int, mode: str):
     try:
-        await refresh_single_author(author_id, mode=mode)
+        result = await refresh_single_author(author_id, mode=mode)
     except Exception as exc:
         author_refresh_status.fail(str(exc))
         logger.exception("Author refresh failed: author_id=%s mode=%s", author_id, mode)
     else:
-        author_refresh_status.complete()
+        author_refresh_status.complete(
+            new_books_added=result.get("new_books_added") if isinstance(result, dict) else None,
+        )
 
 
 def trigger_author_refresh(author_id: int, mode: str = "full") -> bool:

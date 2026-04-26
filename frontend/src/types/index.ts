@@ -254,6 +254,7 @@ export interface AuthorRefreshStatus {
   started_at: string | null;
   completed_at: string | null;
   error: string | null;
+  new_books_added: number | null;
 }
 
 export interface HiddenCategorySummary {
