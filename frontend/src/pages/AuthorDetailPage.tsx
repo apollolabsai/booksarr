@@ -68,14 +68,21 @@ export default function AuthorDetailPage() {
   const [bioExpanded, setBioExpanded] = useState(false);
   const [portraitPickerOpen, setPortraitPickerOpen] = useState(false);
   const [portraitMenuOpen, setPortraitMenuOpen] = useState(false);
+  const [refreshMenuOpen, setRefreshMenuOpen] = useState(false);
   const [mergeFoldersOpen, setMergeFoldersOpen] = useState(false);
   const [mergeTargetDirectoryId, setMergeTargetDirectoryId] = useState<number | null>(null);
   const [selectedBookIds, setSelectedBookIds] = useState<Set<number>>(new Set());
   const portraitMenuRef = useRef<HTMLDivElement | null>(null);
+  const refreshMenuRef = useRef<HTMLDivElement | null>(null);
   const authorName = author?.name ?? "Unknown author";
   const isAuthorRefreshRunning = authorRefreshStatus?.status === "refreshing";
   const isThisAuthorRefreshing = isAuthorRefreshRunning && authorRefreshStatus?.author_id === authorId;
   const handleSearch = useCallback((value: string) => setSearch(value), []);
+  const startAuthorRefresh = useCallback((mode: "full" | "new_releases") => {
+    if (!author) return;
+    setRefreshMenuOpen(false);
+    refreshAuthor.mutate({ authorId: author.id, mode });
+  }, [author, refreshAuthor]);
 
   useEffect(() => {
     if (!author) {
@@ -98,6 +105,19 @@ export default function AuthorDetailPage() {
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [portraitMenuOpen]);
+
+  useEffect(() => {
+    if (!refreshMenuOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (refreshMenuRef.current && !refreshMenuRef.current.contains(event.target as Node)) {
+        setRefreshMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [refreshMenuOpen]);
   const imgUrl = author ? getImageUrl(author.image_cached_path, author.image_url) : "";
 
   const searchNormalized = search.trim().toLowerCase();
@@ -373,18 +393,41 @@ export default function AuthorDetailPage() {
           <div className="mb-2">
             <div className={`flex ${isMobile ? "flex-col items-start gap-2" : "items-center gap-3"}`}>
               <h1 className={`${isMobile ? "text-2xl" : "text-3xl"} font-bold`}>{author.name}</h1>
-              <button
-                type="button"
-                onClick={() => refreshAuthor.mutate(author.id)}
-                disabled={refreshAuthor.isPending || isAuthorRefreshRunning}
-                className="inline-flex items-center gap-2 rounded-md border border-slate-600 bg-slate-800 px-3 py-1.5 text-sm text-slate-200 transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-                title="Refresh this author and rescan local files for newly added books"
-              >
-                <svg className={`h-4 w-4 ${refreshAuthor.isPending || isThisAuthorRefreshing ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m14.836 2A8.001 8.001 0 005.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.356-2m15.356 2H15" />
-                </svg>
-                {isThisAuthorRefreshing ? "Refreshing..." : isAuthorRefreshRunning ? "Refresh In Progress" : refreshAuthor.isPending ? "Starting..." : "Refresh Author"}
-              </button>
+              <div ref={refreshMenuRef} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setRefreshMenuOpen((current) => !current)}
+                  disabled={refreshAuthor.isPending || isAuthorRefreshRunning}
+                  className="inline-flex items-center gap-2 rounded-md border border-slate-600 bg-slate-800 px-3 py-1.5 text-sm text-slate-200 transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  title="Refresh author"
+                >
+                  <svg className={`h-4 w-4 ${refreshAuthor.isPending || isThisAuthorRefreshing ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m14.836 2A8.001 8.001 0 005.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.356-2m15.356 2H15" />
+                  </svg>
+                  {isThisAuthorRefreshing ? "Refreshing..." : isAuthorRefreshRunning ? "Refresh In Progress" : refreshAuthor.isPending ? "Starting..." : "Refresh Author"}
+                  <svg className="h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+                {refreshMenuOpen && (
+                  <div className="absolute left-0 top-full z-30 mt-1 w-56 rounded-lg border border-slate-600 bg-slate-900/95 p-1 shadow-xl">
+                    <button
+                      type="button"
+                      onClick={() => startAuthorRefresh("full")}
+                      className="flex w-full items-center rounded-md px-3 py-2 text-left text-sm text-slate-200 transition-colors hover:bg-slate-800"
+                    >
+                      Full Refresh
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => startAuthorRefresh("new_releases")}
+                      className="flex w-full items-center rounded-md px-3 py-2 text-left text-sm text-slate-200 transition-colors hover:bg-slate-800"
+                    >
+                      Search for New Releases
+                    </button>
+                  </div>
+                )}
+              </div>
               <button
                 type="button"
                 onClick={handleRemoveAuthor}

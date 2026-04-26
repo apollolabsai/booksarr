@@ -291,12 +291,16 @@ async def _upsert_author_directory(db: AsyncSession, author: Author, dir_name: s
 
 
 @router.post("/{author_id}/refresh")
-async def refresh_author_route(author_id: int, db: AsyncSession = Depends(get_db)):
+async def refresh_author_route(
+    author_id: int,
+    mode: str = Query("full", pattern="^(full|new_releases)$"),
+    db: AsyncSession = Depends(get_db),
+):
     result = await db.execute(select(Author.id).where(Author.id == author_id))
     if result.scalar_one_or_none() is None:
         raise HTTPException(status_code=404, detail="Author not found")
 
-    started = trigger_author_refresh(author_id)
+    started = trigger_author_refresh(author_id, mode=mode)
     if not started:
         return {
             "status": "already_refreshing",

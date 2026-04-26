@@ -1003,15 +1003,18 @@ async def _sync_author_hardcover_catalog(
     db: AsyncSession,
     author: Author,
     client: HardcoverClient,
-) -> tuple[int, int]:
+    *,
+    prune_stale: bool = True,
+) -> tuple[int, int, list[int]]:
     books_added = 0
     books_removed = 0
+    added_book_ids: list[int] = []
 
     if not author.hardcover_id:
         hc_author = await client.search_author(author.name)
         if not hc_author:
             logger.info("No Hardcover author match found during author refresh: %s", author.name)
-            return 0, 0
+            return 0, 0, []
         author.hardcover_id = hc_author.id
         author.hardcover_slug = hc_author.slug
         author.bio = hc_author.bio
@@ -1033,7 +1036,7 @@ async def _sync_author_hardcover_catalog(
     existing_author_books = existing_author_books_result.scalars().all()
     stale_books = [
         book for book in existing_author_books
-        if book.hardcover_id and book.hardcover_id not in eligible_hardcover_ids
+        if prune_stale and book.hardcover_id and book.hardcover_id not in eligible_hardcover_ids
     ]
 
     for stale_book in stale_books:
@@ -1111,6 +1114,7 @@ async def _sync_author_hardcover_catalog(
             db.add(book)
             await db.flush()
             books_added += 1
+            added_book_ids.append(book.id)
 
         for sr in hc_book.series_refs:
             series = await _get_or_create_series(db, sr.id, sr.name)
@@ -1128,7 +1132,7 @@ async def _sync_author_hardcover_catalog(
                 ))
 
     author.last_synced_at = datetime.utcnow()
-    return books_added, books_removed
+    return books_added, books_removed, added_book_ids
 
 
 class ScanStatus:
@@ -1147,6 +1151,7 @@ scan_status = ScanStatus()
 class AuthorRefreshStatus:
     def __init__(self):
         self.status: str = "idle"
+        self.mode: str = "full"
         self.author_id: int | None = None
         self.author_name: str | None = None
         self.progress: float = 0.0
@@ -1155,12 +1160,13 @@ class AuthorRefreshStatus:
         self.completed_at: str | None = None
         self.error: str | None = None
 
-    def start(self, author_id: int):
+    def start(self, author_id: int, mode: str = "full"):
         self.status = "refreshing"
+        self.mode = mode
         self.author_id = author_id
         self.author_name = None
         self.progress = 0.0
-        self.message = "Starting author refresh..."
+        self.message = "Searching for new releases..." if mode == "new_releases" else "Starting author refresh..."
         self.started_at = datetime.utcnow().isoformat()
         self.completed_at = None
         self.error = None
@@ -1182,7 +1188,11 @@ class AuthorRefreshStatus:
     def complete(self):
         self.status = "completed"
         self.progress = 100.0
-        self.message = f"Finished refreshing {self.author_name or 'author'}."
+        self.message = (
+            f"Finished searching new releases for {self.author_name or 'author'}."
+            if self.mode == "new_releases"
+            else f"Finished refreshing {self.author_name or 'author'}."
+        )
         self.completed_at = datetime.utcnow().isoformat()
         self.error = None
 
@@ -1196,6 +1206,7 @@ class AuthorRefreshStatus:
     def to_dict(self) -> dict:
         return {
             "status": self.status,
+            "mode": self.mode,
             "author_id": self.author_id,
             "author_name": self.author_name,
             "progress": self.progress,
@@ -2647,11 +2658,15 @@ async def refresh_single_book(book_id: int):
         clear_api_usage_batch(usage_batch_token)
 
 
-async def refresh_single_author(author_id: int):
+async def refresh_single_author(author_id: int, mode: str = "full"):
+    new_releases_only = mode == "new_releases"
     usage_batch_token = begin_api_usage_batch()
     try:
         async with async_session() as db:
-            author_refresh_status.update(progress=3.0, message="Scanning local library files...")
+            author_refresh_status.update(
+                progress=3.0,
+                message="Scanning local library files..." if not new_releases_only else "Checking local library files...",
+            )
             await scan_library(db, BOOKS_DIR)
             author_refresh_status.update(progress=12.0, message="Loading author details...")
 
@@ -2675,16 +2690,28 @@ async def refresh_single_author(author_id: int):
             api_key = await get_api_key(db)
             books_added = 0
             books_removed = 0
+            added_hardcover_book_ids: list[int] = []
             if api_key:
                 author_refresh_status.update(
                     progress=25.0,
-                    message=f"Fetching Hardcover catalog for {author.name}...",
+                    message=(
+                        f"Searching Hardcover for new {author.name} releases..."
+                        if new_releases_only
+                        else f"Fetching Hardcover catalog for {author.name}..."
+                    ),
                 )
                 client = HardcoverClient(api_key)
                 try:
-                    books_added, books_removed = await _sync_author_hardcover_catalog(db, author, client)
+                    books_added, books_removed, added_hardcover_book_ids = await _sync_author_hardcover_catalog(
+                        db,
+                        author,
+                        client,
+                        prune_stale=not new_releases_only,
+                    )
                 finally:
                     await client.close()
+            elif new_releases_only:
+                raise ValueError("Hardcover API key is not configured")
 
             author_refresh_status.update(
                 progress=55.0,
@@ -2706,17 +2733,34 @@ async def refresh_single_author(author_id: int):
             author.book_count_local = count_result.scalar() or 0
             await db.commit()
 
-            refreshed_author_result = await db.execute(
-                select(Author)
-                .where(Author.id == author.id)
-                .options(
-                    selectinload(Author.books).selectinload(Book.author),
-                    selectinload(Author.books).selectinload(Book.files),
-                    selectinload(Author.books).selectinload(Book.book_series).selectinload(BookSeries.series),
+            if new_releases_only:
+                if added_hardcover_book_ids:
+                    books_result = await db.execute(
+                        select(Book)
+                        .where(Book.id.in_(added_hardcover_book_ids))
+                        .options(
+                            selectinload(Book.author),
+                            selectinload(Book.files),
+                            selectinload(Book.book_series).selectinload(BookSeries.series),
+                        )
+                    )
+                    books_to_refresh = list(books_result.scalars().all())
+                else:
+                    books_to_refresh = []
+                refreshed_author_name = author.name
+            else:
+                refreshed_author_result = await db.execute(
+                    select(Author)
+                    .where(Author.id == author.id)
+                    .options(
+                        selectinload(Author.books).selectinload(Book.author),
+                        selectinload(Author.books).selectinload(Book.files),
+                        selectinload(Author.books).selectinload(Book.book_series).selectinload(BookSeries.series),
+                    )
                 )
-            )
-            refreshed_author = refreshed_author_result.scalar_one()
-            books_to_refresh = list(refreshed_author.books)
+                refreshed_author = refreshed_author_result.scalar_one()
+                books_to_refresh = list(refreshed_author.books)
+                refreshed_author_name = refreshed_author.name
             total_books = max(len(books_to_refresh), 1)
             for index, book in enumerate(books_to_refresh, start=1):
                 book_progress = 65.0 + ((index - 1) / total_books) * 30.0
@@ -2728,40 +2772,41 @@ async def refresh_single_author(author_id: int):
 
             author_refresh_status.update(
                 progress=98.0,
-                message=f"Finalizing refresh for {refreshed_author.name}...",
+                message=f"Finalizing refresh for {refreshed_author_name}...",
             )
             await flush_api_usage_batch(db)
             await db.commit()
             logger.info(
-                "Author refresh complete: author_id=%s name=%r books_added=%d books_removed=%d matched=%d repaired=%d refreshed_books=%d",
+                "Author refresh complete: author_id=%s name=%r mode=%s books_added=%d books_removed=%d matched=%d repaired=%d refreshed_books=%d",
                 author.id,
                 author.name,
+                mode,
                 books_added,
                 books_removed,
                 matched_count,
                 repaired_count,
-                len(refreshed_author.books),
+                len(books_to_refresh),
             )
     finally:
         clear_api_usage_batch(usage_batch_token)
 
 
-async def _run_author_refresh_task(author_id: int):
+async def _run_author_refresh_task(author_id: int, mode: str):
     try:
-        await refresh_single_author(author_id)
+        await refresh_single_author(author_id, mode=mode)
     except Exception as exc:
         author_refresh_status.fail(str(exc))
-        logger.exception("Author refresh failed: author_id=%s", author_id)
+        logger.exception("Author refresh failed: author_id=%s mode=%s", author_id, mode)
     else:
         author_refresh_status.complete()
 
 
-def trigger_author_refresh(author_id: int) -> bool:
+def trigger_author_refresh(author_id: int, mode: str = "full") -> bool:
     if author_refresh_status.status == "refreshing":
         return False
 
-    author_refresh_status.start(author_id)
-    asyncio.create_task(_run_author_refresh_task(author_id))
+    author_refresh_status.start(author_id, mode=mode)
+    asyncio.create_task(_run_author_refresh_task(author_id, mode))
     return True
 
 

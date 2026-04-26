@@ -246,6 +246,7 @@ export interface ScanStatus {
 
 export interface AuthorRefreshStatus {
   status: "idle" | "refreshing" | "completed" | "failed";
+  mode: "full" | "new_releases";
   author_id: number | null;
   author_name: string | null;
   progress: number;

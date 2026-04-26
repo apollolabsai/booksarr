@@ -97,14 +97,14 @@ export function useAddAuthorFromHardcover() {
 export function useRefreshAuthor() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (authorId: number) =>
-      fetchApi(`/authors/${authorId}/refresh`, {
+    mutationFn: ({ authorId, mode }: { authorId: number; mode: "full" | "new_releases" }) =>
+      fetchApi(`/authors/${authorId}/refresh?mode=${mode}`, {
         method: "POST",
       }),
-    onSuccess: (_, authorId) => {
+    onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ["authorRefreshStatus"] });
       queryClient.invalidateQueries({ queryKey: ["authors"] });
-      queryClient.invalidateQueries({ queryKey: ["authors", authorId] });
+      queryClient.invalidateQueries({ queryKey: ["authors", variables.authorId] });
       queryClient.invalidateQueries({ queryKey: ["books"] });
       queryClient.invalidateQueries({ queryKey: ["hiddenBooks"] });
     },
