@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuthorRefreshStatus } from "../api/authors";
 import type { AuthorRefreshStatus } from "../types";
@@ -9,6 +9,12 @@ export default function AuthorRefreshStatusToast() {
   const queryClient = useQueryClient();
   const { data: status } = useAuthorRefreshStatus();
   const previousStatus = useRef<AuthorRefreshStatus["status"] | null>(null);
+  const [dismissedTerminalKey, setDismissedTerminalKey] = useState<string | null>(null);
+
+  const isTerminal = status?.status === "completed" || status?.status === "failed";
+  const terminalKey = status && isTerminal
+    ? [status.author_id ?? "none", status.mode, status.status, status.started_at ?? "", status.completed_at ?? ""].join(":")
+    : null;
 
   useEffect(() => {
     const previous = previousStatus.current;
@@ -29,10 +35,11 @@ export default function AuthorRefreshStatusToast() {
     if (!status) return false;
     if (status.status === "refreshing") return true;
     if ((status.status === "completed" || status.status === "failed") && status.completed_at) {
+      if (terminalKey && terminalKey === dismissedTerminalKey) return false;
       return Date.now() - parseTimestamp(status.completed_at) < TERMINAL_VISIBLE_MS;
     }
     return false;
-  }, [status]);
+  }, [dismissedTerminalKey, status, terminalKey]);
 
   if (!status || !isVisible) return null;
 
@@ -60,7 +67,18 @@ export default function AuthorRefreshStatusToast() {
             {status.message || (isFailed ? status.error : "Working...")}
           </div>
         </div>
-        <div className="text-xs tabular-nums text-slate-500">{status.status === "refreshing" ? `${progress}%` : ""}</div>
+        {isTerminal && terminalKey ? (
+          <button
+            type="button"
+            aria-label="Dismiss author refresh status"
+            onClick={() => setDismissedTerminalKey(terminalKey)}
+            className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded border border-slate-700 text-xs font-semibold text-slate-400 transition hover:border-slate-500 hover:bg-slate-800 hover:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          >
+            X
+          </button>
+        ) : (
+          <div className="text-xs tabular-nums text-slate-500">{status.status === "refreshing" ? `${progress}%` : ""}</div>
+        )}
       </div>
       <div className="h-1.5 overflow-hidden rounded-full bg-slate-800">
         <div
