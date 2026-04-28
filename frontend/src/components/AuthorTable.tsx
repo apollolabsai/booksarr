@@ -14,9 +14,11 @@ function getCompletion(author: Author) {
 export default function AuthorTable({
   authors,
   initialSort = "name",
+  getRowId,
 }: {
   authors: Author[];
   initialSort?: SortKey | string;
+  getRowId?: (author: Author) => string;
 }) {
   const [sort, setSort] = useState<SortKey>("name");
 
@@ -115,7 +117,11 @@ export default function AuthorTable({
               ? Math.round((author.book_count_local / author.book_count_total) * 100)
               : 0;
             return (
-              <tr key={author.id} className="hover:bg-slate-700/50 transition-colors">
+              <tr
+                key={author.id}
+                id={getRowId?.(author)}
+                className="scroll-mt-6 hover:bg-slate-700/50 transition-colors"
+              >
                 <td className="px-4 py-2">
                   <div className="w-8 h-8 rounded-full overflow-hidden bg-slate-700 flex-shrink-0">
                     {imgUrl ? (

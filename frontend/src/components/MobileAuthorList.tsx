@@ -2,7 +2,13 @@ import { Link } from "react-router-dom";
 import type { Author } from "../types";
 import { getImageUrl } from "../types";
 
-export default function MobileAuthorList({ authors }: { authors: Author[] }) {
+export default function MobileAuthorList({
+  authors,
+  getItemId,
+}: {
+  authors: Author[];
+  getItemId?: (author: Author) => string;
+}) {
   return (
     <div className="space-y-3">
       {authors.map((author) => {
@@ -10,8 +16,9 @@ export default function MobileAuthorList({ authors }: { authors: Author[] }) {
         return (
           <Link
             key={author.id}
+            id={getItemId?.(author)}
             to={`/authors/${author.id}`}
-            className="flex items-center gap-3 rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-3 transition-colors hover:border-emerald-500/40"
+            className="flex scroll-mt-6 items-center gap-3 rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-3 transition-colors hover:border-emerald-500/40"
           >
             <div className="h-14 w-14 flex-shrink-0 overflow-hidden rounded-2xl bg-slate-800">
               {imageUrl ? (

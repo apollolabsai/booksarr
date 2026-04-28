@@ -2,13 +2,14 @@ import { Link } from "react-router-dom";
 import type { Author } from "../types";
 import { getImageUrl } from "../types";
 
-export default function AuthorCard({ author }: { author: Author }) {
+export default function AuthorCard({ author, id }: { author: Author; id?: string }) {
   const imgUrl = getImageUrl(author.image_cached_path, author.image_url);
 
   return (
     <Link
+      id={id}
       to={`/authors/${author.id}`}
-      className="group bg-slate-800 rounded-lg border border-slate-700 overflow-hidden hover:border-emerald-500/50 transition-all hover:shadow-lg hover:shadow-emerald-500/10"
+      className="group scroll-mt-6 bg-slate-800 rounded-lg border border-slate-700 overflow-hidden hover:border-emerald-500/50 transition-all hover:shadow-lg hover:shadow-emerald-500/10"
     >
       <div className="aspect-[3/4] bg-slate-700 overflow-hidden">
         {imgUrl ? (

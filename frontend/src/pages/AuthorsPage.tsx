@@ -1,4 +1,5 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
+import type { Author } from "../types";
 import { useAuthors } from "../api/authors";
 import AuthorCard from "../components/AuthorCard";
 import MobileAuthorList from "../components/MobileAuthorList";
@@ -15,16 +16,47 @@ const SORT_OPTIONS = [
   { value: "-books", label: "Most Books" },
   { value: "-owned", label: "Most Owned" },
 ];
+const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+
+function getAuthorAnchorId(author: Author) {
+  return `author-${author.id}`;
+}
+
+function getAuthorInitial(author: Author) {
+  const match = author.name.trim().match(/[A-Za-z]/);
+  return match ? match[0].toUpperCase() : "";
+}
 
 export default function AuthorsPage() {
   const [sort, setSort] = useState("name");
   const [search, setSearch] = useState("");
   const [view, setView] = useState<"grid" | "table">("grid");
   const [addAuthorOpen, setAddAuthorOpen] = useState(false);
+  const [selectedLetter, setSelectedLetter] = useState<string | null>(null);
   const { data: authors, isLoading } = useAuthors(sort, search);
   const isMobile = useIsMobile();
 
   const handleSearch = useCallback((v: string) => setSearch(v), []);
+  const letterTargets = useMemo(() => {
+    const targets = new Map<string, number>();
+    const sortedAuthors = [...(authors ?? [])].sort((a, b) => a.name.localeCompare(b.name));
+    sortedAuthors.forEach((author) => {
+      const initial = getAuthorInitial(author);
+      if (initial && !targets.has(initial)) {
+        targets.set(initial, author.id);
+      }
+    });
+    return targets;
+  }, [authors]);
+  const handleLetterSelect = useCallback((letter: string) => {
+    const authorId = letterTargets.get(letter);
+    if (!authorId) return;
+    setSelectedLetter(letter);
+    document.getElementById(`author-${authorId}`)?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }, [letterTargets]);
   const authorCount = authors?.length ?? 0;
   const ownedBookCount = authors?.reduce((sum, author) => sum + author.book_count_local, 0) ?? 0;
   const visibleBookCount = authors?.reduce((sum, author) => sum + author.book_count_total, 0) ?? 0;
@@ -87,17 +119,87 @@ export default function AuthorsPage() {
           </p>
         </div>
       ) : isMobile ? (
-        <MobileAuthorList authors={authors} />
+        <>
+          <div className="pr-7">
+            <MobileAuthorList authors={authors} getItemId={getAuthorAnchorId} />
+          </div>
+          <AuthorLetterIndex
+            targets={letterTargets}
+            selectedLetter={selectedLetter}
+            onSelect={handleLetterSelect}
+            compact
+          />
+        </>
       ) : view === "table" ? (
-        <AuthorTable authors={authors} />
+        <>
+          <div className="pr-8">
+            <AuthorTable authors={authors} getRowId={getAuthorAnchorId} />
+          </div>
+          <AuthorLetterIndex
+            targets={letterTargets}
+            selectedLetter={selectedLetter}
+            onSelect={handleLetterSelect}
+          />
+        </>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-          {authors.map((author) => (
-            <AuthorCard key={author.id} author={author} />
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 pr-8">
+            {authors.map((author) => (
+              <AuthorCard key={author.id} id={getAuthorAnchorId(author)} author={author} />
+            ))}
+          </div>
+          <AuthorLetterIndex
+            targets={letterTargets}
+            selectedLetter={selectedLetter}
+            onSelect={handleLetterSelect}
+          />
+        </>
       )}
       <AddAuthorDialog open={addAuthorOpen} onClose={() => setAddAuthorOpen(false)} />
     </div>
+  );
+}
+
+function AuthorLetterIndex({
+  targets,
+  selectedLetter,
+  onSelect,
+  compact = false,
+}: {
+  targets: Map<string, number>;
+  selectedLetter: string | null;
+  onSelect: (letter: string) => void;
+  compact?: boolean;
+}) {
+  return (
+    <nav
+      aria-label="Author letter index"
+      className={`fixed right-2 top-1/2 z-30 flex -translate-y-1/2 flex-col rounded-full border border-slate-700 bg-slate-950/90 py-1 shadow-xl shadow-black/30 backdrop-blur ${
+        compact ? "max-h-[70vh]" : "max-h-[80vh]"
+      }`}
+    >
+      {LETTERS.map((letter) => {
+        const enabled = targets.has(letter);
+        const selected = selectedLetter === letter;
+        return (
+          <button
+            key={letter}
+            type="button"
+            disabled={!enabled}
+            aria-label={`Jump to authors starting with ${letter}`}
+            onClick={() => onSelect(letter)}
+            className={`h-5 w-7 text-[11px] font-semibold leading-5 transition ${
+              selected
+                ? "text-emerald-300"
+                : enabled
+                  ? "text-slate-300 hover:text-emerald-300"
+                  : "cursor-default text-slate-700"
+            }`}
+          >
+            {letter}
+          </button>
+        );
+      })}
+    </nav>
   );
 }
