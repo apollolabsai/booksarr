@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -302,7 +303,8 @@ function isTerminalDownloadStatus(status: string | null): boolean {
 }
 
 function SearchResultName({ result }: { result: IrcSearchResult }) {
-  const [showTooltip, setShowTooltip] = useState(false);
+  const [tooltipPosition, setTooltipPosition] = useState<{ left: number; top: number; maxWidth: number } | null>(null);
+  const triggerRef = useRef<HTMLDivElement | null>(null);
   const timerRef = useRef<number | null>(null);
   const resultLabel = getResultLabel(result.display_name, result.download_command);
 
@@ -318,7 +320,19 @@ function SearchResultName({ result }: { result: IrcSearchResult }) {
     if (timerRef.current) {
       window.clearTimeout(timerRef.current);
     }
-    timerRef.current = window.setTimeout(() => setShowTooltip(true), 350);
+    timerRef.current = window.setTimeout(() => {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+
+      const viewportPadding = 16;
+      const maxWidth = Math.min(704, window.innerWidth - viewportPadding * 2);
+      const left = Math.min(Math.max(rect.left, viewportPadding), window.innerWidth - maxWidth - viewportPadding);
+      setTooltipPosition({
+        left,
+        top: rect.bottom + 8,
+        maxWidth,
+      });
+    }, 350);
   };
 
   const handleLeave = () => {
@@ -326,12 +340,13 @@ function SearchResultName({ result }: { result: IrcSearchResult }) {
       window.clearTimeout(timerRef.current);
       timerRef.current = null;
     }
-    setShowTooltip(false);
+    setTooltipPosition(null);
   };
 
   return (
     <div
-      className="relative min-w-0 flex-1"
+      ref={triggerRef}
+      className="min-w-0 flex-1"
       onMouseEnter={handleEnter}
       onMouseLeave={handleLeave}
       onFocus={handleEnter}
@@ -344,10 +359,18 @@ function SearchResultName({ result }: { result: IrcSearchResult }) {
         <span className="text-slate-500"> | </span>
         <span tabIndex={0}>{resultLabel}</span>
       </div>
-      {showTooltip && (
-        <div className="pointer-events-none absolute left-0 top-full z-50 mt-2 max-w-[min(44rem,calc(100vw-4rem))] rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-xs font-medium leading-relaxed text-slate-100 shadow-2xl ring-1 ring-black/40">
+      {tooltipPosition && createPortal(
+        <div
+          className="pointer-events-none fixed z-[9999] rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-xs font-medium leading-relaxed text-slate-100 shadow-2xl ring-1 ring-black/40"
+          style={{
+            left: tooltipPosition.left,
+            top: tooltipPosition.top,
+            maxWidth: tooltipPosition.maxWidth,
+          }}
+        >
           <div className="break-words">{resultLabel}</div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
