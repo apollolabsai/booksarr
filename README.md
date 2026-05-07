@@ -47,6 +47,7 @@ services:
       - TZ=America/Los_Angeles
       - HARDCOVER_API_KEY=
       - GOOGLE_BOOKS_API_KEY=    # Optional but recommended
+      - BOOKS_DIR=/books         # Container path to scan
       - DOWNLOADS_DIR=/downloads # Used by IRC downloads
     volumes:
       - ./config:/config
@@ -73,7 +74,7 @@ Then open `http://localhost:8889`.
 
 ### Library Structure
 
-Booksarr expects book files under your `/books` mount, typically organized by author:
+Booksarr scans the container path configured by `BOOKS_DIR`, which defaults to `/books`. Mount your host library to that same container path. The configured library directory should directly contain author folders:
 
 ```text
 /books/
@@ -90,6 +91,15 @@ Booksarr expects book files under your `/books` mount, typically organized by au
   Andy Weir/
     Project Hail Mary/
       Project Hail Mary - Andy Weir.audiobook.zip
+```
+
+If your container mount is named differently, set `BOOKS_DIR` to match it:
+
+```yaml
+environment:
+  - BOOKS_DIR=/mnt/user/Books-F
+volumes:
+  - /path/to/your/books:/mnt/user/Books-F
 ```
 
 ### Setup
@@ -112,7 +122,7 @@ Booksarr expects book files under your `/books` mount, typically organized by au
 | `HARDCOVER_API_KEY` | | Hardcover API key, also configurable in the UI |
 | `GOOGLE_BOOKS_API_KEY` | | Optional Google Books API key, also configurable in the UI |
 | `CONFIG_DIR` | `/config` | Config, SQLite database, cache, and app state directory |
-| `BOOKS_DIR` | `/books` | Mounted book library directory |
+| `BOOKS_DIR` | `/books` | Container path to the mounted book library directory |
 | `DOWNLOADS_DIR` | `/downloads` | IRC download staging directory |
 | `IRC_STATE_DIR` | `/config/irc` | IRC worker state directory |
 | `PORT` | `8889` | Web UI port |
@@ -146,9 +156,9 @@ Booksarr supports one IRC profile at a time from **Settings > IRC**.
 - Shows live status updates in the UI while a selection is downloading, extracting, importing, and refreshing library state.
 - Receives the selected book via DCC into `/downloads`.
 - Automatically extracts supported archives when possible and can keep the original download in `/downloads` if auto-move is disabled.
-- Optionally moves completed downloads into `/books` and triggers a targeted library refresh so the book becomes owned in the UI quickly.
+- Optionally moves completed downloads into `BOOKS_DIR` and triggers a targeted library refresh so the book becomes owned in the UI quickly.
 
-For auto-move to work, your `/books` mount must be writable.
+For auto-move, author folder creation, and folder merge actions to work, your `BOOKS_DIR` mount must be writable. You can add `:ro` to the library volume only if you want Booksarr to scan the library without writing to it.
 
 For PIA VPN routing to work, the container must be started with:
 
