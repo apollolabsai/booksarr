@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from sqlalchemy import select
 
 from backend.app.models import Author, Book, BookFile
 from backend.app.services import irc_worker, library_sync

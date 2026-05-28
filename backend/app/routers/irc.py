@@ -50,6 +50,8 @@ from backend.app.services.irc_worker import (
     serialize_bulk_file_type_preferences,
     request_connect,
     request_disconnect,
+    start_irc_worker,
+    stop_irc_worker,
 )
 
 logger = logging.getLogger("booksarr.irc")
@@ -131,6 +133,10 @@ async def update_irc_settings(body: IrcSettingsUpdate, db: AsyncSession = Depend
         await _upsert_setting(db, key, value)
 
     await db.commit()
+    if body.enabled is True:
+        await start_irc_worker()
+    elif body.enabled is False:
+        await stop_irc_worker(disabled=True)
     logger.info("IRC settings updated")
     return {"status": "ok"}
 
@@ -138,7 +144,10 @@ async def update_irc_settings(body: IrcSettingsUpdate, db: AsyncSession = Depend
 @router.get("/status", response_model=IrcWorkerStatusResponse)
 async def get_irc_status(db: AsyncSession = Depends(get_db)):
     runtime = get_runtime_status()
-    queued_search_jobs, queued_download_jobs = await _get_queue_counts(db)
+    if runtime.enabled:
+        queued_search_jobs, queued_download_jobs = await _get_queue_counts(db)
+    else:
+        queued_search_jobs, queued_download_jobs = 0, 0
     return IrcWorkerStatusResponse(
         enabled=runtime.enabled,
         desired_connection=runtime.desired_connection,
