@@ -159,13 +159,23 @@ async def start_irc_worker():
     global _worker_task, _stop_event
     if _worker_task and not _worker_task.done():
         logger.info("IRC worker already running")
-        return
+        return True
+    if not await _load_irc_enabled():
+        _runtime.enabled = False
+        _runtime.connected = False
+        _runtime.joined_channel = False
+        _runtime.state = "disabled"
+        _runtime.last_error = None
+        _runtime.last_message = "IRC integration disabled in settings"
+        logger.info("IRC worker not started: integration disabled")
+        return False
     _stop_event = asyncio.Event()
     _worker_task = asyncio.create_task(_worker_loop())
     logger.info("IRC worker started")
+    return True
 
 
-async def stop_irc_worker():
+async def stop_irc_worker(*, disabled: bool = False):
     global _worker_task, _stop_event
     if _stop_event:
         _stop_event.set()
@@ -177,12 +187,19 @@ async def stop_irc_worker():
             pass
     _worker_task = None
     _stop_event = None
+    _runtime.enabled = False
+    if disabled:
+        _runtime.desired_connection = False
     _runtime.connected = False
     _runtime.joined_channel = False
     _reset_online_nicks()
-    _runtime.state = "stopped"
-    await _close_connection("Worker shutdown")
-    logger.info("IRC worker stopped")
+    _runtime.state = "disabled" if disabled else "stopped"
+    _runtime.last_error = None
+    _runtime.last_message = (
+        "IRC integration disabled in settings" if disabled else "IRC worker stopped"
+    )
+    await _close_connection("IRC disabled in settings" if disabled else "Worker shutdown")
+    logger.info("IRC worker stopped%s", " after integration was disabled" if disabled else "")
 
 
 async def request_connect():
@@ -230,19 +247,18 @@ async def _worker_loop():
             _runtime.channel = settings["channel"] or None
             _runtime.nickname = settings["nickname"] or None
 
-            queued_searches, queued_downloads = await _get_queue_counts()
             _runtime.active_search_job_id = None
             _runtime.active_download_job_id = None
 
             if not settings["enabled"]:
                 if _runtime.state != "disabled":
                     _runtime.state = "disabled"
+                    _runtime.desired_connection = False
                     _runtime.last_error = None
                     _runtime.last_message = "IRC integration disabled in settings"
                     logger.info("IRC worker idle: integration disabled")
                 await _close_connection("IRC disabled in settings")
-                await asyncio.sleep(5)
-                continue
+                return
 
             if not _runtime.desired_connection:
                 if _runtime.state not in {"idle", "connect_failed", "invalid_config"}:
@@ -281,6 +297,7 @@ async def _worker_loop():
                 await _expire_stale_search_jobs()
                 await _expire_stale_download_jobs()
                 await _process_bulk_batches()
+                queued_searches, queued_downloads = await _get_queue_counts()
                 _runtime.state = "connected"
                 _runtime.last_message = (
                     f"Connected and monitoring jobs ({queued_searches} search, {queued_downloads} download queued)"
@@ -2675,6 +2692,13 @@ async def _load_irc_settings() -> dict[str, object]:
         "vpn_password": settings.get("irc_vpn_password", ""),
         "auto_move_to_library": settings.get("irc_auto_move_to_library", "true").lower() == "true",
     }
+
+
+async def _load_irc_enabled() -> bool:
+    async with async_session() as db:
+        result = await db.execute(select(Setting.value).where(Setting.key == "irc_enabled"))
+        value = result.scalar_one_or_none()
+    return str(value or "false").lower() == "true"
 
 
 async def _open_tcp_connection(

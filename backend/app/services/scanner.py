@@ -84,7 +84,12 @@ async def scan_library(
         return result
 
     if not library_path.exists():
-        logger.warning("Library path does not exist: %s", library_path)
+        logger.warning(
+            "Library path does not exist: %s. Set BOOKS_DIR to the container path "
+            "where your library is mounted, and make sure your Docker volume maps "
+            "the host library to that same container path.",
+            library_path,
+        )
         return result
 
     if target_author_dirs is None:
