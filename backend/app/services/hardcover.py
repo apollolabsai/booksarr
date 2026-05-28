@@ -20,6 +20,8 @@ REQUEST_JITTER_MIN_SECONDS = 0.05
 REQUEST_JITTER_MAX_SECONDS = 0.15
 THROTTLE_RETRY_MIN_SECONDS = 30.0
 THROTTLE_RETRY_FALLBACK_SECONDS = 60.0
+RETRYABLE_STATUS_CODES = {500, 502, 503, 504}
+TRANSIENT_RETRY_ATTEMPTS = 3
 _SECONDARY_CONTRIBUTION_MARKERS = (
     "foreword",
     "afterword",
@@ -38,8 +40,9 @@ _SECONDARY_CONTRIBUTION_MARKERS = (
 
 
 class HardcoverLookupError(RuntimeError):
-    def __init__(self, reason: str, message: str):
+    def __init__(self, reason: str, message: str, status_code: int | None = None):
         self.reason = reason
+        self.status_code = status_code
         super().__init__(message)
 
 
@@ -152,7 +155,7 @@ class HardcoverClient:
             op_name = str(list(variables.values())[:1])
 
         logger.debug("GraphQL request: vars=%s", op_name)
-        for attempt in (1, 2):
+        for attempt in range(1, TRANSIENT_RETRY_ATTEMPTS + 1):
             try:
                 await self._wait_for_request_slot()
                 await record_api_call("hardcover")
@@ -160,8 +163,9 @@ class HardcoverClient:
                 resp.raise_for_status()
                 break
             except httpx.HTTPStatusError as e:
-                logger.error("Hardcover API HTTP error %d for %s", e.response.status_code, op_name)
-                if e.response.status_code == 429 and attempt == 1:
+                status_code = e.response.status_code
+                logger.error("Hardcover API HTTP error %d for %s", status_code, op_name)
+                if status_code == 429 and attempt == 1:
                     cooldown_seconds = self._retry_after_seconds(e.response)
                     self._apply_throttle_cooldown(cooldown_seconds)
                     logger.warning(
@@ -170,12 +174,42 @@ class HardcoverClient:
                         cooldown_seconds,
                     )
                     continue
-                if e.response.status_code == 429:
-                    raise HardcoverLookupError("throttled", "HTTP 429") from e
-                if e.response.status_code == 401:
-                    raise HardcoverLookupError("unauthorized", "HTTP 401") from e
-                raise HardcoverLookupError("http_error", f"HTTP {e.response.status_code}") from e
+                if status_code in RETRYABLE_STATUS_CODES and attempt < TRANSIENT_RETRY_ATTEMPTS:
+                    delay = min(8.0, float(2 ** (attempt - 1)))
+                    logger.warning(
+                        "Hardcover transient HTTP %d for %s; retrying in %.1fs (attempt %d/%d)",
+                        status_code,
+                        op_name,
+                        delay,
+                        attempt,
+                        TRANSIENT_RETRY_ATTEMPTS,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                if status_code == 429:
+                    raise HardcoverLookupError("throttled", "HTTP 429", status_code=429) from e
+                if status_code == 401:
+                    raise HardcoverLookupError("unauthorized", "HTTP 401", status_code=401) from e
+                if status_code in RETRYABLE_STATUS_CODES:
+                    raise HardcoverLookupError(
+                        "transient_http_error",
+                        f"HTTP {status_code}",
+                        status_code=status_code,
+                    ) from e
+                raise HardcoverLookupError("http_error", f"HTTP {status_code}", status_code=status_code) from e
             except httpx.RequestError as e:
+                if attempt < TRANSIENT_RETRY_ATTEMPTS:
+                    delay = min(8.0, float(2 ** (attempt - 1)))
+                    logger.warning(
+                        "Hardcover request failed for %s: %s; retrying in %.1fs (attempt %d/%d)",
+                        op_name,
+                        e,
+                        delay,
+                        attempt,
+                        TRANSIENT_RETRY_ATTEMPTS,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
                 logger.error("Hardcover API request failed for %s: %s", op_name, e)
                 raise HardcoverLookupError("request_error", str(e)) from e
 

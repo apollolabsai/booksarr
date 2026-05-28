@@ -1525,6 +1525,23 @@ def _author_needs_hardcover_books_sync(
     return False
 
 
+_TRANSIENT_HARDCOVER_REASONS = {"transient_http_error", "request_error", "invalid_json"}
+
+
+def _is_transient_hardcover_error(exc: HardcoverLookupError) -> bool:
+    if exc.reason in _TRANSIENT_HARDCOVER_REASONS:
+        return True
+    return exc.status_code is not None and 500 <= exc.status_code < 600
+
+
+def _scan_completion_message(summary: ScanRunSummary) -> str:
+    if summary.hardcover.deferred > 0 and summary.hardcover.failure_reasons.get("throttled"):
+        return "Scan complete with some Hardcover work deferred due to rate limiting."
+    if summary.hardcover.deferred > 0:
+        return "Scan complete with some Hardcover work deferred due to temporary lookup failures."
+    return "Scan complete!"
+
+
 async def run_full_sync(force: bool = False):
     """Run a library sync. Incremental by default; force=True refreshes all authors."""
     if scan_status.status == "scanning":
@@ -1649,6 +1666,15 @@ async def run_full_sync(force: bool = False):
                                 )
                                 scan_status.message = "Hardcover throttled; deferring remaining Hardcover author lookups..."
                                 continue
+                            if _is_transient_hardcover_error(e):
+                                summary.hardcover.record_deferred(e.reason)
+                                logger.warning(
+                                    "Hardcover lookup failed temporarily for author %r; skipping this author until a later scan: %s",
+                                    author.name,
+                                    e,
+                                )
+                                scan_status.message = "Hardcover lookup failed temporarily; continuing scan..."
+                                continue
                             raise
                         if hc_author:
                             summary.hardcover.record_match()
@@ -1680,7 +1706,17 @@ async def run_full_sync(force: bool = False):
                                 )
                                 scan_status.message = "Hardcover throttled; deferring remaining Hardcover author lookups..."
                                 continue
-                            raise
+                            if _is_transient_hardcover_error(e):
+                                summary.hardcover.record_deferred(e.reason)
+                                logger.warning(
+                                    "Hardcover image lookup failed temporarily for author %r; continuing with fallback image sources: %s",
+                                    author.name,
+                                    e,
+                                )
+                                scan_status.message = "Hardcover image lookup failed temporarily; continuing scan..."
+                                hc_author = None
+                            else:
+                                raise
                         if hc_author and hc_author.image_url and not author_has_manual_image:
                             author.image_url = hc_author.image_url
                             if not author.bio:
@@ -1726,8 +1762,8 @@ async def run_full_sync(force: bool = False):
 
                     progress = 20.0 + (30.0 * (i + 1) / max(total_authors, 1))
                     scan_status.progress = progress
+                    await db.commit()
 
-                await db.commit()
                 if new_author_count:
                     logger.info("Matched %d new author(s) to Hardcover", new_author_count)
 
@@ -1806,6 +1842,18 @@ async def run_full_sync(force: bool = False):
                                 remaining,
                             )
                             scan_status.message = "Hardcover throttled; deferring remaining Hardcover book lookups..."
+                            continue
+                        if _is_transient_hardcover_error(e):
+                            authors_skipped += 1
+                            summary.hardcover.record_deferred(e.reason)
+                            logger.warning(
+                                "Hardcover book sync failed temporarily for author %r; skipping this author until a later scan: %s",
+                                author.name,
+                                e,
+                            )
+                            scan_status.message = "Hardcover lookup failed temporarily; continuing scan..."
+                            progress = 50.0 + (25.0 * (i + 1) / max(total_authors, 1))
+                            scan_status.progress = progress
                             continue
                         raise
                     summary.hardcover.record_match()
@@ -1938,8 +1986,8 @@ async def run_full_sync(force: bool = False):
                     author.last_synced_at = datetime.utcnow()
                     progress = 50.0 + (25.0 * (i + 1) / max(total_authors, 1))
                     scan_status.progress = progress
+                    await db.commit()
 
-                await db.commit()
                 logger.info(
                     "Hardcover sync: %d author(s) fetched, %d skipped (no changes / recently synced)",
                     authors_synced, authors_skipped,
@@ -2582,19 +2630,11 @@ async def run_full_sync(force: bool = False):
 
             await flush_api_usage_batch(db)
             await _update_last_scan(db)
-            final_message = (
-                "Scan complete with some Hardcover work deferred due to rate limiting."
-                if summary.hardcover.deferred > 0 and summary.hardcover.failure_reasons.get("throttled")
-                else "Scan complete!"
-            )
+            final_message = _scan_completion_message(summary)
             await _finalize_scan_summary(db, summary, message=final_message)
 
         scan_status.progress = 100.0
-        scan_status.message = (
-            "Scan complete with some Hardcover work deferred due to rate limiting."
-            if summary.hardcover.deferred > 0 and summary.hardcover.failure_reasons.get("throttled")
-            else "Scan complete!"
-        )
+        scan_status.message = _scan_completion_message(summary)
         scan_status.status = "idle"
 
     except Exception as e:
