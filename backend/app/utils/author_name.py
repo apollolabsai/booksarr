@@ -1,5 +1,6 @@
 import re
 
+_WINDOWS_TRAILING_DOT_PLACEHOLDER_RE = re.compile(r"(\w)_(?=\s|$|[,;])")
 _AUTHOR_SUFFIXES = {
     "jr",
     "sr",
@@ -29,6 +30,8 @@ _SORT_HONORIFICS = {
 
 def clean_author_name(author: str) -> str:
     cleaned = author.strip()
+    if "_" in cleaned:
+        cleaned = _WINDOWS_TRAILING_DOT_PLACEHOLDER_RE.sub(r"\1.", cleaned)
     if "," in cleaned:
         parts = [part.strip() for part in cleaned.split(",") if part.strip()]
         if len(parts) == 2 and not _is_author_suffix_chunk(parts[1]):

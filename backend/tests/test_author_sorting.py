@@ -14,6 +14,11 @@ from backend.app.utils.author_name import author_sort_key, clean_author_name
         ("Jared Diamond, Ph.D.", "Jared Diamond, Ph.D."),
         ("Murphy, C. E.", "C. E. Murphy"),
         ("Christie, Agatha", "Agatha Christie"),
+        ("C. E_ Murphy", "C. E. Murphy"),
+        ("Murphy, C. E_", "C. E. Murphy"),
+        ("H. G_ Wells", "H. G. Wells"),
+        ("Wells, H. G_", "H. G. Wells"),
+        ("Agatha Christie", "Agatha Christie"),
     ],
 )
 def test_clean_author_name_preserves_suffixes_but_swaps_last_first(name, expected):
@@ -27,6 +32,15 @@ def test_author_model_name_validator_preserves_suffixes():
 
     assert author.name == "Lloyd Biggle, Jr."
     assert author.author_key == "lloyd biggle, jr."
+
+
+def test_author_model_name_validator_restores_calibre_windows_initial_periods():
+    author = Author(name="placeholder")
+
+    author.name = "Murphy, C. E_"
+
+    assert author.name == "C. E. Murphy"
+    assert author.author_key == "c. e. murphy"
 
 
 @pytest.mark.parametrize(
