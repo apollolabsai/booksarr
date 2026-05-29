@@ -2,7 +2,31 @@ import pytest
 
 from backend.app.models import Author, Book
 from backend.app.routers.authors import list_authors
-from backend.app.utils.author_name import author_sort_key
+from backend.app.utils.author_name import author_sort_key, clean_author_name
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("Lloyd Biggle, Jr.", "Lloyd Biggle, Jr."),
+        ("James McKimmey, Jr", "James McKimmey, Jr"),
+        ("Deepak Chopra, M.D.", "Deepak Chopra, M.D."),
+        ("Jared Diamond, Ph.D.", "Jared Diamond, Ph.D."),
+        ("Murphy, C. E.", "C. E. Murphy"),
+        ("Christie, Agatha", "Agatha Christie"),
+    ],
+)
+def test_clean_author_name_preserves_suffixes_but_swaps_last_first(name, expected):
+    assert clean_author_name(name) == expected
+
+
+def test_author_model_name_validator_preserves_suffixes():
+    author = Author(name="placeholder")
+
+    author.name = "Lloyd Biggle, Jr."
+
+    assert author.name == "Lloyd Biggle, Jr."
+    assert author.author_key == "lloyd biggle, jr."
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,18 @@
 import re
 
-_SORT_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v", "esq"}
+_AUTHOR_SUFFIXES = {
+    "jr",
+    "sr",
+    "ii",
+    "iii",
+    "iv",
+    "v",
+    "esq",
+    "md",
+    "m.d",
+    "phd",
+    "ph.d",
+}
 _SORT_HONORIFICS = {
     "sir",
     "dame",
@@ -19,7 +31,7 @@ def clean_author_name(author: str) -> str:
     cleaned = author.strip()
     if "," in cleaned:
         parts = [part.strip() for part in cleaned.split(",") if part.strip()]
-        if len(parts) == 2:
+        if len(parts) == 2 and not _is_author_suffix_chunk(parts[1]):
             cleaned = f"{parts[1]} {parts[0]}"
     cleaned = cleaned.rstrip(" ;,")
     return re.sub(r"\s+", " ", cleaned).strip()
@@ -44,7 +56,7 @@ def author_sort_key(name: str | None) -> str:
     if "," in text:
         chunks = [chunk.strip() for chunk in text.split(",") if chunk.strip()]
         stripped_suffix = False
-        while len(chunks) > 1 and _normalized_name_token(chunks[-1]) in _SORT_SUFFIXES:
+        while len(chunks) > 1 and _is_author_suffix_chunk(chunks[-1]):
             chunks = chunks[:-1]
             stripped_suffix = True
         if stripped_suffix and len(chunks) == 1:
@@ -52,7 +64,7 @@ def author_sort_key(name: str | None) -> str:
         return ", ".join(chunks).lower()
 
     parts = text.split()
-    while len(parts) > 1 and _normalized_name_token(parts[-1]) in _SORT_SUFFIXES:
+    while len(parts) > 1 and _is_author_suffix_chunk(parts[-1]):
         parts = parts[:-1]
     while len(parts) > 1 and _normalized_name_token(parts[0]) in _SORT_HONORIFICS:
         parts = parts[1:]
@@ -67,3 +79,8 @@ def author_sort_key(name: str | None) -> str:
 
 def _normalized_name_token(value: str) -> str:
     return value.lower().rstrip(".")
+
+
+def _is_author_suffix_chunk(value: str) -> bool:
+    tokens = [_normalized_name_token(token) for token in value.split() if token.strip()]
+    return bool(tokens) and all(token in _AUTHOR_SUFFIXES for token in tokens)
