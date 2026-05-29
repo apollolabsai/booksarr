@@ -38,7 +38,7 @@ from backend.app.services.library_sync import (
     author_refresh_status,
     trigger_author_refresh,
 )
-from backend.app.utils.author_name import normalize_author_key
+from backend.app.utils.author_name import author_sort_key, normalize_author_key
 from backend.app.utils.hardcover_metadata import get_book_category_name, get_literary_type_name
 from backend.app.utils.isbn import normalized_valid_isbn
 from backend.app.utils.api_usage import begin_api_usage_batch, clear_api_usage_batch, flush_api_usage_batch
@@ -597,17 +597,17 @@ async def list_authors(
         ))
 
     if sort == "name":
-        summaries.sort(key=lambda author: author.name.lower())
+        summaries.sort(key=lambda author: author_sort_key(author.name))
     elif sort == "-name":
-        summaries.sort(key=lambda author: author.name.lower(), reverse=True)
+        summaries.sort(key=lambda author: author_sort_key(author.name), reverse=True)
     elif sort == "books":
-        summaries.sort(key=lambda author: (author.book_count_total, author.name.lower()))
+        summaries.sort(key=lambda author: (author.book_count_total, author_sort_key(author.name)))
     elif sort == "-books":
-        summaries.sort(key=lambda author: (author.book_count_total, author.name.lower()), reverse=True)
+        summaries.sort(key=lambda author: (author.book_count_total, author_sort_key(author.name)), reverse=True)
     elif sort == "owned":
-        summaries.sort(key=lambda author: (author.book_count_local, author.name.lower()))
+        summaries.sort(key=lambda author: (author.book_count_local, author_sort_key(author.name)))
     elif sort == "-owned":
-        summaries.sort(key=lambda author: (author.book_count_local, author.name.lower()), reverse=True)
+        summaries.sort(key=lambda author: (author.book_count_local, author_sort_key(author.name)), reverse=True)
 
     return summaries
 
