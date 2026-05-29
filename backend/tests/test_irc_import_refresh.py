@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import pytest
@@ -5,6 +6,25 @@ from sqlalchemy import select
 
 from backend.app.models import Author, Book, BookFile
 from backend.app.services import irc_worker, library_sync
+
+
+class StubMetadata:
+    def __init__(
+        self,
+        *,
+        title: str,
+        author: str,
+        isbn: str | None = None,
+        publisher: str | None = None,
+        description: str | None = None,
+    ):
+        self.title = title
+        self.author = author
+        self.isbn = isbn
+        self.series = None
+        self.series_index = None
+        self.publisher = publisher
+        self.description = description
 
 
 @pytest.mark.asyncio
@@ -22,6 +42,112 @@ async def test_trigger_library_scan_after_irc_import_refreshes_immediately_when_
 
     assert calls == [(moved_path, 238)]
     assert not irc_worker._pending_import_refresh_tasks
+
+
+@pytest.mark.asyncio
+async def test_repair_local_file_links_reports_progress_and_commits_in_chunks(
+    db_session,
+    monkeypatch,
+    tmp_path,
+):
+    author = Author(name="Progress Author")
+    db_session.add(author)
+    await db_session.flush()
+
+    for index in range(101):
+        relative_path = f"Progress Author/Book {index:03d}/Book {index:03d}.epub"
+        book_path = tmp_path / relative_path
+        book_path.parent.mkdir(parents=True, exist_ok=True)
+        book_path.write_text("placeholder", encoding="utf-8")
+        db_session.add(
+            BookFile(
+                file_path=relative_path,
+                file_name=book_path.name,
+                file_format="epub",
+                opf_title=f"Book {index:03d}",
+                opf_author="Progress Author",
+            )
+        )
+    await db_session.commit()
+
+    monkeypatch.setattr(library_sync, "BOOKS_DIR", tmp_path)
+    monkeypatch.setattr(
+        library_sync,
+        "extract_best_metadata",
+        lambda path, *_args, **_kwargs: StubMetadata(
+            title=path.stem,
+            author="Progress Author",
+        ),
+    )
+
+    original_commit = db_session.commit
+    commit_count = 0
+
+    async def counting_commit():
+        nonlocal commit_count
+        commit_count += 1
+        await original_commit()
+
+    monkeypatch.setattr(db_session, "commit", counting_commit)
+    progress_updates: list[tuple[int, int, int, int, int]] = []
+
+    matched_count, repaired_count, books_added = await library_sync._repair_local_file_links(
+        db_session,
+        progress_callback=lambda *args: progress_updates.append(args),
+    )
+
+    assert matched_count == 0
+    assert repaired_count == 0
+    assert books_added == 101
+    assert commit_count == 2
+    assert progress_updates[0] == (0, 101, 0, 0, 0)
+    assert (100, 101, 0, 0, 100) in progress_updates
+    assert progress_updates[-1] == (101, 101, 0, 0, 101)
+
+
+@pytest.mark.asyncio
+async def test_repair_local_file_links_continues_when_metadata_extraction_fails(
+    db_session,
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    author = Author(name="Fallback Author")
+    db_session.add(author)
+    await db_session.flush()
+
+    relative_path = "Fallback Author/Fallback Book/Fallback Book.epub"
+    book_path = tmp_path / relative_path
+    book_path.parent.mkdir(parents=True, exist_ok=True)
+    book_path.write_text("placeholder", encoding="utf-8")
+    db_session.add(
+        BookFile(
+            file_path=relative_path,
+            file_name=book_path.name,
+            file_format="epub",
+            opf_title="Fallback Book",
+            opf_author="Fallback Author",
+        )
+    )
+    await db_session.commit()
+
+    def raise_metadata_error(*_args, **_kwargs):
+        raise RuntimeError("broken metadata")
+
+    monkeypatch.setattr(library_sync, "BOOKS_DIR", tmp_path)
+    monkeypatch.setattr(library_sync, "extract_best_metadata", raise_metadata_error)
+
+    with caplog.at_level(logging.WARNING, logger="booksarr.sync"):
+        matched_count, repaired_count, books_added = await library_sync._repair_local_file_links(db_session)
+
+    refreshed_file = await db_session.get(BookFile, 1)
+
+    assert matched_count == 0
+    assert repaired_count == 0
+    assert books_added == 1
+    assert refreshed_file.book_id is not None
+    assert "Skipping unreadable metadata while repairing local file link" in caplog.text
+    assert relative_path in caplog.text
 
 
 @pytest.mark.asyncio

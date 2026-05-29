@@ -5,6 +5,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Callable
 
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -53,6 +54,7 @@ _ARTICLE_RE = re.compile(r"^(a|an|the)\s+", re.IGNORECASE)
 # Cover height threshold — stop looking for better covers once met
 COVER_HEIGHT_THRESHOLD = 2000
 OL_LOG_INTERVAL = 50
+LOCAL_REPAIR_PROGRESS_INTERVAL = 100
 
 
 def _no_valid_isbn_filter():
@@ -679,11 +681,31 @@ def _shared_folder_book_sort_key(book: Book, visibility_settings: dict[str, bool
     )
 
 
+def _repair_progress_status_message(
+    processed: int,
+    total: int,
+    matched_count: int,
+    repaired_count: int,
+    books_added: int,
+) -> str:
+    return (
+        f"Repairing local file links: {processed}/{total} processed "
+        f"({matched_count} matched, {repaired_count} repaired, {books_added} local books added)"
+    )
+
+
+def _scale_progress(processed: int, total: int, start: float, end: float) -> float:
+    if total <= 0:
+        return start
+    return start + ((end - start) * processed / total)
+
+
 async def _repair_local_file_links(
     db: AsyncSession,
     author: Author | None = None,
     file_paths: set[str] | None = None,
     expected_book_ids: dict[str, int] | None = None,
+    progress_callback: Callable[[int, int, int, int, int], None] | None = None,
 ) -> tuple[int, int, int]:
     result = await db.execute(
         select(BookFile).options(selectinload(BookFile.book))
@@ -749,8 +771,29 @@ async def _repair_local_file_links(
     matched_count = 0
     repaired_count = 0
     books_added = 0
+    total_candidates = len(candidate_files)
 
-    for bf in candidate_files:
+    if candidate_files:
+        logger.info("Repairing local file links: %d candidate file(s)", total_candidates)
+        if progress_callback:
+            progress_callback(0, total_candidates, matched_count, repaired_count, books_added)
+
+    async def commit_and_report_repair_progress(processed: int, *, force: bool = False) -> None:
+        if not force and processed % LOCAL_REPAIR_PROGRESS_INTERVAL != 0:
+            return
+        await db.commit()
+        logger.info(
+            "Repair progress: %d/%d processed (%d matched, %d repaired, %d local books added)",
+            processed,
+            total_candidates,
+            matched_count,
+            repaired_count,
+            books_added,
+        )
+        if progress_callback:
+            progress_callback(processed, total_candidates, matched_count, repaired_count, books_added)
+
+    for idx, bf in enumerate(candidate_files, start=1):
         current_book = bf.book
         ebook_path = BOOKS_DIR / bf.file_path
         path_parts = bf.file_path.split("/")
@@ -759,14 +802,23 @@ async def _repair_local_file_links(
         folder_key = _shared_book_folder_key(bf)
 
         if ebook_path.exists():
-            opf = extract_best_metadata(ebook_path, fallback_author, fallback_book_dir)
-            bf.opf_title = opf.title or None
-            bf.opf_author = opf.author or fallback_author
-            bf.opf_isbn = opf.isbn or None
-            bf.opf_series = opf.series or None
-            bf.opf_series_index = opf.series_index
-            bf.opf_publisher = opf.publisher or None
-            bf.opf_description = opf.description or None
+            try:
+                opf = extract_best_metadata(ebook_path, fallback_author, fallback_book_dir)
+            except Exception as exc:
+                logger.warning(
+                    "Skipping unreadable metadata while repairing local file link: file=%s error=%s",
+                    bf.file_path,
+                    exc,
+                    exc_info=True,
+                )
+            else:
+                bf.opf_title = opf.title or None
+                bf.opf_author = opf.author or fallback_author
+                bf.opf_isbn = opf.isbn or None
+                bf.opf_series = opf.series or None
+                bf.opf_series_index = opf.series_index
+                bf.opf_publisher = opf.publisher or None
+                bf.opf_description = opf.description or None
 
         matched_book = None
         expected_book_id = expected_book_ids.get(bf.file_path) if expected_book_ids else None
@@ -843,6 +895,7 @@ async def _repair_local_file_links(
                 author = matching_authors[0] if matching_authors else None
 
         if not matching_authors and not matched_book:
+            await commit_and_report_repair_progress(idx)
             continue
 
         candidate_books: list[Book] = []
@@ -949,14 +1002,19 @@ async def _repair_local_file_links(
                     )[0].id
                 books_added += 1
 
-    await db.commit()
+        await commit_and_report_repair_progress(idx)
+
     if candidate_files:
+        if total_candidates % LOCAL_REPAIR_PROGRESS_INTERVAL != 0:
+            await commit_and_report_repair_progress(total_candidates, force=True)
         logger.info(
             "Matched %d/%d candidate file(s); repaired %d existing local link(s)",
             matched_count,
             len(candidate_files),
             repaired_count,
         )
+    else:
+        await db.commit()
     return matched_count, repaired_count, books_added
 
 
@@ -1556,6 +1614,25 @@ async def run_full_sync(force: bool = False):
     scan_status.progress = 0.0
     scan_status.message = "Starting scan..."
 
+    def scan_repair_progress_callback(start: float, end: float):
+        def update(
+            processed: int,
+            total: int,
+            matched_count: int,
+            repaired_count: int,
+            books_added: int,
+        ) -> None:
+            scan_status.progress = _scale_progress(processed, total, start, end)
+            scan_status.message = _repair_progress_status_message(
+                processed,
+                total,
+                matched_count,
+                repaired_count,
+                books_added,
+            )
+
+        return update
+
     try:
         async with async_session() as db:
             # Phase 1: Fast filesystem change detection
@@ -1604,7 +1681,10 @@ async def run_full_sync(force: bool = False):
             if not api_key:
                 if repair_candidates > 0:
                     scan_status.message = "Repairing local file matches..."
-                    matched_count, repaired_count, new_local_books = await _repair_local_file_links(db)
+                    matched_count, repaired_count, new_local_books = await _repair_local_file_links(
+                        db,
+                        progress_callback=scan_repair_progress_callback(20.0, 95.0),
+                    )
                     summary.books_added += new_local_books
                     logger.info(
                         "Local-only repair without Hardcover API key: matched %d candidate file(s), repaired %d link(s)",
@@ -1996,7 +2076,10 @@ async def run_full_sync(force: bool = False):
                 # Phase 4: Match local files to Hardcover books and repair
                 # existing local-only links using freshly parsed file metadata.
                 scan_status.message = "Matching local files to Hardcover books..."
-                matched_count, repaired_count, new_local_books = await _repair_local_file_links(db)
+                matched_count, repaired_count, new_local_books = await _repair_local_file_links(
+                    db,
+                    progress_callback=scan_repair_progress_callback(75.0, 80.0),
+                )
                 books_added += new_local_books
                 summary.books_added = books_added
                 summary.books_removed = books_removed
@@ -2767,7 +2850,30 @@ async def refresh_single_author(author_id: int, mode: str = "full"):
                 progress=55.0,
                 message=f"Matching local files for {author.name}...",
             )
-            matched_count, repaired_count, new_local_books = await _repair_local_file_links(db, author=author)
+
+            def author_repair_progress_callback(
+                processed: int,
+                total: int,
+                matched_count: int,
+                repaired_count: int,
+                books_added: int,
+            ) -> None:
+                author_refresh_status.update(
+                    progress=_scale_progress(processed, total, 55.0, 62.0),
+                    message=_repair_progress_status_message(
+                        processed,
+                        total,
+                        matched_count,
+                        repaired_count,
+                        books_added,
+                    ),
+                )
+
+            matched_count, repaired_count, new_local_books = await _repair_local_file_links(
+                db,
+                author=author,
+                progress_callback=author_repair_progress_callback,
+            )
             books_added += new_local_books
 
             author_refresh_status.update(
