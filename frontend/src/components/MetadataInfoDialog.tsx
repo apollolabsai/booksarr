@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useApplyOpfBookMetadata, useBookMetadataInfo, useUpdateBookMetadata } from "../api/books";
+import { useApplyOpfBookMetadata, useBookMetadataInfo, useUpdateBookMetadata, useWriteOpfBookMetadata } from "../api/books";
 import type { BookMetadataField, BookMetadataValues } from "../types";
 
 const FIELD_LABELS: Record<BookMetadataField, string> = {
@@ -25,6 +25,8 @@ const FIELD_ORDER: BookMetadataField[] = [
   "series_name",
   "series_position",
 ];
+
+type WriteSource = "current" | "original" | "manual" | "form";
 
 function stringifyValue(value: string | number | null | undefined): string {
   if (value === null || value === undefined || value === "") return "-";
@@ -59,18 +61,27 @@ export default function MetadataInfoDialog({
   const { data, isLoading, isError } = useBookMetadataInfo(bookId, open);
   const updateMetadata = useUpdateBookMetadata();
   const applyOpfMetadata = useApplyOpfBookMetadata();
+  const writeOpfMetadata = useWriteOpfBookMetadata();
   const [selectedFileId, setSelectedFileId] = useState<number | null>(null);
   const [selectedFields, setSelectedFields] = useState<Set<BookMetadataField>>(new Set());
+  const [selectedWriteFields, setSelectedWriteFields] = useState<Set<BookMetadataField>>(new Set());
+  const [writeSource, setWriteSource] = useState<WriteSource>("current");
+  const [deleteBackupAfterRepair, setDeleteBackupAfterRepair] = useState(false);
   const [formValues, setFormValues] = useState<BookMetadataValues>(() => emptyMetadataValues());
   const [clearFields, setClearFields] = useState<Set<BookMetadataField>>(new Set());
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [opfRepairMessage, setOpfRepairMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (!data) return;
     setSelectedFileId(data.files[0]?.id ?? null);
     setSelectedFields(new Set());
+    setSelectedWriteFields(new Set());
+    setWriteSource("current");
+    setDeleteBackupAfterRepair(false);
     setClearFields(new Set());
     setSaveError(null);
+    setOpfRepairMessage(null);
     setFormValues({
       title: data.manual.title ?? "",
       author_name: data.manual.author_name ?? "",
@@ -87,7 +98,10 @@ export default function MetadataInfoDialog({
   useEffect(() => {
     if (!open) {
       setSaveError(null);
+      setOpfRepairMessage(null);
       setSelectedFields(new Set());
+      setSelectedWriteFields(new Set());
+      setDeleteBackupAfterRepair(false);
       setClearFields(new Set());
     }
   }, [open]);
@@ -126,6 +140,23 @@ export default function MetadataInfoDialog({
     });
   };
 
+  const toggleWriteField = (field: BookMetadataField) => {
+    setSelectedWriteFields((current) => {
+      const next = new Set(current);
+      if (next.has(field)) next.delete(field);
+      else next.add(field);
+      return next;
+    });
+  };
+
+  const getWriteValues = (): BookMetadataValues => {
+    if (!data) return emptyMetadataValues();
+    if (writeSource === "original") return data.original;
+    if (writeSource === "manual") return data.manual;
+    if (writeSource === "form") return formValues;
+    return data.current;
+  };
+
   const handleApplyOpf = async () => {
     if (!selectedFile || selectedFields.size === 0) return;
     setSaveError(null);
@@ -155,7 +186,28 @@ export default function MetadataInfoDialog({
     }
   };
 
-  const isSaving = updateMetadata.isPending || applyOpfMetadata.isPending;
+  const handleWriteOpf = async () => {
+    if (!selectedFile || selectedWriteFields.size === 0) return;
+    setSaveError(null);
+    setOpfRepairMessage(null);
+    try {
+      const result = await writeOpfMetadata.mutateAsync({
+        bookId,
+        bookFileId: selectedFile.id,
+        fields: Array.from(selectedWriteFields),
+        values: getWriteValues(),
+        deleteBackup: deleteBackupAfterRepair,
+      });
+      setSelectedWriteFields(new Set());
+      setOpfRepairMessage(result.backup_path ? `EPUB OPF repaired. Backup: ${result.backup_path}` : "EPUB OPF repaired. Backup deleted.");
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Failed to repair EPUB OPF metadata.");
+    }
+  };
+
+  const isSaving = updateMetadata.isPending || applyOpfMetadata.isPending || writeOpfMetadata.isPending;
+  const writeValues = getWriteValues();
+  const selectedFileSupportsOpfRepair = (selectedFile?.file_format || "").toLowerCase() === "epub";
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/80 px-4 py-6">
@@ -304,6 +356,83 @@ export default function MetadataInfoDialog({
                     className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Save Metadata
+                  </button>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-700 bg-slate-800/50">
+                <div className="border-b border-slate-700 px-4 py-3">
+                  <h3 className="text-sm font-semibold text-slate-200">Repair EPUB OPF</h3>
+                </div>
+                <div className="space-y-4 p-4">
+                  <div className="grid gap-4 md:grid-cols-[220px_minmax(0,1fr)]">
+                    <label className="text-xs font-medium text-slate-400">
+                      Write values from
+                      <select
+                        value={writeSource}
+                        onChange={(event) => setWriteSource(event.target.value as WriteSource)}
+                        className="mt-1 block w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200"
+                      >
+                        <option value="current">Current metadata</option>
+                        <option value="original">Original matched metadata</option>
+                        <option value="manual">Saved manual overrides</option>
+                        <option value="form">Manual edit form</option>
+                      </select>
+                    </label>
+                    <div>
+                      <div className="mb-2 text-xs font-medium text-slate-400">Fields to write into the selected EPUB</div>
+                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        {FIELD_ORDER.map((field) => {
+                          const value = writeValues[field];
+                          const hasValue = value !== null && value !== undefined && value !== "";
+                          return (
+                            <label
+                              key={field}
+                              className={`flex items-start gap-2 rounded-md border px-3 py-2 text-sm ${
+                                selectedWriteFields.has(field)
+                                  ? "border-emerald-500/60 bg-emerald-500/10 text-slate-100"
+                                  : "border-slate-700 bg-slate-900/60 text-slate-300"
+                              } ${!hasValue ? "opacity-50" : ""}`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={selectedWriteFields.has(field)}
+                                disabled={!hasValue}
+                                onChange={() => toggleWriteField(field)}
+                                className="mt-0.5 rounded border-slate-600 bg-slate-700 text-emerald-500 focus:ring-emerald-500"
+                              />
+                              <span className="min-w-0">
+                                <span className="block font-medium">{FIELD_LABELS[field]}</span>
+                                <span className="block truncate text-xs text-slate-500">{stringifyValue(value)}</span>
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                  {!selectedFileSupportsOpfRepair && (
+                    <p className="text-sm text-amber-300">OPF repair is only available for EPUB files.</p>
+                  )}
+                  <label className="flex items-center gap-2 text-sm text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={deleteBackupAfterRepair}
+                      onChange={() => setDeleteBackupAfterRepair((current) => !current)}
+                      className="rounded border-slate-600 bg-slate-700 text-amber-500 focus:ring-amber-500"
+                    />
+                    Delete backup after successful repair
+                  </label>
+                  {opfRepairMessage && <p className="text-sm text-emerald-300">{opfRepairMessage}</p>}
+                </div>
+                <div className="flex justify-end border-t border-slate-700 px-4 py-3">
+                  <button
+                    type="button"
+                    onClick={handleWriteOpf}
+                    disabled={isSaving || !selectedFileSupportsOpfRepair || selectedWriteFields.size === 0 || !selectedFile}
+                    className="rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Write Selected Fields to EPUB OPF
                   </button>
                 </div>
               </div>

@@ -29,6 +29,8 @@ from backend.app.schemas.book import (
     BookMetadataInfoResponse,
     BookMetadataUpdateRequest,
     BookMetadataValues,
+    BookMetadataWriteOpfRequest,
+    BookMetadataWriteOpfResponse,
     BookOpfMetadataFile,
 )
 from backend.app.utils.book_metadata import (
@@ -54,6 +56,7 @@ from backend.app.services.library_sync import (
     set_book_cover_selection,
 )
 from backend.app.services.image_cache import get_cached_cover_aspect_ratio
+from backend.app.utils.opf_parser import OPFMetadata, write_epub_opf_metadata
 
 router = APIRouter(prefix="/api/books", tags=["books"])
 
@@ -163,6 +166,18 @@ def _clear_manual_metadata(book: Book, field_name: str) -> None:
         book.manual_series_position = None
         return
     setattr(book, f"manual_{field_name}", None)
+
+
+def _update_book_file_opf_metadata(book_file: BookFile, opf: OPFMetadata) -> None:
+    book_file.opf_title = opf.title or None
+    book_file.opf_author = opf.author or None
+    book_file.opf_isbn = opf.isbn or None
+    book_file.opf_series = opf.series or None
+    book_file.opf_series_index = opf.series_index
+    book_file.opf_publisher = opf.publisher or None
+    book_file.opf_description = opf.description or None
+    book_file.opf_date = opf.date or None
+    book_file.opf_language = opf.language or None
 
 
 def _archive_directory_for_download(source_dir: Path) -> Path:
@@ -454,6 +469,75 @@ async def apply_opf_metadata(
 
     await db.commit()
     return {"status": "ok", "message": "Selected OPF metadata applied"}
+
+
+@router.post("/{book_id}/metadata/write-opf", response_model=BookMetadataWriteOpfResponse)
+async def write_opf_metadata(
+    book_id: int,
+    body: BookMetadataWriteOpfRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Book)
+        .where(Book.id == book_id)
+        .options(selectinload(Book.files))
+    )
+    book = result.scalar_one_or_none()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    book_file = next((file for file in book.files if file.id == body.book_file_id), None)
+    if book_file is None:
+        raise HTTPException(status_code=404, detail="Book file not found for this book")
+
+    requested_fields = set(body.fields)
+    invalid_fields = requested_fields - EDITABLE_METADATA_FIELDS
+    if invalid_fields:
+        raise HTTPException(status_code=400, detail=f"Invalid metadata field: {sorted(invalid_fields)[0]}")
+    if not requested_fields:
+        raise HTTPException(status_code=400, detail="Select at least one field")
+
+    if (book_file.file_format or "").lower() != "epub":
+        raise HTTPException(status_code=400, detail="OPF repair is only supported for EPUB files")
+
+    selected_values: dict[str, str | float | None] = {}
+    values = body.values.model_dump()
+    for field_name in requested_fields:
+        value = values.get(field_name)
+        if isinstance(value, str):
+            value = value.strip()
+        if value in {None, ""}:
+            raise HTTPException(status_code=400, detail=f"No value provided for {field_name}")
+        selected_values[field_name] = value
+
+    isbn_value = selected_values.get("isbn")
+    if isinstance(isbn_value, str) and normalized_valid_isbn(isbn_value) is None:
+        raise HTTPException(status_code=400, detail="Invalid ISBN")
+    if isinstance(isbn_value, str):
+        selected_values["isbn"] = normalized_valid_isbn(isbn_value)
+
+    epub_path = BOOKS_DIR / book_file.file_path
+    if not epub_path.exists() or not epub_path.is_file():
+        raise HTTPException(status_code=404, detail="Local EPUB file not found")
+
+    try:
+        opf, backup_path = write_epub_opf_metadata(epub_path, selected_values)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to repair OPF metadata: {exc}")
+
+    _update_book_file_opf_metadata(book_file, opf)
+    await db.commit()
+    backup_display_path = str(backup_path.relative_to(BOOKS_DIR)) if backup_path.is_relative_to(BOOKS_DIR) else str(backup_path)
+    if body.delete_backup:
+        backup_path.unlink(missing_ok=True)
+        backup_display_path = ""
+    return BookMetadataWriteOpfResponse(
+        status="ok",
+        message="EPUB OPF metadata repaired",
+        backup_path=backup_display_path,
+    )
 
 
 @router.get("/{book_id}", response_model=BookDetail)

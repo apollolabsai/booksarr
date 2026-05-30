@@ -307,6 +307,12 @@ export interface BookMetadataInfoResponse {
   editable_fields: BookMetadataField[];
 }
 
+export interface BookMetadataWriteOpfResponse {
+  status: string;
+  message: string;
+  backup_path: string;
+}
+
 export interface ScanStatus {
   status: "idle" | "scanning";
   progress: number;

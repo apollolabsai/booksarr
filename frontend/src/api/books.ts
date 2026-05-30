@@ -5,6 +5,7 @@ import type {
   BookMetadataField,
   BookMetadataInfoResponse,
   BookMetadataValues,
+  BookMetadataWriteOpfResponse,
   HiddenBook,
   BookCoverOptionsResponse,
   BookCoverSearchResponse,
@@ -126,6 +127,32 @@ export function useApplyOpfBookMetadata() {
       fetchApi(`/books/${bookId}/metadata/apply-opf`, {
         method: "POST",
         body: JSON.stringify({ book_file_id: bookFileId, fields }),
+      }),
+    onSuccess: (_, variables) => {
+      invalidateBookMetadataQueries(queryClient, variables.bookId);
+    },
+  });
+}
+
+export function useWriteOpfBookMetadata() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      bookId,
+      bookFileId,
+      fields,
+      values,
+      deleteBackup = false,
+    }: {
+      bookId: number;
+      bookFileId: number;
+      fields: BookMetadataField[];
+      values: BookMetadataValues;
+      deleteBackup?: boolean;
+    }) =>
+      fetchApi<BookMetadataWriteOpfResponse>(`/books/${bookId}/metadata/write-opf`, {
+        method: "POST",
+        body: JSON.stringify({ book_file_id: bookFileId, fields, values, delete_backup: deleteBackup }),
       }),
     onSuccess: (_, variables) => {
       invalidateBookMetadataQueries(queryClient, variables.bookId);

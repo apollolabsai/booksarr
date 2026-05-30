@@ -187,3 +187,16 @@ class BookMetadataUpdateRequest(BaseModel):
 class BookMetadataApplyOpfRequest(BaseModel):
     book_file_id: int
     fields: list[str]
+
+
+class BookMetadataWriteOpfRequest(BaseModel):
+    book_file_id: int
+    fields: list[str]
+    values: BookMetadataValues
+    delete_backup: bool = False
+
+
+class BookMetadataWriteOpfResponse(BaseModel):
+    status: str
+    message: str
+    backup_path: str
