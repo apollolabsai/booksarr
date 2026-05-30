@@ -5,6 +5,8 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Callable
 
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,7 +15,7 @@ from sqlalchemy.orm import selectinload
 from backend.app.config import BOOKS_DIR
 from backend.app.database import async_session
 from backend.app.models import Author, Book, BookFile, BookSeries, Series, Setting
-from backend.app.services.scanner import scan_library, extract_best_metadata, _clean_author_text
+from backend.app.services.scanner import scan_library, extract_best_metadata, _clean_author_text, _clean_title_text
 from backend.app.services.hardcover import HardcoverClient, HardcoverLookupError
 from backend.app.services.matcher import titles_match
 from backend.app.services.image_cache import (
@@ -53,6 +55,10 @@ _ARTICLE_RE = re.compile(r"^(a|an|the)\s+", re.IGNORECASE)
 # Cover height threshold — stop looking for better covers once met
 COVER_HEIGHT_THRESHOLD = 2000
 OL_LOG_INTERVAL = 50
+LOCAL_REPAIR_PROGRESS_INTERVAL = 100
+REMOTE_COVER_DOWNLOAD_CONCURRENCY = 20
+REMOTE_COVER_DOWNLOAD_BATCH_SIZE = 100
+REMOTE_COVER_PROGRESS_INTERVAL = 500
 
 
 def _no_valid_isbn_filter():
@@ -495,6 +501,131 @@ def _should_replace_cover(
     return new_height > current_height
 
 
+def _cache_remote_cover_data(
+    book: Book,
+    data: bytes,
+    source: str,
+    cover_heights: dict[int, int],
+    cover_sources: dict[int, str | None],
+    cover_ratios: dict[int, float | None],
+) -> bool:
+    current_height = cover_heights.get(book.id, 0)
+    current_ratio = cover_ratios.get(book.id)
+    new_height, new_ratio = _measure_cover_data(data)
+    if not _should_replace_cover(
+        current_source=cover_sources.get(book.id),
+        current_height=current_height,
+        current_ratio=current_ratio,
+        new_source=source,
+        new_height=new_height,
+        new_ratio=new_ratio,
+    ):
+        return False
+
+    path = cache_cover_data(data, book.id, source)
+    if not path:
+        return False
+
+    book.cover_image_cached_path = path
+    cover_heights[book.id] = new_height
+    cover_sources[book.id] = source
+    cover_ratios[book.id] = new_ratio
+    return True
+
+
+async def _download_and_cache_remote_covers(
+    db: AsyncSession,
+    books: list[Book],
+    *,
+    source: str,
+    source_label: str,
+    url_getter: Callable[[Book], str | None],
+    cover_heights: dict[int, int],
+    cover_sources: dict[int, str | None],
+    cover_ratios: dict[int, float | None],
+    concurrency: int = REMOTE_COVER_DOWNLOAD_CONCURRENCY,
+    batch_size: int = REMOTE_COVER_DOWNLOAD_BATCH_SIZE,
+    progress_interval: int = REMOTE_COVER_PROGRESS_INTERVAL,
+    progress_start: float | None = None,
+    progress_end: float | None = None,
+) -> int:
+    candidates = [
+        (book, url)
+        for book in books
+        for url in [url_getter(book)]
+        if url
+    ]
+    total = len(candidates)
+    if total == 0:
+        return 0
+
+    logger.info("%s covers: downloading %d candidate(s)", source_label, total)
+    scan_status.message = f"Downloading covers from {source_label}... 0/{total}"
+    if progress_start is not None:
+        scan_status.progress = progress_start
+
+    completed = 0
+    cached = 0
+    batch_size = max(1, batch_size)
+    concurrency = max(1, concurrency)
+    progress_interval = max(1, progress_interval)
+
+    async def download_tagged(book: Book, url: str) -> tuple[Book, bytes | None]:
+        return book, await download_image_bytes(url)
+
+    async def commit_and_report(force: bool = False) -> None:
+        if not force and completed % progress_interval != 0:
+            return
+        await db.commit()
+        scan_status.message = (
+            f"Downloading covers from {source_label}... {completed}/{total} "
+            f"({cached} cached)"
+        )
+        if progress_start is not None and progress_end is not None:
+            scan_status.progress = _scale_progress(completed, total, progress_start, progress_end)
+        logger.info(
+            "%s covers: %d/%d downloaded, %d cached",
+            source_label,
+            completed,
+            total,
+            cached,
+        )
+
+    for offset in range(0, total, batch_size):
+        batch = candidates[offset:offset + batch_size]
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def guarded_download(book: Book, url: str) -> tuple[Book, bytes | None]:
+            async with semaphore:
+                return await download_tagged(book, url)
+
+        tasks = [asyncio.create_task(guarded_download(book, url)) for book, url in batch]
+        for task in asyncio.as_completed(tasks):
+            try:
+                book, data = await task
+            except Exception as exc:
+                completed += 1
+                logger.warning("%s cover download failed unexpectedly: %s", source_label, exc, exc_info=True)
+                await commit_and_report()
+                continue
+
+            completed += 1
+            if data and _cache_remote_cover_data(
+                book,
+                data,
+                source,
+                cover_heights,
+                cover_sources,
+                cover_ratios,
+            ):
+                cached += 1
+            await commit_and_report()
+
+    if completed % progress_interval != 0:
+        await commit_and_report(force=True)
+    return cached
+
+
 def _preferred_google_isbns(book: Book) -> list[str]:
     local_file_isbns = [
         normalized_valid_isbn(book_file.opf_isbn)
@@ -679,11 +810,75 @@ def _shared_folder_book_sort_key(book: Book, visibility_settings: dict[str, bool
     )
 
 
+def _title_from_file_name(file_name: str) -> str:
+    stem = Path(file_name).stem
+    parts = [part.strip() for part in stem.split(" - ") if part.strip()]
+    if len(parts) >= 2:
+        stem = parts[-1]
+    return _clean_title_text(stem)
+
+
+def _local_path_title_candidates(book_file: BookFile) -> list[str]:
+    path_parts = [part for part in book_file.file_path.split("/") if part]
+    candidates: list[str] = []
+
+    if len(path_parts) >= 3:
+        candidates.append(_clean_title_text(path_parts[1]))
+    elif len(path_parts) == 2:
+        second_part = path_parts[1]
+        if (book_file.file_format or "").lower() == "audiobook" and not Path(second_part).suffix:
+            candidates.append(_clean_title_text(second_part))
+        else:
+            candidates.append(_title_from_file_name(second_part))
+
+    if book_file.file_name:
+        candidates.append(_title_from_file_name(book_file.file_name))
+
+    unique: list[str] = []
+    for candidate in candidates:
+        candidate = re.sub(r"\s+", " ", candidate).strip()
+        if not candidate:
+            continue
+        if any(titles_match(candidate, existing) for existing in unique):
+            continue
+        unique.append(candidate)
+    return unique
+
+
+def _best_local_title(book_file: BookFile) -> str | None:
+    path_titles = _local_path_title_candidates(book_file)
+    if path_titles and book_file.opf_title and any(titles_match(book_file.opf_title, title) for title in path_titles):
+        return book_file.opf_title
+    if path_titles:
+        return path_titles[0]
+    return book_file.opf_title or None
+
+
+def _repair_progress_status_message(
+    processed: int,
+    total: int,
+    matched_count: int,
+    repaired_count: int,
+    books_added: int,
+) -> str:
+    return (
+        f"Repairing local file links: {processed}/{total} processed "
+        f"({matched_count} matched, {repaired_count} repaired, {books_added} local books added)"
+    )
+
+
+def _scale_progress(processed: int, total: int, start: float, end: float) -> float:
+    if total <= 0:
+        return start
+    return start + ((end - start) * processed / total)
+
+
 async def _repair_local_file_links(
     db: AsyncSession,
     author: Author | None = None,
     file_paths: set[str] | None = None,
     expected_book_ids: dict[str, int] | None = None,
+    progress_callback: Callable[[int, int, int, int, int], None] | None = None,
 ) -> tuple[int, int, int]:
     result = await db.execute(
         select(BookFile).options(selectinload(BookFile.book))
@@ -749,24 +944,55 @@ async def _repair_local_file_links(
     matched_count = 0
     repaired_count = 0
     books_added = 0
+    total_candidates = len(candidate_files)
 
-    for bf in candidate_files:
+    if candidate_files:
+        logger.info("Repairing local file links: %d candidate file(s)", total_candidates)
+        if progress_callback:
+            progress_callback(0, total_candidates, matched_count, repaired_count, books_added)
+
+    async def commit_and_report_repair_progress(processed: int, *, force: bool = False) -> None:
+        if not force and processed % LOCAL_REPAIR_PROGRESS_INTERVAL != 0:
+            return
+        await db.commit()
+        logger.info(
+            "Repair progress: %d/%d processed (%d matched, %d repaired, %d local books added)",
+            processed,
+            total_candidates,
+            matched_count,
+            repaired_count,
+            books_added,
+        )
+        if progress_callback:
+            progress_callback(processed, total_candidates, matched_count, repaired_count, books_added)
+
+    for idx, bf in enumerate(candidate_files, start=1):
         current_book = bf.book
         ebook_path = BOOKS_DIR / bf.file_path
         path_parts = bf.file_path.split("/")
         fallback_author = path_parts[0] if path_parts else (bf.opf_author or "")
         fallback_book_dir = path_parts[1] if len(path_parts) > 1 else (current_book.title if current_book else bf.file_name)
         folder_key = _shared_book_folder_key(bf)
+        path_title_candidates = _local_path_title_candidates(bf)
 
         if ebook_path.exists():
-            opf = extract_best_metadata(ebook_path, fallback_author, fallback_book_dir)
-            bf.opf_title = opf.title or None
-            bf.opf_author = opf.author or fallback_author
-            bf.opf_isbn = opf.isbn or None
-            bf.opf_series = opf.series or None
-            bf.opf_series_index = opf.series_index
-            bf.opf_publisher = opf.publisher or None
-            bf.opf_description = opf.description or None
+            try:
+                opf = extract_best_metadata(ebook_path, fallback_author, fallback_book_dir)
+            except Exception as exc:
+                logger.warning(
+                    "Skipping unreadable metadata while repairing local file link: file=%s error=%s",
+                    bf.file_path,
+                    exc,
+                    exc_info=True,
+                )
+            else:
+                bf.opf_title = opf.title or None
+                bf.opf_author = opf.author or fallback_author
+                bf.opf_isbn = opf.isbn or None
+                bf.opf_series = opf.series or None
+                bf.opf_series_index = opf.series_index
+                bf.opf_publisher = opf.publisher or None
+                bf.opf_description = opf.description or None
 
         matched_book = None
         expected_book_id = expected_book_ids.get(bf.file_path) if expected_book_ids else None
@@ -809,6 +1035,21 @@ async def _repair_local_file_links(
                     matched_book.title,
                 )
 
+        if not matched_book and current_book and current_book.hardcover_id and path_title_candidates:
+            for path_title in path_title_candidates:
+                if titles_match(path_title, current_book.title):
+                    matched_book = current_book
+                    if bf.opf_title and not titles_match(bf.opf_title, path_title):
+                        logger.info(
+                            "Keeping existing path title match: file=%s path_title=%r matched_book_id=%s title=%r opf_title=%r",
+                            bf.file_path,
+                            path_title,
+                            matched_book.id,
+                            matched_book.title,
+                            bf.opf_title,
+                        )
+                    break
+
         author_key = normalize_author_key(bf.opf_author)
         author_result = await db.execute(
             select(Author)
@@ -843,6 +1084,7 @@ async def _repair_local_file_links(
                 author = matching_authors[0] if matching_authors else None
 
         if not matching_authors and not matched_book:
+            await commit_and_report_repair_progress(idx)
             continue
 
         candidate_books: list[Book] = []
@@ -878,6 +1120,24 @@ async def _repair_local_file_links(
             for book in candidate_books:
                 if titles_match(bf.opf_title, book.title):
                     matched_book = book
+                    break
+
+        if not matched_book and path_title_candidates:
+            for path_title in path_title_candidates:
+                for book in candidate_books:
+                    if titles_match(path_title, book.title):
+                        matched_book = book
+                        if bf.opf_title and not titles_match(bf.opf_title, path_title):
+                            logger.info(
+                                "Using path title match: file=%s path_title=%r matched_book_id=%s title=%r opf_title=%r",
+                                bf.file_path,
+                                path_title,
+                                matched_book.id,
+                                matched_book.title,
+                                bf.opf_title,
+                            )
+                        break
+                if matched_book:
                     break
 
         if matched_book:
@@ -921,8 +1181,9 @@ async def _repair_local_file_links(
                         else:
                             await db.delete(previous_book)
         else:
+            local_title = _best_local_title(bf)
             if current_book and not current_book.hardcover_id and author:
-                current_book.title = bf.opf_title or current_book.title
+                current_book.title = local_title or current_book.title
                 current_book.author_id = author.id
                 current_book.isbn = bf.opf_isbn or current_book.isbn
                 current_book.publisher = bf.opf_publisher or current_book.publisher
@@ -930,7 +1191,7 @@ async def _repair_local_file_links(
                 current_book.is_owned = True
             elif author:
                 local_book = Book(
-                    title=bf.opf_title or bf.file_name,
+                    title=local_title or bf.file_name,
                     author_id=author.id,
                     isbn=bf.opf_isbn,
                     publisher=bf.opf_publisher,
@@ -949,14 +1210,19 @@ async def _repair_local_file_links(
                     )[0].id
                 books_added += 1
 
-    await db.commit()
+        await commit_and_report_repair_progress(idx)
+
     if candidate_files:
+        if total_candidates % LOCAL_REPAIR_PROGRESS_INTERVAL != 0:
+            await commit_and_report_repair_progress(total_candidates, force=True)
         logger.info(
             "Matched %d/%d candidate file(s); repaired %d existing local link(s)",
             matched_count,
             len(candidate_files),
             repaired_count,
         )
+    else:
+        await db.commit()
     return matched_count, repaired_count, books_added
 
 
@@ -1525,6 +1791,23 @@ def _author_needs_hardcover_books_sync(
     return False
 
 
+_TRANSIENT_HARDCOVER_REASONS = {"transient_http_error", "request_error", "invalid_json"}
+
+
+def _is_transient_hardcover_error(exc: HardcoverLookupError) -> bool:
+    if exc.reason in _TRANSIENT_HARDCOVER_REASONS:
+        return True
+    return exc.status_code is not None and 500 <= exc.status_code < 600
+
+
+def _scan_completion_message(summary: ScanRunSummary) -> str:
+    if summary.hardcover.deferred > 0 and summary.hardcover.failure_reasons.get("throttled"):
+        return "Scan complete with some Hardcover work deferred due to rate limiting."
+    if summary.hardcover.deferred > 0:
+        return "Scan complete with some Hardcover work deferred due to temporary lookup failures."
+    return "Scan complete!"
+
+
 async def run_full_sync(force: bool = False):
     """Run a library sync. Incremental by default; force=True refreshes all authors."""
     if scan_status.status == "scanning":
@@ -1538,6 +1821,25 @@ async def run_full_sync(force: bool = False):
     scan_status.status = "scanning"
     scan_status.progress = 0.0
     scan_status.message = "Starting scan..."
+
+    def scan_repair_progress_callback(start: float, end: float):
+        def update(
+            processed: int,
+            total: int,
+            matched_count: int,
+            repaired_count: int,
+            books_added: int,
+        ) -> None:
+            scan_status.progress = _scale_progress(processed, total, start, end)
+            scan_status.message = _repair_progress_status_message(
+                processed,
+                total,
+                matched_count,
+                repaired_count,
+                books_added,
+            )
+
+        return update
 
     try:
         async with async_session() as db:
@@ -1587,7 +1889,10 @@ async def run_full_sync(force: bool = False):
             if not api_key:
                 if repair_candidates > 0:
                     scan_status.message = "Repairing local file matches..."
-                    matched_count, repaired_count, new_local_books = await _repair_local_file_links(db)
+                    matched_count, repaired_count, new_local_books = await _repair_local_file_links(
+                        db,
+                        progress_callback=scan_repair_progress_callback(20.0, 95.0),
+                    )
                     summary.books_added += new_local_books
                     logger.info(
                         "Local-only repair without Hardcover API key: matched %d candidate file(s), repaired %d link(s)",
@@ -1649,6 +1954,15 @@ async def run_full_sync(force: bool = False):
                                 )
                                 scan_status.message = "Hardcover throttled; deferring remaining Hardcover author lookups..."
                                 continue
+                            if _is_transient_hardcover_error(e):
+                                summary.hardcover.record_deferred(e.reason)
+                                logger.warning(
+                                    "Hardcover lookup failed temporarily for author %r; skipping this author until a later scan: %s",
+                                    author.name,
+                                    e,
+                                )
+                                scan_status.message = "Hardcover lookup failed temporarily; continuing scan..."
+                                continue
                             raise
                         if hc_author:
                             summary.hardcover.record_match()
@@ -1680,7 +1994,17 @@ async def run_full_sync(force: bool = False):
                                 )
                                 scan_status.message = "Hardcover throttled; deferring remaining Hardcover author lookups..."
                                 continue
-                            raise
+                            if _is_transient_hardcover_error(e):
+                                summary.hardcover.record_deferred(e.reason)
+                                logger.warning(
+                                    "Hardcover image lookup failed temporarily for author %r; continuing with fallback image sources: %s",
+                                    author.name,
+                                    e,
+                                )
+                                scan_status.message = "Hardcover image lookup failed temporarily; continuing scan..."
+                                hc_author = None
+                            else:
+                                raise
                         if hc_author and hc_author.image_url and not author_has_manual_image:
                             author.image_url = hc_author.image_url
                             if not author.bio:
@@ -1726,8 +2050,8 @@ async def run_full_sync(force: bool = False):
 
                     progress = 20.0 + (30.0 * (i + 1) / max(total_authors, 1))
                     scan_status.progress = progress
+                    await db.commit()
 
-                await db.commit()
                 if new_author_count:
                     logger.info("Matched %d new author(s) to Hardcover", new_author_count)
 
@@ -1806,6 +2130,18 @@ async def run_full_sync(force: bool = False):
                                 remaining,
                             )
                             scan_status.message = "Hardcover throttled; deferring remaining Hardcover book lookups..."
+                            continue
+                        if _is_transient_hardcover_error(e):
+                            authors_skipped += 1
+                            summary.hardcover.record_deferred(e.reason)
+                            logger.warning(
+                                "Hardcover book sync failed temporarily for author %r; skipping this author until a later scan: %s",
+                                author.name,
+                                e,
+                            )
+                            scan_status.message = "Hardcover lookup failed temporarily; continuing scan..."
+                            progress = 50.0 + (25.0 * (i + 1) / max(total_authors, 1))
+                            scan_status.progress = progress
                             continue
                         raise
                     summary.hardcover.record_match()
@@ -1938,8 +2274,8 @@ async def run_full_sync(force: bool = False):
                     author.last_synced_at = datetime.utcnow()
                     progress = 50.0 + (25.0 * (i + 1) / max(total_authors, 1))
                     scan_status.progress = progress
+                    await db.commit()
 
-                await db.commit()
                 logger.info(
                     "Hardcover sync: %d author(s) fetched, %d skipped (no changes / recently synced)",
                     authors_synced, authors_skipped,
@@ -1948,7 +2284,10 @@ async def run_full_sync(force: bool = False):
                 # Phase 4: Match local files to Hardcover books and repair
                 # existing local-only links using freshly parsed file metadata.
                 scan_status.message = "Matching local files to Hardcover books..."
-                matched_count, repaired_count, new_local_books = await _repair_local_file_links(db)
+                matched_count, repaired_count, new_local_books = await _repair_local_file_links(
+                    db,
+                    progress_callback=scan_repair_progress_callback(75.0, 80.0),
+                )
                 books_added += new_local_books
                 summary.books_added = books_added
                 summary.books_removed = books_removed
@@ -2328,37 +2667,18 @@ async def run_full_sync(force: bool = False):
                 ]
                 hc_covers = 0
                 if books_for_hc:
-                    sem = asyncio.Semaphore(20)
-
-                    async def _dl_hc(book):
-                        async with sem:
-                            return await download_image_bytes(book.cover_image_url)
-
-                    hc_results = await asyncio.gather(
-                        *[_dl_hc(b) for b in books_for_hc]
+                    hc_covers = await _download_and_cache_remote_covers(
+                        db,
+                        books_for_hc,
+                        source="hardcover",
+                        source_label="Hardcover",
+                        url_getter=lambda book: book.cover_image_url,
+                        cover_heights=cover_heights,
+                        cover_sources=cover_sources,
+                        cover_ratios=cover_ratios,
+                        progress_start=87.0,
+                        progress_end=90.0,
                     )
-                    for book, data in zip(books_for_hc, hc_results):
-                        if not data:
-                            continue
-                        current_height = cover_heights.get(book.id, 0)
-                        current_ratio = cover_ratios.get(book.id)
-                        new_height, new_ratio = _measure_cover_data(data)
-                        if _should_replace_cover(
-                            current_source=cover_sources.get(book.id),
-                            current_height=current_height,
-                            current_ratio=current_ratio,
-                            new_source="hardcover",
-                            new_height=new_height,
-                            new_ratio=new_ratio,
-                        ):
-                            path = cache_cover_data(data, book.id, "hardcover")
-                            if path:
-                                book.cover_image_cached_path = path
-                                cover_heights[book.id] = new_height
-                                cover_sources[book.id] = "hardcover"
-                                cover_ratios[book.id] = new_ratio
-                                hc_covers += 1
-                    await db.commit()
                 if hc_covers:
                     logger.info("Cached %d cover(s) from Hardcover", hc_covers)
                 scan_status.progress = 90.0
@@ -2377,40 +2697,22 @@ async def run_full_sync(force: bool = False):
                     ]
                     google_covers = 0
                     if books_for_google:
-                        sem = asyncio.Semaphore(20)
-
-                        async def _dl_google(book):
-                            async with sem:
-                                gbook = google_data.get(book.id)
-                                if not gbook or not gbook.cover_url:
-                                    return None
-                                return await download_image_bytes(gbook.cover_url)
-
-                        g_results = await asyncio.gather(
-                            *[_dl_google(b) for b in books_for_google]
+                        google_covers = await _download_and_cache_remote_covers(
+                            db,
+                            books_for_google,
+                            source="google",
+                            source_label="Google Books",
+                            url_getter=lambda book: (
+                                google_data[book.id].cover_url
+                                if book.id in google_data and google_data[book.id].cover_url
+                                else None
+                            ),
+                            cover_heights=cover_heights,
+                            cover_sources=cover_sources,
+                            cover_ratios=cover_ratios,
+                            progress_start=90.0,
+                            progress_end=93.0,
                         )
-                        for book, data in zip(books_for_google, g_results):
-                            if not data:
-                                continue
-                            current_height = cover_heights.get(book.id, 0)
-                            current_ratio = cover_ratios.get(book.id)
-                            new_height, new_ratio = _measure_cover_data(data)
-                            if _should_replace_cover(
-                                current_source=cover_sources.get(book.id),
-                                current_height=current_height,
-                                current_ratio=current_ratio,
-                                new_source="google",
-                                new_height=new_height,
-                                new_ratio=new_ratio,
-                            ):
-                                path = cache_cover_data(data, book.id, "google")
-                                if path:
-                                    book.cover_image_cached_path = path
-                                    cover_heights[book.id] = new_height
-                                    cover_sources[book.id] = "google"
-                                    cover_ratios[book.id] = new_ratio
-                                    google_covers += 1
-                        await db.commit()
                     if google_covers:
                         logger.info("Cached %d cover(s) from Google Books", google_covers)
                 scan_status.progress = 93.0
@@ -2504,48 +2806,35 @@ async def run_full_sync(force: bool = False):
                                     )
                         finally:
                             await ol_client2.close()
+                        await db.commit()
 
                     # Download OL covers concurrently
                     ol_download_books = []
-                    ol_download_urls = []
                     for book in books_no_cover:
                         ol_book = ol_data.get(book.id)
                         if ol_book and ol_book.cover_id:
                             ol_download_books.append(book)
-                            ol_download_urls.append(ol_book.cover_url_large)
 
-                    if ol_download_urls:
-                        sem = asyncio.Semaphore(10)
-
-                        async def _dl_ol(url):
-                            async with sem:
-                                return await download_image_bytes(url)
-
-                        ol_dl_results = await asyncio.gather(
-                            *[_dl_ol(u) for u in ol_download_urls]
+                    if ol_download_books:
+                        ol_covers = await _download_and_cache_remote_covers(
+                            db,
+                            ol_download_books,
+                            source="openlibrary",
+                            source_label="Open Library",
+                            url_getter=lambda book: (
+                                ol_data[book.id].cover_url_large
+                                if book.id in ol_data and ol_data[book.id].cover_id
+                                else None
+                            ),
+                            cover_heights=cover_heights,
+                            cover_sources=cover_sources,
+                            cover_ratios=cover_ratios,
+                            concurrency=10,
+                            progress_start=93.0,
+                            progress_end=96.0,
                         )
-                        for book, data in zip(ol_download_books, ol_dl_results):
-                            if data:
-                                current_height = cover_heights.get(book.id, 0)
-                                current_ratio = cover_ratios.get(book.id)
-                                new_height, new_ratio = _measure_cover_data(data)
-                                if _should_replace_cover(
-                                    current_source=cover_sources.get(book.id),
-                                    current_height=current_height,
-                                    current_ratio=current_ratio,
-                                    new_source="openlibrary",
-                                    new_height=new_height,
-                                    new_ratio=new_ratio,
-                                ):
-                                    path = cache_cover_data(data, book.id, "openlibrary")
-                                    if path:
-                                        book.cover_image_cached_path = path
-                                        cover_heights[book.id] = new_height
-                                        cover_sources[book.id] = "openlibrary"
-                                        cover_ratios[book.id] = new_ratio
-                                        ol_covers += 1
-
-                    await db.commit()
+                    else:
+                        await db.commit()
                     if ol_covers:
                         logger.info("Cached %d cover(s) from Open Library", ol_covers)
 
@@ -2582,19 +2871,11 @@ async def run_full_sync(force: bool = False):
 
             await flush_api_usage_batch(db)
             await _update_last_scan(db)
-            final_message = (
-                "Scan complete with some Hardcover work deferred due to rate limiting."
-                if summary.hardcover.deferred > 0 and summary.hardcover.failure_reasons.get("throttled")
-                else "Scan complete!"
-            )
+            final_message = _scan_completion_message(summary)
             await _finalize_scan_summary(db, summary, message=final_message)
 
         scan_status.progress = 100.0
-        scan_status.message = (
-            "Scan complete with some Hardcover work deferred due to rate limiting."
-            if summary.hardcover.deferred > 0 and summary.hardcover.failure_reasons.get("throttled")
-            else "Scan complete!"
-        )
+        scan_status.message = _scan_completion_message(summary)
         scan_status.status = "idle"
 
     except Exception as e:
@@ -2727,7 +3008,30 @@ async def refresh_single_author(author_id: int, mode: str = "full"):
                 progress=55.0,
                 message=f"Matching local files for {author.name}...",
             )
-            matched_count, repaired_count, new_local_books = await _repair_local_file_links(db, author=author)
+
+            def author_repair_progress_callback(
+                processed: int,
+                total: int,
+                matched_count: int,
+                repaired_count: int,
+                books_added: int,
+            ) -> None:
+                author_refresh_status.update(
+                    progress=_scale_progress(processed, total, 55.0, 62.0),
+                    message=_repair_progress_status_message(
+                        processed,
+                        total,
+                        matched_count,
+                        repaired_count,
+                        books_added,
+                    ),
+                )
+
+            matched_count, repaired_count, new_local_books = await _repair_local_file_links(
+                db,
+                author=author,
+                progress_callback=author_repair_progress_callback,
+            )
             books_added += new_local_books
 
             author_refresh_status.update(
