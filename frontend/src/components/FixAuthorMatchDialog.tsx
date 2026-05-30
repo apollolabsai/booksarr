@@ -19,14 +19,18 @@ export default function FixAuthorMatchDialog({
   const searchAuthors = useSearchHardcoverAuthors();
   const relinkAuthor = useRelinkAuthorHardcover();
   const [pendingId, setPendingId] = useState<number | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const { mutate: runSearch, reset: resetSearch } = searchAuthors;
+  const { reset: resetRelink } = relinkAuthor;
 
   // Seed the search box with the current author name and auto-search on open.
   useEffect(() => {
     if (!open) {
       setQuery("");
       setPendingId(null);
+      setActionError(null);
+      resetRelink();
       resetSearch();
       return;
     }
@@ -34,7 +38,7 @@ export default function FixAuthorMatchDialog({
     if (authorName.trim().length >= 3) {
       runSearch(authorName.trim());
     }
-  }, [open, authorName, runSearch, resetSearch]);
+  }, [open, authorName, runSearch, resetSearch, resetRelink]);
 
   if (!open) return null;
 
@@ -94,6 +98,11 @@ export default function FixAuthorMatchDialog({
               <div className="text-sm font-medium text-slate-100">Hardcover matches</div>
               <div className="text-xs text-slate-500">{candidates.length} result(s)</div>
             </div>
+            {actionError && (
+              <div className="mb-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+                {actionError}
+              </div>
+            )}
 
             {candidates.length === 0 ? (
               <div className="text-sm text-slate-400">
@@ -144,9 +153,16 @@ export default function FixAuthorMatchDialog({
                         type="button"
                         onClick={async () => {
                           setPendingId(candidate.hardcover_id);
+                          setActionError(null);
                           try {
                             await relinkAuthor.mutateAsync({ authorId, hardcoverId: candidate.hardcover_id });
                             onClose();
+                          } catch (error) {
+                            setActionError(
+                              error instanceof Error
+                                ? error.message
+                                : "Failed to relink author to the selected match.",
+                            );
                           } finally {
                             setPendingId(null);
                           }
@@ -162,7 +178,7 @@ export default function FixAuthorMatchDialog({
               </div>
             )}
 
-            {relinkAuthor.isError && (
+            {relinkAuthor.isError && !actionError && (
               <div className="mt-3 text-sm text-rose-300">Failed to relink author to the selected match.</div>
             )}
           </div>

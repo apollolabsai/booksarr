@@ -160,6 +160,7 @@ async def test_relink_author_hardcover_resets_last_synced_and_starts_refresh(
     assert response["status"] == "started"
     assert response["hardcover_id"] == 200
     assert refresh_calls == [(author.id, "full")]
+    assert author.name == "Correct Hardcover Author"
     assert author.hardcover_id == 200
     assert author.hardcover_slug == "correct-hardcover-author"
     assert author.bio == "Correct author bio"

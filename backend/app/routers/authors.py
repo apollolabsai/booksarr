@@ -325,10 +325,9 @@ async def relink_author_hardcover(
         if hc_author is None:
             raise HTTPException(status_code=404, detail="Hardcover author not found")
 
-        # Repoint the existing author to the selected Hardcover profile. The
-        # display name and linked folders are intentionally left untouched so
-        # the local library layout stays stable; only the Hardcover linkage and
-        # the metadata derived from it are updated.
+        # Repoint the existing author to the selected Hardcover profile. Linked
+        # folders are left untouched so local library paths stay stable.
+        author.name = hc_author.name
         author.hardcover_id = hc_author.id
         author.hardcover_slug = hc_author.slug
         author.bio = hc_author.bio
