@@ -128,7 +128,7 @@ export default function BookCard({
               e.stopPropagation();
               setMetadataInfoOpen(true);
             }}
-            className="absolute right-2 top-10 z-20 flex h-7 w-7 items-center justify-center rounded-full border border-slate-500/70 bg-slate-950/80 text-sm font-semibold leading-none text-slate-100 opacity-0 transition-opacity hover:bg-slate-800/90 group-hover:opacity-100"
+            className="absolute right-2 top-10 z-[80] flex h-7 w-7 items-center justify-center rounded-md border border-slate-500/70 bg-slate-950/80 text-sm font-semibold leading-none text-slate-100 opacity-0 transition-opacity hover:bg-slate-800/90 group-hover:opacity-100"
             title="Metadata info"
             aria-label="Metadata info"
           >
@@ -175,7 +175,7 @@ export default function BookCard({
             </button>
             {menuOpen && (
               <div
-                className="absolute bottom-9 left-0 right-0 z-20 rounded-lg border border-slate-600 bg-slate-900/95 p-1 shadow-xl"
+                className="absolute bottom-9 left-0 right-0 z-[90] rounded-lg border border-slate-600 bg-slate-900/95 p-1 shadow-xl"
                 onClick={(e) => e.stopPropagation()}
               >
                 <button

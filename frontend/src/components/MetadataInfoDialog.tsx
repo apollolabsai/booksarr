@@ -158,7 +158,7 @@ export default function MetadataInfoDialog({
   const isSaving = updateMetadata.isPending || applyOpfMetadata.isPending;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-6">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/80 px-4 py-6">
       <div className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
         <div className="flex shrink-0 items-start justify-between border-b border-slate-700 px-6 py-4">
           <div>

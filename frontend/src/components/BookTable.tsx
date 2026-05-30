@@ -101,14 +101,12 @@ function ActionIconButton({
   onClick,
   disabled = false,
   preferBelow = false,
-  round = false,
   children,
 }: {
   label: string;
   onClick: () => void;
   disabled?: boolean;
   preferBelow?: boolean;
-  round?: boolean;
   children: ReactNode;
 }) {
   const [showTooltip, setShowTooltip] = useState(false);
@@ -150,13 +148,13 @@ function ActionIconButton({
         onClick={onClick}
         disabled={disabled}
         aria-label={label}
-        className={`inline-flex h-8 w-8 items-center justify-center border border-slate-600 bg-slate-700 text-slate-200 transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50 ${round ? "rounded-full" : "rounded-md"}`}
+        className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-600 bg-slate-700 text-slate-200 transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {children}
       </button>
       {showTooltip && !disabled && (
         <div
-          className={`pointer-events-none absolute right-0 z-20 whitespace-nowrap rounded-md border border-slate-600 bg-slate-900 px-2 py-1 text-[11px] font-medium text-slate-100 shadow-lg ${
+          className={`pointer-events-none absolute right-0 z-[120] whitespace-nowrap rounded-md border border-slate-600 bg-slate-900 px-2 py-1 text-[11px] font-medium text-slate-100 shadow-lg ${
             preferBelow ? "top-full mt-2" : "bottom-full mb-2"
           }`}
         >
@@ -405,7 +403,6 @@ export default function BookTable({
                           label="Metadata info"
                           onClick={() => setMetadataInfoBook({ id: book.id, title: book.title })}
                           preferBelow={index === 0}
-                          round
                         >
                           <span className="text-sm font-semibold leading-none">i</span>
                         </ActionIconButton>

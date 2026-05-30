@@ -43,7 +43,7 @@ function MultiSelectReasonFilter({
         </svg>
       </button>
       {open && (
-        <div className="absolute right-0 z-20 mt-2 w-80 rounded-lg border border-slate-600 bg-slate-800 p-2 shadow-xl">
+        <div className="absolute right-0 z-[90] mt-2 w-80 rounded-lg border border-slate-600 bg-slate-800 p-2 shadow-xl">
           <div className="mb-2 flex items-center justify-between px-1">
             <span className="text-xs font-medium text-slate-400">
               {selectedLabels.length === 0 ? "All reasons shown" : `${selectedLabels.length} selected`}
@@ -317,7 +317,7 @@ export default function HiddenBooksPage() {
                         <button
                           type="button"
                           onClick={() => setMetadataInfoBook({ id: book.id, title: book.title })}
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-600 bg-slate-700 text-sm font-semibold leading-none text-slate-200 transition-colors hover:bg-slate-600"
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-600 bg-slate-700 text-sm font-semibold leading-none text-slate-200 transition-colors hover:bg-slate-600"
                           title="Metadata info"
                           aria-label="Metadata info"
                         >
