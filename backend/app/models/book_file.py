@@ -22,6 +22,8 @@ class BookFile(Base):
     opf_series_index: Mapped[float | None] = mapped_column(Float, nullable=True)
     opf_publisher: Mapped[str | None] = mapped_column(String, nullable=True)
     opf_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    opf_date: Mapped[str | None] = mapped_column(String, nullable=True)
+    opf_language: Mapped[str | None] = mapped_column(String, nullable=True)
     local_cover_path: Mapped[str | None] = mapped_column(String, nullable=True)
     last_scanned_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

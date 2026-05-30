@@ -117,6 +117,15 @@ export interface BookInAuthor {
   matched_openlibrary: boolean;
   description: string | null;
   release_date: string | null;
+  manual_title: string | null;
+  manual_author_name: string | null;
+  manual_isbn: string | null;
+  manual_publisher: string | null;
+  manual_description: string | null;
+  manual_release_date: string | null;
+  manual_language: string | null;
+  manual_series_name: string | null;
+  manual_series_position: number | null;
   cover_image_url: string | null;
   cover_image_cached_path: string | null;
   cover_aspect_ratio: number | null;
@@ -182,6 +191,15 @@ export interface Book {
   matched_google: boolean;
   matched_openlibrary: boolean;
   release_date: string | null;
+  manual_title: string | null;
+  manual_author_name: string | null;
+  manual_isbn: string | null;
+  manual_publisher: string | null;
+  manual_description: string | null;
+  manual_release_date: string | null;
+  manual_language: string | null;
+  manual_series_name: string | null;
+  manual_series_position: number | null;
   cover_image_url: string | null;
   cover_image_cached_path: string | null;
   cover_aspect_ratio: number | null;
@@ -236,6 +254,57 @@ export interface BookCoverSearchResponse {
   book_id: number;
   query: string;
   results: CoverSearchResult[];
+}
+
+export type BookMetadataField =
+  | "title"
+  | "author_name"
+  | "isbn"
+  | "publisher"
+  | "description"
+  | "release_date"
+  | "language"
+  | "series_name"
+  | "series_position";
+
+export interface BookMetadataValues {
+  title: string | null;
+  author_name: string | null;
+  isbn: string | null;
+  publisher: string | null;
+  description: string | null;
+  release_date: string | null;
+  language: string | null;
+  series_name: string | null;
+  series_position: number | null;
+}
+
+export interface BookOpfMetadataFile {
+  id: number;
+  file_path: string;
+  file_name: string;
+  file_format: string | null;
+  file_size: number | null;
+  opf_title: string | null;
+  opf_author: string | null;
+  opf_isbn: string | null;
+  opf_publisher: string | null;
+  opf_description: string | null;
+  opf_date: string | null;
+  opf_language: string | null;
+  opf_series: string | null;
+  opf_series_index: number | null;
+}
+
+export interface BookMetadataInfoResponse {
+  book_id: number;
+  hardcover_id: number | null;
+  hardcover_slug: string | null;
+  current: BookMetadataValues;
+  original: BookMetadataValues;
+  manual: BookMetadataValues;
+  files: BookOpfMetadataFile[];
+  editable_fields: BookMetadataField[];
 }
 
 export interface ScanStatus {

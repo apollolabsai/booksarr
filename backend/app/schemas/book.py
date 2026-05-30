@@ -39,6 +39,15 @@ class BookSummary(BaseModel):
     matched_google: bool
     matched_openlibrary: bool
     release_date: str | None
+    manual_title: str | None = None
+    manual_author_name: str | None = None
+    manual_isbn: str | None = None
+    manual_publisher: str | None = None
+    manual_description: str | None = None
+    manual_release_date: str | None = None
+    manual_language: str | None = None
+    manual_series_name: str | None = None
+    manual_series_position: float | None = None
     cover_image_url: str | None
     cover_image_cached_path: str | None
     cover_aspect_ratio: float | None
@@ -120,3 +129,61 @@ class BookCoverSearchResponse(BaseModel):
     book_id: int
     query: str
     results: list[CoverSearchResult]
+
+
+class BookOpfMetadataFile(BaseModel):
+    id: int
+    file_path: str
+    file_name: str
+    file_format: str | None
+    file_size: int | None
+    opf_title: str | None
+    opf_author: str | None
+    opf_isbn: str | None
+    opf_publisher: str | None
+    opf_description: str | None
+    opf_date: str | None
+    opf_language: str | None
+    opf_series: str | None
+    opf_series_index: float | None
+
+
+class BookMetadataValues(BaseModel):
+    title: str | None
+    author_name: str | None
+    isbn: str | None
+    publisher: str | None
+    description: str | None
+    release_date: str | None
+    language: str | None
+    series_name: str | None
+    series_position: float | None
+
+
+class BookMetadataInfoResponse(BaseModel):
+    book_id: int
+    hardcover_id: int | None
+    hardcover_slug: str | None
+    current: BookMetadataValues
+    original: BookMetadataValues
+    manual: BookMetadataValues
+    files: list[BookOpfMetadataFile]
+    editable_fields: list[str]
+
+
+class BookMetadataUpdateRequest(BaseModel):
+    title: str | None = None
+    author_name: str | None = None
+    isbn: str | None = None
+    publisher: str | None = None
+    description: str | None = None
+    release_date: str | None = None
+    language: str | None = None
+    series_name: str | None = None
+    series_position: float | None = None
+    clear_fields: list[str] = []
+
+
+class BookMetadataApplyOpfRequest(BaseModel):
+    book_file_id: int
+    fields: list[str]

@@ -6,6 +6,7 @@ import { useRefreshBook, useSetBookVisibility } from "../api/books";
 import CoverPickerDialog from "./CoverPickerDialog";
 import IrcSearchDialog from "./IrcSearchDialog";
 import BookDownloadSelector from "./BookDownloadSelector";
+import MetadataInfoDialog from "./MetadataInfoDialog";
 
 type BookLike = Book | BookInAuthor;
 type TableSortKey = "title" | "series" | "year" | "rating" | "size";
@@ -29,6 +30,12 @@ function formatFileSize(size: number | null): string {
 
 
 function formatSeriesPosition(book: BookLike): string {
+  if (book.manual_series_name) {
+    const pos = book.manual_series_position != null
+      ? (Number.isInteger(book.manual_series_position) ? `#${book.manual_series_position}` : `#${book.manual_series_position.toFixed(1)}`)
+      : "";
+    return pos ? `${book.manual_series_name} ${pos}` : book.manual_series_name;
+  }
   if (!("series_info" in book) || !book.series_info || book.series_info.length === 0) return "";
   const si = book.series_info[0];
   const pos = si.position != null
@@ -94,12 +101,14 @@ function ActionIconButton({
   onClick,
   disabled = false,
   preferBelow = false,
+  round = false,
   children,
 }: {
   label: string;
   onClick: () => void;
   disabled?: boolean;
   preferBelow?: boolean;
+  round?: boolean;
   children: ReactNode;
 }) {
   const [showTooltip, setShowTooltip] = useState(false);
@@ -141,7 +150,7 @@ function ActionIconButton({
         onClick={onClick}
         disabled={disabled}
         aria-label={label}
-        className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-600 bg-slate-700 text-slate-200 transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+        className={`inline-flex h-8 w-8 items-center justify-center border border-slate-600 bg-slate-700 text-slate-200 transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50 ${round ? "rounded-full" : "rounded-md"}`}
       >
         {children}
       </button>
@@ -203,6 +212,7 @@ export default function BookTable({
   const setBookVisibility = useSetBookVisibility();
   const [coverPickerBook, setCoverPickerBook] = useState<{ id: number; title: string } | null>(null);
   const [ircSearchBook, setIrcSearchBook] = useState<{ id: number; title: string; authorName: string | null } | null>(null);
+  const [metadataInfoBook, setMetadataInfoBook] = useState<{ id: number; title: string } | null>(null);
   const [sortKey, setSortKey] = useState<TableSortKey | null>(null);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
@@ -392,6 +402,14 @@ export default function BookTable({
                     <td className="px-4 py-2 text-right">
                       <div className="flex items-center justify-end gap-2">
                         <ActionIconButton
+                          label="Metadata info"
+                          onClick={() => setMetadataInfoBook({ id: book.id, title: book.title })}
+                          preferBelow={index === 0}
+                          round
+                        >
+                          <span className="text-sm font-semibold leading-none">i</span>
+                        </ActionIconButton>
+                        <ActionIconButton
                           label="Choose poster"
                           onClick={() => setCoverPickerBook({ id: book.id, title: book.title })}
                           preferBelow={index === 0}
@@ -522,6 +540,12 @@ export default function BookTable({
         authorName={ircSearchBook?.authorName ?? null}
         open={ircSearchBook !== null}
         onClose={() => setIrcSearchBook(null)}
+      />
+      <MetadataInfoDialog
+        bookId={metadataInfoBook?.id ?? null}
+        title={metadataInfoBook?.title ?? ""}
+        open={metadataInfoBook !== null}
+        onClose={() => setMetadataInfoBook(null)}
       />
     </>
   );

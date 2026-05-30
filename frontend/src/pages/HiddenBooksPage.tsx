@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useHiddenBooks, useSetBookVisibility } from "../api/books";
 import SearchBar from "../components/SearchBar";
+import MetadataInfoDialog from "../components/MetadataInfoDialog";
 import { getBookCoverPresentation, getImageUrl } from "../types";
 
 type SortKey = "title" | "author" | "hidden_by" | "year";
@@ -87,6 +88,7 @@ export default function HiddenBooksPage() {
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [selectedReasonLabels, setSelectedReasonLabels] = useState<string[]>([]);
   const [reasonMenuOpen, setReasonMenuOpen] = useState(false);
+  const [metadataInfoBook, setMetadataInfoBook] = useState<{ id: number; title: string } | null>(null);
   const { data: books, isLoading } = useHiddenBooks(search);
   const setBookVisibility = useSetBookVisibility();
   const reasonMenuRef = useRef<HTMLDivElement | null>(null);
@@ -311,18 +313,29 @@ export default function HiddenBooksPage() {
                       {book.release_date ? book.release_date.substring(0, 4) : "-"}
                     </td>
                     <td className="px-4 py-2 text-right">
-                      <button
-                        type="button"
-                        onClick={() => setBookVisibility.mutate({ bookId: book.id, action: "show" })}
-                        disabled={setBookVisibility.isPending}
-                        className="inline-flex items-center justify-center rounded-md border border-slate-600 bg-slate-700 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
-                        title="Unhide Book"
-                      >
-                        <svg className={`h-4 w-4 ${setBookVisibility.isPending && setBookVisibility.variables?.bookId === book.id ? "animate-pulse" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.522 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.478 0-8.268-2.943-9.542-7z" />
-                        </svg>
-                      </button>
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setMetadataInfoBook({ id: book.id, title: book.title })}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-600 bg-slate-700 text-sm font-semibold leading-none text-slate-200 transition-colors hover:bg-slate-600"
+                          title="Metadata info"
+                          aria-label="Metadata info"
+                        >
+                          i
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setBookVisibility.mutate({ bookId: book.id, action: "show" })}
+                          disabled={setBookVisibility.isPending}
+                          className="inline-flex items-center justify-center rounded-md border border-slate-600 bg-slate-700 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+                          title="Unhide Book"
+                        >
+                          <svg className={`h-4 w-4 ${setBookVisibility.isPending && setBookVisibility.variables?.bookId === book.id ? "animate-pulse" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.522 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.478 0-8.268-2.943-9.542-7z" />
+                          </svg>
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -331,6 +344,12 @@ export default function HiddenBooksPage() {
           </table>
         </div>
       )}
+      <MetadataInfoDialog
+        bookId={metadataInfoBook?.id ?? null}
+        title={metadataInfoBook?.title ?? ""}
+        open={metadataInfoBook !== null}
+        onClose={() => setMetadataInfoBook(null)}
+      />
     </div>
   );
 }

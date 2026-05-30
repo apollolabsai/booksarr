@@ -146,6 +146,15 @@ class BookInAuthor(BaseModel):
     matched_openlibrary: bool
     description: str | None
     release_date: str | None
+    manual_title: str | None = None
+    manual_author_name: str | None = None
+    manual_isbn: str | None = None
+    manual_publisher: str | None = None
+    manual_description: str | None = None
+    manual_release_date: str | None = None
+    manual_language: str | None = None
+    manual_series_name: str | None = None
+    manual_series_position: float | None = None
     cover_image_url: str | None
     cover_image_cached_path: str | None
     cover_aspect_ratio: float | None

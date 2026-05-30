@@ -1,6 +1,15 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchApi } from "./client";
-import type { Book, HiddenBook, BookCoverOptionsResponse, BookCoverSearchResponse, UnmatchedLocalFile } from "../types";
+import type {
+  Book,
+  BookMetadataField,
+  BookMetadataInfoResponse,
+  BookMetadataValues,
+  HiddenBook,
+  BookCoverOptionsResponse,
+  BookCoverSearchResponse,
+  UnmatchedLocalFile,
+} from "../types";
 
 export function useBooks(sort: string = "title", owned?: boolean, search: string = "") {
   return useQuery({
@@ -61,6 +70,66 @@ export function useBookCoverSearch(bookId: number | null, enabled: boolean) {
     queryKey: ["bookCoverSearch", bookId],
     queryFn: () => fetchApi<BookCoverSearchResponse>(`/books/${bookId}/cover-search`),
     enabled: enabled && !!bookId,
+  });
+}
+
+export function useBookMetadataInfo(bookId: number | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ["bookMetadataInfo", bookId],
+    queryFn: () => fetchApi<BookMetadataInfoResponse>(`/books/${bookId}/metadata-info`),
+    enabled: enabled && !!bookId,
+  });
+}
+
+function invalidateBookMetadataQueries(queryClient: ReturnType<typeof useQueryClient>, bookId: number) {
+  queryClient.invalidateQueries({ queryKey: ["books"] });
+  queryClient.invalidateQueries({ queryKey: ["hiddenBooks"] });
+  queryClient.invalidateQueries({ queryKey: ["authors"] });
+  queryClient.invalidateQueries({ queryKey: ["unmatchedFiles"] });
+  queryClient.invalidateQueries({ queryKey: ["bookMetadataInfo", bookId] });
+}
+
+export function useUpdateBookMetadata() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      bookId,
+      values,
+      clearFields = [],
+    }: {
+      bookId: number;
+      values: Partial<BookMetadataValues>;
+      clearFields?: BookMetadataField[];
+    }) =>
+      fetchApi(`/books/${bookId}/metadata`, {
+        method: "PATCH",
+        body: JSON.stringify({ ...values, clear_fields: clearFields }),
+      }),
+    onSuccess: (_, variables) => {
+      invalidateBookMetadataQueries(queryClient, variables.bookId);
+    },
+  });
+}
+
+export function useApplyOpfBookMetadata() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      bookId,
+      bookFileId,
+      fields,
+    }: {
+      bookId: number;
+      bookFileId: number;
+      fields: BookMetadataField[];
+    }) =>
+      fetchApi(`/books/${bookId}/metadata/apply-opf`, {
+        method: "POST",
+        body: JSON.stringify({ book_file_id: bookFileId, fields }),
+      }),
+    onSuccess: (_, variables) => {
+      invalidateBookMetadataQueries(queryClient, variables.bookId);
+    },
   });
 }
 

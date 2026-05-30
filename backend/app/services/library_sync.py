@@ -689,6 +689,8 @@ def _reparse_book_files(book: Book) -> tuple[str | None, str | None, str | None,
         book_file.opf_series_index = opf.series_index
         book_file.opf_publisher = opf.publisher or None
         book_file.opf_description = opf.description or None
+        book_file.opf_date = getattr(opf, "date", "") or None
+        book_file.opf_language = getattr(opf, "language", "") or None
         book_file.last_scanned_at = datetime.utcnow()
 
         if primary_title is None and book_file.opf_title:
@@ -993,6 +995,8 @@ async def _repair_local_file_links(
                 bf.opf_series_index = opf.series_index
                 bf.opf_publisher = opf.publisher or None
                 bf.opf_description = opf.description or None
+                bf.opf_date = getattr(opf, "date", "") or None
+                bf.opf_language = getattr(opf, "language", "") or None
 
         matched_book = None
         expected_book_id = expected_book_ids.get(bf.file_path) if expected_book_ids else None

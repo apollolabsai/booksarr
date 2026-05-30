@@ -25,7 +25,13 @@ from backend.app.services.hardcover import HardcoverClient, HardcoverLookupError
 from backend.app.services.google_image_search import search_author_portraits
 from backend.app.services.scanner import _classify_standalone_file, _collect_book_dir_artifacts
 from backend.app.utils.book_visibility import get_book_visibility_settings, is_book_visible
-from backend.app.utils.isbn import has_any_valid_isbn
+from backend.app.utils.book_metadata import (
+    effective_description,
+    effective_has_valid_isbn,
+    effective_isbn,
+    effective_release_date,
+    effective_title,
+)
 from backend.app.services.image_cache import get_cached_cover_aspect_ratio
 from backend.app.services.author_images import get_author_portrait_options, set_author_portrait_selection
 from backend.app.services.author_management import remove_author_and_books
@@ -683,7 +689,7 @@ async def get_author(author_id: int, db: AsyncSession = Depends(get_db)):
                 }
             series_map[s.id]["books"].append(SeriesBookEntry(
                 book_id=book.id,
-                title=book.title,
+                title=effective_title(book),
                 position=bs.position,
                 is_owned=book.is_owned,
                 cover_image_cached_path=book.cover_image_cached_path,
@@ -691,7 +697,7 @@ async def get_author(author_id: int, db: AsyncSession = Depends(get_db)):
 
         books_out.append(BookInAuthor(
             id=book.id,
-            title=book.title,
+            title=effective_title(book),
             hardcover_id=book.hardcover_id,
             hardcover_slug=book.hardcover_slug,
             compilation=book.compilation,
@@ -702,24 +708,25 @@ async def get_author(author_id: int, db: AsyncSession = Depends(get_db)):
             hardcover_state=book.hardcover_state,
             hardcover_isbn_10=book.hardcover_isbn_10,
             hardcover_isbn_13=book.hardcover_isbn_13,
-            isbn=book.isbn,
+            isbn=effective_isbn(book),
             google_isbn_10=book.google_isbn_10,
             google_isbn_13=book.google_isbn_13,
             ol_isbn_10=book.ol_isbn_10,
             ol_isbn_13=book.ol_isbn_13,
-            has_valid_isbn=has_any_valid_isbn(
-                book.isbn,
-                book.hardcover_isbn_10,
-                book.hardcover_isbn_13,
-                book.google_isbn_10,
-                book.google_isbn_13,
-                book.ol_isbn_10,
-                book.ol_isbn_13,
-            ),
+            has_valid_isbn=effective_has_valid_isbn(book),
             matched_google=bool(book.google_id and book.google_id != "_none"),
             matched_openlibrary=bool(book.ol_edition_key and book.ol_edition_key != "_none"),
-            description=book.description,
-            release_date=book.release_date,
+            description=effective_description(book),
+            release_date=effective_release_date(book),
+            manual_title=book.manual_title,
+            manual_author_name=book.manual_author_name,
+            manual_isbn=book.manual_isbn,
+            manual_publisher=book.manual_publisher,
+            manual_description=book.manual_description,
+            manual_release_date=book.manual_release_date,
+            manual_language=book.manual_language,
+            manual_series_name=book.manual_series_name,
+            manual_series_position=book.manual_series_position,
             cover_image_url=book.cover_image_url,
             cover_image_cached_path=book.cover_image_cached_path,
             cover_aspect_ratio=get_cached_cover_aspect_ratio(book.cover_image_cached_path),
