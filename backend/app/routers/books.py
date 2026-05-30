@@ -87,14 +87,14 @@ def _manual_series_position(book: Book) -> float | None:
 def _original_series_name(book: Book) -> str | None:
     if not book.book_series:
         return None
-    first = sorted(book.book_series, key=lambda bs: (bs.position is None, bs.position or 9999, bs.id))[0]
+    first = book.book_series[0]
     return first.series.name if first.series else None
 
 
 def _original_series_position(book: Book) -> float | None:
     if not book.book_series:
         return None
-    first = sorted(book.book_series, key=lambda bs: (bs.position is None, bs.position or 9999, bs.id))[0]
+    first = book.book_series[0]
     return first.position
 
 
