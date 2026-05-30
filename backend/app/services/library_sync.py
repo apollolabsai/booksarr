@@ -5,6 +5,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable
 
 from sqlalchemy import and_, delete, func, or_, select
@@ -14,7 +15,7 @@ from sqlalchemy.orm import selectinload
 from backend.app.config import BOOKS_DIR
 from backend.app.database import async_session
 from backend.app.models import Author, Book, BookFile, BookSeries, Series, Setting
-from backend.app.services.scanner import scan_library, extract_best_metadata, _clean_author_text
+from backend.app.services.scanner import scan_library, extract_best_metadata, _clean_author_text, _clean_title_text
 from backend.app.services.hardcover import HardcoverClient, HardcoverLookupError
 from backend.app.services.matcher import titles_match
 from backend.app.services.image_cache import (
@@ -809,6 +810,50 @@ def _shared_folder_book_sort_key(book: Book, visibility_settings: dict[str, bool
     )
 
 
+def _title_from_file_name(file_name: str) -> str:
+    stem = Path(file_name).stem
+    parts = [part.strip() for part in stem.split(" - ") if part.strip()]
+    if len(parts) >= 2:
+        stem = parts[-1]
+    return _clean_title_text(stem)
+
+
+def _local_path_title_candidates(book_file: BookFile) -> list[str]:
+    path_parts = [part for part in book_file.file_path.split("/") if part]
+    candidates: list[str] = []
+
+    if len(path_parts) >= 3:
+        candidates.append(_clean_title_text(path_parts[1]))
+    elif len(path_parts) == 2:
+        second_part = path_parts[1]
+        if (book_file.file_format or "").lower() == "audiobook" and not Path(second_part).suffix:
+            candidates.append(_clean_title_text(second_part))
+        else:
+            candidates.append(_title_from_file_name(second_part))
+
+    if book_file.file_name:
+        candidates.append(_title_from_file_name(book_file.file_name))
+
+    unique: list[str] = []
+    for candidate in candidates:
+        candidate = re.sub(r"\s+", " ", candidate).strip()
+        if not candidate:
+            continue
+        if any(titles_match(candidate, existing) for existing in unique):
+            continue
+        unique.append(candidate)
+    return unique
+
+
+def _best_local_title(book_file: BookFile) -> str | None:
+    path_titles = _local_path_title_candidates(book_file)
+    if path_titles and book_file.opf_title and any(titles_match(book_file.opf_title, title) for title in path_titles):
+        return book_file.opf_title
+    if path_titles:
+        return path_titles[0]
+    return book_file.opf_title or None
+
+
 def _repair_progress_status_message(
     processed: int,
     total: int,
@@ -928,6 +973,7 @@ async def _repair_local_file_links(
         fallback_author = path_parts[0] if path_parts else (bf.opf_author or "")
         fallback_book_dir = path_parts[1] if len(path_parts) > 1 else (current_book.title if current_book else bf.file_name)
         folder_key = _shared_book_folder_key(bf)
+        path_title_candidates = _local_path_title_candidates(bf)
 
         if ebook_path.exists():
             try:
@@ -988,6 +1034,21 @@ async def _repair_local_file_links(
                     matched_book.id,
                     matched_book.title,
                 )
+
+        if not matched_book and current_book and current_book.hardcover_id and path_title_candidates:
+            for path_title in path_title_candidates:
+                if titles_match(path_title, current_book.title):
+                    matched_book = current_book
+                    if bf.opf_title and not titles_match(bf.opf_title, path_title):
+                        logger.info(
+                            "Keeping existing path title match: file=%s path_title=%r matched_book_id=%s title=%r opf_title=%r",
+                            bf.file_path,
+                            path_title,
+                            matched_book.id,
+                            matched_book.title,
+                            bf.opf_title,
+                        )
+                    break
 
         author_key = normalize_author_key(bf.opf_author)
         author_result = await db.execute(
@@ -1061,6 +1122,24 @@ async def _repair_local_file_links(
                     matched_book = book
                     break
 
+        if not matched_book and path_title_candidates:
+            for path_title in path_title_candidates:
+                for book in candidate_books:
+                    if titles_match(path_title, book.title):
+                        matched_book = book
+                        if bf.opf_title and not titles_match(bf.opf_title, path_title):
+                            logger.info(
+                                "Using path title match: file=%s path_title=%r matched_book_id=%s title=%r opf_title=%r",
+                                bf.file_path,
+                                path_title,
+                                matched_book.id,
+                                matched_book.title,
+                                bf.opf_title,
+                            )
+                        break
+                if matched_book:
+                    break
+
         if matched_book:
             previous_book_id = bf.book_id
             bf.book = matched_book
@@ -1102,8 +1181,9 @@ async def _repair_local_file_links(
                         else:
                             await db.delete(previous_book)
         else:
+            local_title = _best_local_title(bf)
             if current_book and not current_book.hardcover_id and author:
-                current_book.title = bf.opf_title or current_book.title
+                current_book.title = local_title or current_book.title
                 current_book.author_id = author.id
                 current_book.isbn = bf.opf_isbn or current_book.isbn
                 current_book.publisher = bf.opf_publisher or current_book.publisher
@@ -1111,7 +1191,7 @@ async def _repair_local_file_links(
                 current_book.is_owned = True
             elif author:
                 local_book = Book(
-                    title=bf.opf_title or bf.file_name,
+                    title=local_title or bf.file_name,
                     author_id=author.id,
                     isbn=bf.opf_isbn,
                     publisher=bf.opf_publisher,

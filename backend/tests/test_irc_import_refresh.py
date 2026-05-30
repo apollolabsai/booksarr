@@ -151,6 +151,135 @@ async def test_repair_local_file_links_continues_when_metadata_extraction_fails(
 
 
 @pytest.mark.asyncio
+async def test_repair_local_file_links_uses_path_title_when_opf_title_is_front_matter(
+    db_session,
+    monkeypatch,
+    tmp_path,
+):
+    author = Author(name="Lee Child")
+    db_session.add(author)
+    await db_session.flush()
+
+    hard_way = Book(
+        title="The Hard Way",
+        author_id=author.id,
+        hardcover_id=384169,
+        is_owned=False,
+    )
+    bad_local_book = Book(
+        title="Scanned & Semi-Proofed by Cozette",
+        author_id=author.id,
+        is_owned=True,
+    )
+    db_session.add_all([hard_way, bad_local_book])
+    await db_session.flush()
+
+    relative_path = "Lee Child/The Hard Way/Child, Lee - The Hard Way.epub"
+    book_path = tmp_path / relative_path
+    book_path.parent.mkdir(parents=True, exist_ok=True)
+    book_path.write_text("placeholder", encoding="utf-8")
+
+    db_session.add(
+        BookFile(
+            file_path=relative_path,
+            file_name=book_path.name,
+            book_id=bad_local_book.id,
+            file_format="epub",
+            opf_title="Scanned & Semi-Proofed by Cozette",
+            opf_author="The Hard Way",
+        )
+    )
+    await db_session.commit()
+
+    monkeypatch.setattr(library_sync, "BOOKS_DIR", tmp_path)
+    monkeypatch.setattr(
+        library_sync,
+        "extract_best_metadata",
+        lambda *_args, **_kwargs: StubMetadata(
+            title="Scanned & Semi-Proofed by Cozette",
+            author="The Hard Way",
+        ),
+    )
+
+    matched_count, repaired_count, books_added = await library_sync._repair_local_file_links(
+        db_session,
+        file_paths={relative_path},
+    )
+
+    refreshed_file = await db_session.get(BookFile, 1)
+    refreshed_hard_way = await db_session.get(Book, hard_way.id)
+    removed_bad_book = await db_session.get(Book, bad_local_book.id)
+
+    assert matched_count == 1
+    assert repaired_count == 1
+    assert books_added == 0
+    assert refreshed_file.book_id == hard_way.id
+    assert refreshed_hard_way.is_owned is True
+    assert removed_bad_book is None
+
+
+@pytest.mark.asyncio
+async def test_repair_local_file_links_keeps_existing_hardcover_match_when_opf_title_is_bad(
+    db_session,
+    monkeypatch,
+    tmp_path,
+):
+    author = Author(name="Lee Child")
+    db_session.add(author)
+    await db_session.flush()
+
+    without_fail = Book(
+        title="Without Fail",
+        author_id=author.id,
+        hardcover_id=85656,
+        is_owned=True,
+    )
+    db_session.add(without_fail)
+    await db_session.flush()
+
+    relative_path = "Lee Child/Without Fail/child, lee - without fail.epub"
+    book_path = tmp_path / relative_path
+    book_path.parent.mkdir(parents=True, exist_ok=True)
+    book_path.write_text("placeholder", encoding="utf-8")
+
+    db_session.add(
+        BookFile(
+            file_path=relative_path,
+            file_name=book_path.name,
+            book_id=without_fail.id,
+            file_format="epub",
+            opf_title="ONE",
+            opf_author="THEY FOUND OUT ABOUT HIM IN JULY",
+        )
+    )
+    await db_session.commit()
+
+    monkeypatch.setattr(library_sync, "BOOKS_DIR", tmp_path)
+    monkeypatch.setattr(
+        library_sync,
+        "extract_best_metadata",
+        lambda *_args, **_kwargs: StubMetadata(
+            title="ONE",
+            author="THEY FOUND OUT ABOUT HIM IN JULY",
+        ),
+    )
+
+    matched_count, repaired_count, books_added = await library_sync._repair_local_file_links(
+        db_session,
+        file_paths={relative_path},
+    )
+
+    refreshed_file = await db_session.get(BookFile, 1)
+    books = (await db_session.execute(select(Book))).scalars().all()
+
+    assert matched_count == 1
+    assert repaired_count == 0
+    assert books_added == 0
+    assert refreshed_file.book_id == without_fail.id
+    assert [book.title for book in books] == ["Without Fail"]
+
+
+@pytest.mark.asyncio
 async def test_repair_local_file_links_honors_expected_book_id_for_mislinked_hardcover_book(
     db_session,
     monkeypatch,
