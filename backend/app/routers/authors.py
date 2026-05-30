@@ -18,7 +18,7 @@ from backend.app.schemas.author import (
     SeriesInAuthor, SeriesBookEntry,
     AuthorPortraitOption, AuthorPortraitOptionsResponse, AuthorPortraitSelectionRequest,
     AuthorPortraitSearchResponse, AuthorPortraitSearchResult,
-    AuthorSearchCandidate, AuthorSearchResponse, AuthorAddRequest, LocalBookFile, AuthorDirectoryEntry,
+    AuthorSearchCandidate, AuthorSearchResponse, AuthorAddRequest, AuthorRelinkRequest, LocalBookFile, AuthorDirectoryEntry,
     AuthorDirectoryMergeRequest, AuthorDirectoryMergeResponse, UnmatchedLocalFile,
 )
 from backend.app.services.hardcover import HardcoverClient, HardcoverLookupError
@@ -273,6 +273,69 @@ async def add_author_from_hardcover(
         book_count_local=sum(1 for book in visible_books if book.is_owned),
         book_count_total=len(visible_books),
     )
+
+
+@router.post("/{author_id}/relink-hardcover")
+async def relink_author_hardcover(
+    author_id: int,
+    body: AuthorRelinkRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Author).where(Author.id == author_id))
+    author = result.scalar_one_or_none()
+    if author is None:
+        raise HTTPException(status_code=404, detail="Author not found")
+
+    api_key = await get_api_key(db)
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Hardcover API key is not configured")
+
+    client = HardcoverClient(api_key)
+    usage_token = begin_api_usage_batch()
+    try:
+        logger.info(
+            "Relink author requested: author_id=%s name=%r old_hardcover_id=%s new_hardcover_id=%s",
+            author.id,
+            author.name,
+            author.hardcover_id,
+            body.hardcover_id,
+        )
+        hc_author = await client.get_author(body.hardcover_id)
+        if hc_author is None:
+            raise HTTPException(status_code=404, detail="Hardcover author not found")
+
+        # Repoint the existing author to the selected Hardcover profile. The
+        # display name and linked folders are intentionally left untouched so
+        # the local library layout stays stable; only the Hardcover linkage and
+        # the metadata derived from it are updated.
+        author.hardcover_id = hc_author.id
+        author.hardcover_slug = hc_author.slug
+        author.bio = hc_author.bio
+        if not author.manual_image_source:
+            author.image_url = hc_author.image_url
+        await db.commit()
+    except HardcoverLookupError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=502, detail=f"Hardcover lookup failed: {exc}") from exc
+    finally:
+        clear_api_usage_batch(usage_token)
+        await client.close()
+
+    started = trigger_author_refresh(author_id, mode="full")
+    if not started:
+        return {
+            "status": "relinked_refresh_busy",
+            "message": "Author relinked to the selected Hardcover match, but a refresh is already in progress. Run a full refresh once it finishes.",
+            "hardcover_id": hc_author.id,
+            "refresh": author_refresh_status.to_dict(),
+        }
+
+    return {
+        "status": "started",
+        "message": "Author relinked to the selected Hardcover match. Refreshing books...",
+        "hardcover_id": hc_author.id,
+        "refresh": author_refresh_status.to_dict(),
+    }
 
 
 async def _upsert_author_directory(db: AsyncSession, author: Author, dir_name: str):

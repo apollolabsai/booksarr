@@ -11,6 +11,7 @@ import SortControls from "../components/SortControls";
 import ViewToggle from "../components/ViewToggle";
 import SearchBar from "../components/SearchBar";
 import AuthorPortraitPickerDialog from "../components/AuthorPortraitPickerDialog";
+import FixAuthorMatchDialog from "../components/FixAuthorMatchDialog";
 import { useIsMobile } from "../hooks/useIsMobile";
 
 const SORT_OPTIONS = [
@@ -69,6 +70,7 @@ export default function AuthorDetailPage() {
   const [portraitPickerOpen, setPortraitPickerOpen] = useState(false);
   const [portraitMenuOpen, setPortraitMenuOpen] = useState(false);
   const [refreshMenuOpen, setRefreshMenuOpen] = useState(false);
+  const [fixMatchOpen, setFixMatchOpen] = useState(false);
   const [mergeFoldersOpen, setMergeFoldersOpen] = useState(false);
   const [mergeTargetDirectoryId, setMergeTargetDirectoryId] = useState<number | null>(null);
   const [selectedBookIds, setSelectedBookIds] = useState<Set<number>>(new Set());
@@ -425,6 +427,17 @@ export default function AuthorDetailPage() {
                     >
                       Search for New Releases
                     </button>
+                    <div className="my-1 border-t border-slate-700" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRefreshMenuOpen(false);
+                        setFixMatchOpen(true);
+                      }}
+                      className="flex w-full items-center rounded-md px-3 py-2 text-left text-sm text-slate-200 transition-colors hover:bg-slate-800"
+                    >
+                      Fix Match
+                    </button>
                   </div>
                 )}
               </div>
@@ -688,6 +701,13 @@ export default function AuthorDetailPage() {
         authorName={author.name}
         open={portraitPickerOpen}
         onClose={() => setPortraitPickerOpen(false)}
+      />
+      <FixAuthorMatchDialog
+        open={fixMatchOpen}
+        onClose={() => setFixMatchOpen(false)}
+        authorId={author.id}
+        authorName={author.name}
+        currentHardcoverId={author.hardcover_id}
       />
     </div>
   );

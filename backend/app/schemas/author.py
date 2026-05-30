@@ -92,6 +92,10 @@ class AuthorAddRequest(BaseModel):
     hardcover_id: int
 
 
+class AuthorRelinkRequest(BaseModel):
+    hardcover_id: int
+
+
 class AuthorDirectoryMergeRequest(BaseModel):
     target_directory_id: int
 

@@ -94,6 +94,24 @@ export function useAddAuthorFromHardcover() {
   });
 }
 
+export function useRelinkAuthorHardcover() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ authorId, hardcoverId }: { authorId: number; hardcoverId: number }) =>
+      fetchApi(`/authors/${authorId}/relink-hardcover`, {
+        method: "POST",
+        body: JSON.stringify({ hardcover_id: hardcoverId }),
+      }),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["authorRefreshStatus"] });
+      queryClient.invalidateQueries({ queryKey: ["authors"] });
+      queryClient.invalidateQueries({ queryKey: ["authors", variables.authorId] });
+      queryClient.invalidateQueries({ queryKey: ["books"] });
+      queryClient.invalidateQueries({ queryKey: ["hiddenBooks"] });
+    },
+  });
+}
+
 export function useRefreshAuthor() {
   const queryClient = useQueryClient();
   return useMutation({
