@@ -286,6 +286,27 @@ async def relink_author_hardcover(
     if author is None:
         raise HTTPException(status_code=404, detail="Author not found")
 
+    if author.hardcover_id == body.hardcover_id:
+        return {
+            "status": "already_linked",
+            "message": "Author is already linked to the selected Hardcover match.",
+            "hardcover_id": body.hardcover_id,
+            "refresh": author_refresh_status.to_dict(),
+        }
+
+    existing_result = await db.execute(
+        select(Author).where(
+            Author.hardcover_id == body.hardcover_id,
+            Author.id != author_id,
+        )
+    )
+    existing_author = existing_result.scalar_one_or_none()
+    if existing_author is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Hardcover author is already linked to local author '{existing_author.name}'",
+        )
+
     api_key = await get_api_key(db)
     if not api_key:
         raise HTTPException(status_code=400, detail="Hardcover API key is not configured")
@@ -311,6 +332,7 @@ async def relink_author_hardcover(
         author.hardcover_id = hc_author.id
         author.hardcover_slug = hc_author.slug
         author.bio = hc_author.bio
+        author.last_synced_at = None
         if not author.manual_image_source:
             author.image_url = hc_author.image_url
         await db.commit()
