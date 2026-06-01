@@ -134,12 +134,33 @@ def run_schema_migrations(conn: Connection) -> None:
         "manual_cover_source": "VARCHAR",
         "manual_cover_url": "VARCHAR",
         "manual_visibility": "VARCHAR",
+        "manual_title": "VARCHAR",
+        "manual_author_name": "VARCHAR",
+        "manual_isbn": "VARCHAR",
+        "manual_publisher": "VARCHAR",
+        "manual_description": "TEXT",
+        "manual_release_date": "VARCHAR",
+        "manual_language": "VARCHAR",
+        "manual_series_name": "VARCHAR",
+        "manual_series_position": "FLOAT",
     }
 
     for column_name, column_type in book_column_defs.items():
         if column_name in existing_book_columns:
             continue
         conn.exec_driver_sql(f"ALTER TABLE books ADD COLUMN {column_name} {column_type}")
+
+    book_file_rows = conn.exec_driver_sql("PRAGMA table_info(book_files)").fetchall()
+    existing_book_file_columns = {row[1] for row in book_file_rows}
+    book_file_column_defs = {
+        "opf_date": "VARCHAR",
+        "opf_language": "VARCHAR",
+    }
+
+    for column_name, column_type in book_file_column_defs.items():
+        if column_name in existing_book_file_columns:
+            continue
+        conn.exec_driver_sql(f"ALTER TABLE book_files ADD COLUMN {column_name} {column_type}")
 
     author_column_defs = {
         "author_key": "VARCHAR",

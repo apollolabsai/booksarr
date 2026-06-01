@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
+import shutil
+import tempfile
 import zipfile
 
 from lxml import etree
@@ -56,6 +58,42 @@ def parse_epub_opf(epub_path: Path) -> OPFMetadata | None:
         return None
 
     return _parse_opf_root(opf_root)
+
+
+def write_epub_opf_metadata(epub_path: Path, values: dict[str, str | float | None]) -> tuple[OPFMetadata, Path]:
+    backup_path = _next_backup_path(epub_path)
+    shutil.copy2(epub_path, backup_path)
+
+    with zipfile.ZipFile(str(epub_path), "r") as source_zip:
+        container = source_zip.read("META-INF/container.xml")
+        container_root = etree.fromstring(container)
+        rootfile = container_root.find(".//{urn:oasis:names:tc:opendocument:xmlns:container}rootfile")
+        opf_path = rootfile.get("full-path") if rootfile is not None else None
+        if not opf_path:
+            raise ValueError("EPUB container does not reference an OPF file")
+
+        opf_root = etree.fromstring(source_zip.read(opf_path))
+        _update_opf_root(opf_root, values)
+        updated_opf = etree.tostring(opf_root, encoding="utf-8", xml_declaration=True, pretty_print=True)
+
+        temp_file = tempfile.NamedTemporaryFile(prefix=f"{epub_path.name}.", suffix=".tmp", dir=epub_path.parent, delete=False)
+        temp_path = Path(temp_file.name)
+        temp_file.close()
+
+        try:
+            with zipfile.ZipFile(str(temp_path), "w") as target_zip:
+                for item in source_zip.infolist():
+                    payload = updated_opf if item.filename == opf_path else source_zip.read(item.filename)
+                    target_zip.writestr(item, payload)
+            temp_path.replace(epub_path)
+        except Exception:
+            temp_path.unlink(missing_ok=True)
+            raise
+
+    parsed = parse_epub_opf(epub_path)
+    if parsed is None:
+        raise ValueError("Updated EPUB OPF metadata could not be parsed")
+    return parsed, backup_path
 
 
 def _parse_opf_root(root) -> OPFMetadata:
@@ -138,3 +176,113 @@ def _parse_opf_root(root) -> OPFMetadata:
                 break
 
     return meta
+
+
+def _next_backup_path(epub_path: Path) -> Path:
+    backup_path = epub_path.with_name(f"{epub_path.name}.bak")
+    if not backup_path.exists():
+        return backup_path
+
+    index = 1
+    while True:
+        candidate = epub_path.with_name(f"{epub_path.name}.bak.{index}")
+        if not candidate.exists():
+            return candidate
+        index += 1
+
+
+def _update_opf_root(root, values: dict[str, str | float | None]) -> None:
+    metadata = root.find(f".//{{{OPF_NS}}}metadata")
+    if metadata is None:
+        metadata = root.find("metadata")
+    if metadata is None:
+        metadata = etree.SubElement(root, f"{{{OPF_NS}}}metadata")
+
+    field_to_dc_tag = {
+        "title": "title",
+        "author_name": "creator",
+        "isbn": "identifier",
+        "publisher": "publisher",
+        "description": "description",
+        "release_date": "date",
+        "language": "language",
+    }
+
+    for field_name, tag_name in field_to_dc_tag.items():
+        if field_name not in values:
+            continue
+        value = _metadata_text(values[field_name])
+        if not value:
+            continue
+        if field_name == "isbn":
+            _set_isbn(metadata, value)
+        else:
+            _set_dc_text(metadata, tag_name, value)
+
+    if "series_name" in values:
+        value = _metadata_text(values["series_name"])
+        if value:
+            _set_meta_content(metadata, "calibre:series", value)
+    if "series_position" in values:
+        value = _metadata_text(values["series_position"])
+        if value:
+            _set_meta_content(metadata, "calibre:series_index", value)
+
+
+def _metadata_text(value: str | float | None) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _find_dc_elements(metadata, tag_name: str):
+    elements = metadata.findall(f".//{{{DC_NS}}}{tag_name}")
+    elements.extend(metadata.findall(f".//dc:{tag_name}", namespaces={"dc": DC_NS}))
+    return elements
+
+
+def _set_dc_text(metadata, tag_name: str, value: str) -> None:
+    elements = _find_dc_elements(metadata, tag_name)
+    element = elements[0] if elements else etree.SubElement(metadata, f"{{{DC_NS}}}{tag_name}")
+    element.text = value
+
+
+def _set_isbn(metadata, value: str) -> None:
+    identifiers = _find_dc_elements(metadata, "identifier")
+    isbn_identifier = None
+    for identifier in identifiers:
+        scheme = (
+            identifier.get(f"{{{OPF_NS}}}scheme")
+            or identifier.get("scheme")
+            or ""
+        ).upper()
+        if scheme == "ISBN":
+            isbn_identifier = identifier
+            break
+
+    if isbn_identifier is None:
+        isbn_identifier = etree.SubElement(metadata, f"{{{DC_NS}}}identifier")
+        isbn_identifier.set(f"{{{OPF_NS}}}scheme", "ISBN")
+        isbn_identifier.set("id", "booksarr-isbn")
+
+    isbn_identifier.text = value
+
+
+def _meta_elements(metadata):
+    elements = metadata.findall(f".//{{{OPF_NS}}}meta")
+    elements.extend(metadata.findall(".//meta"))
+    return elements
+
+
+def _set_meta_content(metadata, name: str, value: str) -> None:
+    target = None
+    for element in _meta_elements(metadata):
+        if element.get("name") == name:
+            target = element
+            break
+
+    if target is None:
+        target = etree.SubElement(metadata, f"{{{OPF_NS}}}meta")
+        target.set("name", name)
+
+    target.set("content", value)

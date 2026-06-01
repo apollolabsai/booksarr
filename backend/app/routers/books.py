@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from backend.app.config import BOOKS_DIR
 from backend.app.database import get_db
-from backend.app.models import Author, Book, BookSeries
+from backend.app.models import Author, Book, BookFile, BookSeries
 from backend.app.schemas.book import (
     BookSummary,
     BookDetail,
@@ -25,8 +25,25 @@ from backend.app.schemas.book import (
     BookCoverSearchResponse,
     CoverSearchResult,
     BookVisibilityRequest,
+    BookMetadataApplyOpfRequest,
+    BookMetadataInfoResponse,
+    BookMetadataUpdateRequest,
+    BookMetadataValues,
+    BookMetadataWriteOpfRequest,
+    BookMetadataWriteOpfResponse,
+    BookOpfMetadataFile,
 )
-from backend.app.utils.isbn import has_any_valid_isbn
+from backend.app.utils.book_metadata import (
+    effective_author_name,
+    effective_description,
+    effective_has_valid_isbn,
+    effective_isbn,
+    effective_language,
+    effective_publisher,
+    effective_release_date,
+    effective_title,
+)
+from backend.app.utils.isbn import normalized_valid_isbn
 from backend.app.utils.book_visibility import (
     get_book_visibility_settings,
     get_hidden_category,
@@ -39,8 +56,128 @@ from backend.app.services.library_sync import (
     set_book_cover_selection,
 )
 from backend.app.services.image_cache import get_cached_cover_aspect_ratio
+from backend.app.utils.opf_parser import OPFMetadata, write_epub_opf_metadata
 
 router = APIRouter(prefix="/api/books", tags=["books"])
+
+EDITABLE_METADATA_FIELDS = {
+    "title",
+    "author_name",
+    "isbn",
+    "publisher",
+    "description",
+    "release_date",
+    "language",
+    "series_name",
+    "series_position",
+}
+
+
+def _clean_metadata_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _manual_series_position(book: Book) -> float | None:
+    return book.manual_series_position
+
+
+def _original_series_name(book: Book) -> str | None:
+    if not book.book_series:
+        return None
+    first = book.book_series[0]
+    return first.series.name if first.series else None
+
+
+def _original_series_position(book: Book) -> float | None:
+    if not book.book_series:
+        return None
+    first = book.book_series[0]
+    return first.position
+
+
+def _metadata_values(book: Book, *, source: str) -> BookMetadataValues:
+    if source == "current":
+        return BookMetadataValues(
+            title=effective_title(book),
+            author_name=effective_author_name(book),
+            isbn=effective_isbn(book),
+            publisher=effective_publisher(book),
+            description=effective_description(book),
+            release_date=effective_release_date(book),
+            language=effective_language(book),
+            series_name=_clean_metadata_value(book.manual_series_name) or _original_series_name(book),
+            series_position=_manual_series_position(book) if book.manual_series_position is not None else _original_series_position(book),
+        )
+    if source == "manual":
+        return BookMetadataValues(
+            title=book.manual_title,
+            author_name=book.manual_author_name,
+            isbn=book.manual_isbn,
+            publisher=book.manual_publisher,
+            description=book.manual_description,
+            release_date=book.manual_release_date,
+            language=book.manual_language,
+            series_name=book.manual_series_name,
+            series_position=book.manual_series_position,
+        )
+    return BookMetadataValues(
+        title=book.title,
+        author_name=book.author.name if book.author else "Unknown",
+        isbn=book.isbn,
+        publisher=book.publisher,
+        description=book.description,
+        release_date=book.release_date,
+        language=book.language,
+        series_name=_original_series_name(book),
+        series_position=_original_series_position(book),
+    )
+
+
+def _opf_metadata_values(book_file: BookFile) -> dict[str, str | float | None]:
+    return {
+        "title": book_file.opf_title,
+        "author_name": book_file.opf_author,
+        "isbn": book_file.opf_isbn,
+        "publisher": book_file.opf_publisher,
+        "description": book_file.opf_description,
+        "release_date": book_file.opf_date,
+        "language": book_file.opf_language,
+        "series_name": book_file.opf_series,
+        "series_position": book_file.opf_series_index,
+    }
+
+
+def _assign_manual_metadata(book: Book, field_name: str, value: str | float | None) -> None:
+    if field_name == "isbn" and isinstance(value, str):
+        value = normalized_valid_isbn(value) or value.strip()
+    if isinstance(value, str):
+        value = _clean_metadata_value(value)
+    if field_name == "series_position":
+        setattr(book, "manual_series_position", value)
+        return
+    setattr(book, f"manual_{field_name}", value)
+
+
+def _clear_manual_metadata(book: Book, field_name: str) -> None:
+    if field_name == "series_position":
+        book.manual_series_position = None
+        return
+    setattr(book, f"manual_{field_name}", None)
+
+
+def _update_book_file_opf_metadata(book_file: BookFile, opf: OPFMetadata) -> None:
+    book_file.opf_title = opf.title or None
+    book_file.opf_author = opf.author or None
+    book_file.opf_isbn = opf.isbn or None
+    book_file.opf_series = opf.series or None
+    book_file.opf_series_index = opf.series_index
+    book_file.opf_publisher = opf.publisher or None
+    book_file.opf_description = opf.description or None
+    book_file.opf_date = opf.date or None
+    book_file.opf_language = opf.language or None
 
 
 def _archive_directory_for_download(source_dir: Path) -> Path:
@@ -60,9 +197,9 @@ def _book_summary(book: Book) -> BookSummary:
     owned_copy_count = len(book.files) if book.is_owned else 0
     return BookSummary(
         id=book.id,
-        title=book.title,
+        title=effective_title(book),
         author_id=book.author_id,
-        author_name=book.author.name if book.author else "Unknown",
+        author_name=effective_author_name(book),
         hardcover_id=book.hardcover_id,
         hardcover_slug=book.hardcover_slug,
         compilation=book.compilation,
@@ -73,23 +210,24 @@ def _book_summary(book: Book) -> BookSummary:
         hardcover_state=book.hardcover_state,
         hardcover_isbn_10=book.hardcover_isbn_10,
         hardcover_isbn_13=book.hardcover_isbn_13,
-        isbn=book.isbn,
+        isbn=effective_isbn(book),
         google_isbn_10=book.google_isbn_10,
         google_isbn_13=book.google_isbn_13,
         ol_isbn_10=book.ol_isbn_10,
         ol_isbn_13=book.ol_isbn_13,
-        has_valid_isbn=has_any_valid_isbn(
-            book.isbn,
-            book.hardcover_isbn_10,
-            book.hardcover_isbn_13,
-            book.google_isbn_10,
-            book.google_isbn_13,
-            book.ol_isbn_10,
-            book.ol_isbn_13,
-        ),
+        has_valid_isbn=effective_has_valid_isbn(book),
         matched_google=bool(book.google_id and book.google_id != "_none"),
         matched_openlibrary=bool(book.ol_edition_key and book.ol_edition_key != "_none"),
-        release_date=book.release_date,
+        release_date=effective_release_date(book),
+        manual_title=book.manual_title,
+        manual_author_name=book.manual_author_name,
+        manual_isbn=book.manual_isbn,
+        manual_publisher=book.manual_publisher,
+        manual_description=book.manual_description,
+        manual_release_date=book.manual_release_date,
+        manual_language=book.manual_language,
+        manual_series_name=book.manual_series_name,
+        manual_series_position=book.manual_series_position,
         cover_image_url=book.cover_image_url,
         cover_image_cached_path=book.cover_image_cached_path,
         cover_aspect_ratio=get_cached_cover_aspect_ratio(book.cover_image_cached_path),
@@ -133,7 +271,13 @@ async def list_books(
     )
 
     if search:
-        query = query.where(Book.title.ilike(f"%{search}%"))
+        query = query.where(
+            or_(
+                Book.title.ilike(f"%{search}%"),
+                Book.manual_title.ilike(f"%{search}%"),
+                Book.manual_author_name.ilike(f"%{search}%"),
+            )
+        )
     if owned is not None:
         query = query.where(Book.is_owned == owned)
     if author_id is not None:
@@ -179,6 +323,8 @@ async def list_hidden_books(
             .where(
                 or_(
                     Book.title.ilike(f"%{search}%"),
+                    Book.manual_title.ilike(f"%{search}%"),
+                    Book.manual_author_name.ilike(f"%{search}%"),
                     Author.name.ilike(f"%{search}%"),
                 )
             )
@@ -203,6 +349,195 @@ async def list_hidden_books(
             ],
         ))
     return hidden_books
+
+
+@router.get("/{book_id}/metadata-info", response_model=BookMetadataInfoResponse)
+async def get_book_metadata_info(book_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Book)
+        .where(Book.id == book_id)
+        .options(
+            selectinload(Book.author),
+            selectinload(Book.files),
+            selectinload(Book.book_series).selectinload(BookSeries.series),
+        )
+    )
+    book = result.scalar_one_or_none()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    return BookMetadataInfoResponse(
+        book_id=book.id,
+        hardcover_id=book.hardcover_id,
+        hardcover_slug=book.hardcover_slug,
+        current=_metadata_values(book, source="current"),
+        original=_metadata_values(book, source="original"),
+        manual=_metadata_values(book, source="manual"),
+        files=[
+            BookOpfMetadataFile(
+                id=book_file.id,
+                file_path=book_file.file_path,
+                file_name=book_file.file_name,
+                file_format=book_file.file_format,
+                file_size=book_file.file_size,
+                opf_title=book_file.opf_title,
+                opf_author=book_file.opf_author,
+                opf_isbn=book_file.opf_isbn,
+                opf_publisher=book_file.opf_publisher,
+                opf_description=book_file.opf_description,
+                opf_date=book_file.opf_date,
+                opf_language=book_file.opf_language,
+                opf_series=book_file.opf_series,
+                opf_series_index=book_file.opf_series_index,
+            )
+            for book_file in sorted(book.files, key=lambda bf: bf.file_path)
+        ],
+        editable_fields=sorted(EDITABLE_METADATA_FIELDS),
+    )
+
+
+@router.patch("/{book_id}/metadata")
+async def update_book_metadata(
+    book_id: int,
+    body: BookMetadataUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Book).where(Book.id == book_id))
+    book = result.scalar_one_or_none()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    clear_fields = set(body.clear_fields or [])
+    invalid_clear_fields = clear_fields - EDITABLE_METADATA_FIELDS
+    if invalid_clear_fields:
+        raise HTTPException(status_code=400, detail=f"Invalid metadata field: {sorted(invalid_clear_fields)[0]}")
+
+    payload = body.model_dump(exclude_unset=True, exclude={"clear_fields"})
+    invalid_fields = set(payload) - EDITABLE_METADATA_FIELDS
+    if invalid_fields:
+        raise HTTPException(status_code=400, detail=f"Invalid metadata field: {sorted(invalid_fields)[0]}")
+
+    isbn_value = payload.get("isbn")
+    if isinstance(isbn_value, str) and isbn_value.strip() and normalized_valid_isbn(isbn_value) is None:
+        raise HTTPException(status_code=400, detail="Invalid ISBN")
+
+    for field_name in clear_fields:
+        _clear_manual_metadata(book, field_name)
+
+    for field_name, value in payload.items():
+        if field_name in clear_fields:
+            continue
+        _assign_manual_metadata(book, field_name, value)
+
+    await db.commit()
+    return {"status": "ok", "message": "Metadata overrides saved"}
+
+
+@router.post("/{book_id}/metadata/apply-opf")
+async def apply_opf_metadata(
+    book_id: int,
+    body: BookMetadataApplyOpfRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Book)
+        .where(Book.id == book_id)
+        .options(selectinload(Book.files))
+    )
+    book = result.scalar_one_or_none()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    book_file = next((file for file in book.files if file.id == body.book_file_id), None)
+    if book_file is None:
+        raise HTTPException(status_code=404, detail="Book file not found for this book")
+
+    requested_fields = set(body.fields)
+    invalid_fields = requested_fields - EDITABLE_METADATA_FIELDS
+    if invalid_fields:
+        raise HTTPException(status_code=400, detail=f"Invalid metadata field: {sorted(invalid_fields)[0]}")
+    if not requested_fields:
+        raise HTTPException(status_code=400, detail="Select at least one field")
+
+    opf_values = _opf_metadata_values(book_file)
+    isbn_value = opf_values.get("isbn")
+    if "isbn" in requested_fields and isinstance(isbn_value, str) and isbn_value.strip() and normalized_valid_isbn(isbn_value) is None:
+        raise HTTPException(status_code=400, detail="OPF ISBN is invalid")
+
+    for field_name in requested_fields:
+        _assign_manual_metadata(book, field_name, opf_values.get(field_name))
+
+    await db.commit()
+    return {"status": "ok", "message": "Selected OPF metadata applied"}
+
+
+@router.post("/{book_id}/metadata/write-opf", response_model=BookMetadataWriteOpfResponse)
+async def write_opf_metadata(
+    book_id: int,
+    body: BookMetadataWriteOpfRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Book)
+        .where(Book.id == book_id)
+        .options(selectinload(Book.files))
+    )
+    book = result.scalar_one_or_none()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    book_file = next((file for file in book.files if file.id == body.book_file_id), None)
+    if book_file is None:
+        raise HTTPException(status_code=404, detail="Book file not found for this book")
+
+    requested_fields = set(body.fields)
+    invalid_fields = requested_fields - EDITABLE_METADATA_FIELDS
+    if invalid_fields:
+        raise HTTPException(status_code=400, detail=f"Invalid metadata field: {sorted(invalid_fields)[0]}")
+    if not requested_fields:
+        raise HTTPException(status_code=400, detail="Select at least one field")
+
+    if (book_file.file_format or "").lower() != "epub":
+        raise HTTPException(status_code=400, detail="OPF repair is only supported for EPUB files")
+
+    selected_values: dict[str, str | float | None] = {}
+    values = body.values.model_dump()
+    for field_name in requested_fields:
+        value = values.get(field_name)
+        if isinstance(value, str):
+            value = value.strip()
+        if value in {None, ""}:
+            raise HTTPException(status_code=400, detail=f"No value provided for {field_name}")
+        selected_values[field_name] = value
+
+    isbn_value = selected_values.get("isbn")
+    if isinstance(isbn_value, str) and normalized_valid_isbn(isbn_value) is None:
+        raise HTTPException(status_code=400, detail="Invalid ISBN")
+    if isinstance(isbn_value, str):
+        selected_values["isbn"] = normalized_valid_isbn(isbn_value)
+
+    epub_path = BOOKS_DIR / book_file.file_path
+    if not epub_path.exists() or not epub_path.is_file():
+        raise HTTPException(status_code=404, detail="Local EPUB file not found")
+
+    try:
+        opf, backup_path = write_epub_opf_metadata(epub_path, selected_values)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to repair OPF metadata: {exc}")
+
+    _update_book_file_opf_metadata(book_file, opf)
+    await db.commit()
+    backup_display_path = str(backup_path.relative_to(BOOKS_DIR)) if backup_path.is_relative_to(BOOKS_DIR) else str(backup_path)
+    if body.delete_backup:
+        backup_path.unlink(missing_ok=True)
+        backup_display_path = ""
+    return BookMetadataWriteOpfResponse(
+        status="ok",
+        message="EPUB OPF metadata repaired",
+        backup_path=backup_display_path,
+    )
 
 
 @router.get("/{book_id}", response_model=BookDetail)
@@ -231,9 +566,9 @@ async def get_book(book_id: int, db: AsyncSession = Depends(get_db)):
 
     return BookDetail(
         id=book.id,
-        title=book.title,
+        title=effective_title(book),
         author_id=book.author_id,
-        author_name=book.author.name if book.author else "Unknown",
+        author_name=effective_author_name(book),
         hardcover_id=book.hardcover_id,
         hardcover_slug=book.hardcover_slug,
         compilation=book.compilation,
@@ -244,26 +579,27 @@ async def get_book(book_id: int, db: AsyncSession = Depends(get_db)):
         hardcover_state=book.hardcover_state,
         hardcover_isbn_10=book.hardcover_isbn_10,
         hardcover_isbn_13=book.hardcover_isbn_13,
-        isbn=book.isbn,
+        isbn=effective_isbn(book),
         google_isbn_10=book.google_isbn_10,
         google_isbn_13=book.google_isbn_13,
         ol_isbn_10=book.ol_isbn_10,
         ol_isbn_13=book.ol_isbn_13,
-        has_valid_isbn=has_any_valid_isbn(
-            book.isbn,
-            book.hardcover_isbn_10,
-            book.hardcover_isbn_13,
-            book.google_isbn_10,
-            book.google_isbn_13,
-            book.ol_isbn_10,
-            book.ol_isbn_13,
-        ),
+        has_valid_isbn=effective_has_valid_isbn(book),
         matched_google=bool(book.google_id and book.google_id != "_none"),
         matched_openlibrary=bool(book.ol_edition_key and book.ol_edition_key != "_none"),
-        description=book.description,
-        publisher=book.publisher,
-        language=book.language,
-        release_date=book.release_date,
+        description=effective_description(book),
+        publisher=effective_publisher(book),
+        language=effective_language(book),
+        release_date=effective_release_date(book),
+        manual_title=book.manual_title,
+        manual_author_name=book.manual_author_name,
+        manual_isbn=book.manual_isbn,
+        manual_publisher=book.manual_publisher,
+        manual_description=book.manual_description,
+        manual_release_date=book.manual_release_date,
+        manual_language=book.manual_language,
+        manual_series_name=book.manual_series_name,
+        manual_series_position=book.manual_series_position,
         cover_image_url=book.cover_image_url,
         cover_image_cached_path=book.cover_image_cached_path,
         cover_aspect_ratio=get_cached_cover_aspect_ratio(book.cover_image_cached_path),

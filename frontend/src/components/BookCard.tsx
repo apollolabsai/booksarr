@@ -6,6 +6,7 @@ import CoverPickerDialog from "./CoverPickerDialog";
 import IrcSearchDialog from "./IrcSearchDialog";
 import { useRefreshBook, useSetBookVisibility } from "../api/books";
 import BookDownloadSelector from "./BookDownloadSelector";
+import MetadataInfoDialog from "./MetadataInfoDialog";
 
 type BookLike = BookInAuthor | Book;
 
@@ -57,6 +58,7 @@ export default function BookCard({
   const setBookVisibility = useSetBookVisibility();
   const [coverPickerOpen, setCoverPickerOpen] = useState(false);
   const [ircSearchOpen, setIrcSearchOpen] = useState(false);
+  const [metadataInfoOpen, setMetadataInfoOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const imgUrl = getImageUrl(
@@ -120,6 +122,18 @@ export default function BookCard({
               </label>
             </div>
           )}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setMetadataInfoOpen(true);
+            }}
+            className="absolute right-2 top-10 z-[80] flex h-7 w-7 items-center justify-center rounded-md border border-slate-500/70 bg-slate-950/80 text-sm font-semibold leading-none text-slate-100 opacity-0 transition-opacity hover:bg-slate-800/90 group-hover:opacity-100"
+            title="Metadata info"
+            aria-label="Metadata info"
+          >
+            i
+          </button>
           {imgUrl ? (
             coverPresentation.innerClassName ? (
               <div className={coverPresentation.innerClassName}>
@@ -161,9 +175,19 @@ export default function BookCard({
             </button>
             {menuOpen && (
               <div
-                className="absolute bottom-9 left-0 right-0 z-20 rounded-lg border border-slate-600 bg-slate-900/95 p-1 shadow-xl"
+                className="absolute bottom-9 left-0 right-0 z-[90] rounded-lg border border-slate-600 bg-slate-900/95 p-1 shadow-xl"
                 onClick={(e) => e.stopPropagation()}
               >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setMetadataInfoOpen(true);
+                  }}
+                  className="flex w-full items-center rounded-md px-2.5 py-1.5 text-xs text-slate-200 transition-colors hover:bg-slate-800"
+                >
+                  Metadata Info
+                </button>
                 <button
                   type="button"
                   onClick={() => {
@@ -263,6 +287,12 @@ export default function BookCard({
         authorName={isFullBook(book) ? book.author_name : authorName}
         open={ircSearchOpen}
         onClose={() => setIrcSearchOpen(false)}
+      />
+      <MetadataInfoDialog
+        bookId={book.id}
+        title={book.title}
+        open={metadataInfoOpen}
+        onClose={() => setMetadataInfoOpen(false)}
       />
     </>
   );

@@ -18,14 +18,20 @@ from backend.app.schemas.author import (
     SeriesInAuthor, SeriesBookEntry,
     AuthorPortraitOption, AuthorPortraitOptionsResponse, AuthorPortraitSelectionRequest,
     AuthorPortraitSearchResponse, AuthorPortraitSearchResult,
-    AuthorSearchCandidate, AuthorSearchResponse, AuthorAddRequest, LocalBookFile, AuthorDirectoryEntry,
+    AuthorSearchCandidate, AuthorSearchResponse, AuthorAddRequest, AuthorRelinkRequest, LocalBookFile, AuthorDirectoryEntry,
     AuthorDirectoryMergeRequest, AuthorDirectoryMergeResponse, UnmatchedLocalFile,
 )
 from backend.app.services.hardcover import HardcoverClient, HardcoverLookupError
 from backend.app.services.google_image_search import search_author_portraits
 from backend.app.services.scanner import _classify_standalone_file, _collect_book_dir_artifacts
 from backend.app.utils.book_visibility import get_book_visibility_settings, is_book_visible
-from backend.app.utils.isbn import has_any_valid_isbn
+from backend.app.utils.book_metadata import (
+    effective_description,
+    effective_has_valid_isbn,
+    effective_isbn,
+    effective_release_date,
+    effective_title,
+)
 from backend.app.services.image_cache import get_cached_cover_aspect_ratio
 from backend.app.services.author_images import get_author_portrait_options, set_author_portrait_selection
 from backend.app.services.author_management import remove_author_and_books
@@ -267,6 +273,90 @@ async def add_author_from_hardcover(
         book_count_local=sum(1 for book in visible_books if book.is_owned),
         book_count_total=len(visible_books),
     )
+
+
+@router.post("/{author_id}/relink-hardcover")
+async def relink_author_hardcover(
+    author_id: int,
+    body: AuthorRelinkRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Author).where(Author.id == author_id))
+    author = result.scalar_one_or_none()
+    if author is None:
+        raise HTTPException(status_code=404, detail="Author not found")
+
+    if author.hardcover_id == body.hardcover_id:
+        return {
+            "status": "already_linked",
+            "message": "Author is already linked to the selected Hardcover match.",
+            "hardcover_id": body.hardcover_id,
+            "refresh": author_refresh_status.to_dict(),
+        }
+
+    existing_result = await db.execute(
+        select(Author).where(
+            Author.hardcover_id == body.hardcover_id,
+            Author.id != author_id,
+        )
+    )
+    existing_author = existing_result.scalar_one_or_none()
+    if existing_author is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Hardcover author is already linked to local author '{existing_author.name}'",
+        )
+
+    api_key = await get_api_key(db)
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Hardcover API key is not configured")
+
+    client = HardcoverClient(api_key)
+    usage_token = begin_api_usage_batch()
+    try:
+        logger.info(
+            "Relink author requested: author_id=%s name=%r old_hardcover_id=%s new_hardcover_id=%s",
+            author.id,
+            author.name,
+            author.hardcover_id,
+            body.hardcover_id,
+        )
+        hc_author = await client.get_author(body.hardcover_id)
+        if hc_author is None:
+            raise HTTPException(status_code=404, detail="Hardcover author not found")
+
+        # Repoint the existing author to the selected Hardcover profile. Linked
+        # folders are left untouched so local library paths stay stable.
+        author.name = hc_author.name
+        author.hardcover_id = hc_author.id
+        author.hardcover_slug = hc_author.slug
+        author.bio = hc_author.bio
+        author.last_synced_at = None
+        if not author.manual_image_source:
+            author.image_url = hc_author.image_url
+        await db.commit()
+    except HardcoverLookupError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=502, detail=f"Hardcover lookup failed: {exc}") from exc
+    finally:
+        clear_api_usage_batch(usage_token)
+        await client.close()
+
+    started = trigger_author_refresh(author_id, mode="full")
+    if not started:
+        return {
+            "status": "relinked_refresh_busy",
+            "message": "Author relinked to the selected Hardcover match, but a refresh is already in progress. Run a full refresh once it finishes.",
+            "hardcover_id": hc_author.id,
+            "refresh": author_refresh_status.to_dict(),
+        }
+
+    return {
+        "status": "started",
+        "message": "Author relinked to the selected Hardcover match. Refreshing books...",
+        "hardcover_id": hc_author.id,
+        "refresh": author_refresh_status.to_dict(),
+    }
 
 
 async def _upsert_author_directory(db: AsyncSession, author: Author, dir_name: str):
@@ -683,7 +773,7 @@ async def get_author(author_id: int, db: AsyncSession = Depends(get_db)):
                 }
             series_map[s.id]["books"].append(SeriesBookEntry(
                 book_id=book.id,
-                title=book.title,
+                title=effective_title(book),
                 position=bs.position,
                 is_owned=book.is_owned,
                 cover_image_cached_path=book.cover_image_cached_path,
@@ -691,7 +781,7 @@ async def get_author(author_id: int, db: AsyncSession = Depends(get_db)):
 
         books_out.append(BookInAuthor(
             id=book.id,
-            title=book.title,
+            title=effective_title(book),
             hardcover_id=book.hardcover_id,
             hardcover_slug=book.hardcover_slug,
             compilation=book.compilation,
@@ -702,24 +792,25 @@ async def get_author(author_id: int, db: AsyncSession = Depends(get_db)):
             hardcover_state=book.hardcover_state,
             hardcover_isbn_10=book.hardcover_isbn_10,
             hardcover_isbn_13=book.hardcover_isbn_13,
-            isbn=book.isbn,
+            isbn=effective_isbn(book),
             google_isbn_10=book.google_isbn_10,
             google_isbn_13=book.google_isbn_13,
             ol_isbn_10=book.ol_isbn_10,
             ol_isbn_13=book.ol_isbn_13,
-            has_valid_isbn=has_any_valid_isbn(
-                book.isbn,
-                book.hardcover_isbn_10,
-                book.hardcover_isbn_13,
-                book.google_isbn_10,
-                book.google_isbn_13,
-                book.ol_isbn_10,
-                book.ol_isbn_13,
-            ),
+            has_valid_isbn=effective_has_valid_isbn(book),
             matched_google=bool(book.google_id and book.google_id != "_none"),
             matched_openlibrary=bool(book.ol_edition_key and book.ol_edition_key != "_none"),
-            description=book.description,
-            release_date=book.release_date,
+            description=effective_description(book),
+            release_date=effective_release_date(book),
+            manual_title=book.manual_title,
+            manual_author_name=book.manual_author_name,
+            manual_isbn=book.manual_isbn,
+            manual_publisher=book.manual_publisher,
+            manual_description=book.manual_description,
+            manual_release_date=book.manual_release_date,
+            manual_language=book.manual_language,
+            manual_series_name=book.manual_series_name,
+            manual_series_position=book.manual_series_position,
             cover_image_url=book.cover_image_url,
             cover_image_cached_path=book.cover_image_cached_path,
             cover_aspect_ratio=get_cached_cover_aspect_ratio(book.cover_image_cached_path),

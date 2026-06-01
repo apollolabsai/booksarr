@@ -6,6 +6,7 @@ import { useRefreshBook, useSetBookVisibility } from "../api/books";
 import CoverPickerDialog from "./CoverPickerDialog";
 import IrcSearchDialog from "./IrcSearchDialog";
 import BookDownloadSelector from "./BookDownloadSelector";
+import MetadataInfoDialog from "./MetadataInfoDialog";
 
 type BookLike = Book | BookInAuthor;
 type TableSortKey = "title" | "series" | "year" | "rating" | "size";
@@ -29,6 +30,12 @@ function formatFileSize(size: number | null): string {
 
 
 function formatSeriesPosition(book: BookLike): string {
+  if (book.manual_series_name) {
+    const pos = book.manual_series_position != null
+      ? (Number.isInteger(book.manual_series_position) ? `#${book.manual_series_position}` : `#${book.manual_series_position.toFixed(1)}`)
+      : "";
+    return pos ? `${book.manual_series_name} ${pos}` : book.manual_series_name;
+  }
   if (!("series_info" in book) || !book.series_info || book.series_info.length === 0) return "";
   const si = book.series_info[0];
   const pos = si.position != null
@@ -147,7 +154,7 @@ function ActionIconButton({
       </button>
       {showTooltip && !disabled && (
         <div
-          className={`pointer-events-none absolute right-0 z-20 whitespace-nowrap rounded-md border border-slate-600 bg-slate-900 px-2 py-1 text-[11px] font-medium text-slate-100 shadow-lg ${
+          className={`pointer-events-none absolute right-0 z-[120] whitespace-nowrap rounded-md border border-slate-600 bg-slate-900 px-2 py-1 text-[11px] font-medium text-slate-100 shadow-lg ${
             preferBelow ? "top-full mt-2" : "bottom-full mb-2"
           }`}
         >
@@ -203,6 +210,7 @@ export default function BookTable({
   const setBookVisibility = useSetBookVisibility();
   const [coverPickerBook, setCoverPickerBook] = useState<{ id: number; title: string } | null>(null);
   const [ircSearchBook, setIrcSearchBook] = useState<{ id: number; title: string; authorName: string | null } | null>(null);
+  const [metadataInfoBook, setMetadataInfoBook] = useState<{ id: number; title: string } | null>(null);
   const [sortKey, setSortKey] = useState<TableSortKey | null>(null);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
@@ -392,6 +400,13 @@ export default function BookTable({
                     <td className="px-4 py-2 text-right">
                       <div className="flex items-center justify-end gap-2">
                         <ActionIconButton
+                          label="Metadata info"
+                          onClick={() => setMetadataInfoBook({ id: book.id, title: book.title })}
+                          preferBelow={index === 0}
+                        >
+                          <span className="text-sm font-semibold leading-none">i</span>
+                        </ActionIconButton>
+                        <ActionIconButton
                           label="Choose poster"
                           onClick={() => setCoverPickerBook({ id: book.id, title: book.title })}
                           preferBelow={index === 0}
@@ -522,6 +537,12 @@ export default function BookTable({
         authorName={ircSearchBook?.authorName ?? null}
         open={ircSearchBook !== null}
         onClose={() => setIrcSearchBook(null)}
+      />
+      <MetadataInfoDialog
+        bookId={metadataInfoBook?.id ?? null}
+        title={metadataInfoBook?.title ?? ""}
+        open={metadataInfoBook !== null}
+        onClose={() => setMetadataInfoBook(null)}
       />
     </>
   );

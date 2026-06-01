@@ -209,6 +209,8 @@ async def scan_library(
                 opf_series_index=opf.series_index,
                 opf_publisher=opf.publisher or None,
                 opf_description=opf.description or None,
+                opf_date=opf.date or None,
+                opf_language=opf.language or None,
                 local_cover_path=local_cover,
                 last_scanned_at=datetime.utcnow(),
             )

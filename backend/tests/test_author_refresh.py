@@ -1,10 +1,12 @@
 import pytest
+from datetime import datetime
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from backend.app.models import Author, AuthorDirectory, Book, BookFile, BookSeries, Setting, Series
 from backend.app.services.google_books import GBook, GoogleLookupResult
-from backend.app.services.hardcover import HCBook, HCSeriesRef
+from backend.app.services.hardcover import HCAuthor, HCBook, HCSeriesRef
 from backend.app.services import library_sync, scanner
 from backend.app.services.library_sync import AuthorRefreshStatus, refresh_single_author, refresh_single_book
 from backend.app.services.openlibrary import OLBook, OpenLibraryLookupResult
@@ -60,6 +62,24 @@ class FakeHardcoverClient:
         return None
 
 
+class FakeAuthorLookupHardcoverClient:
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+
+    async def get_author(self, hardcover_id: int) -> HCAuthor | None:
+        return HCAuthor(
+            id=hardcover_id,
+            name="Correct Hardcover Author",
+            slug="correct-hardcover-author",
+            bio="Correct author bio",
+            image_url="https://example.test/author.jpg",
+            books_count=42,
+        )
+
+    async def close(self) -> None:
+        return None
+
+
 class FakeGoogleBooksClient:
     def __init__(self, api_key: str):
         self.api_key = api_key
@@ -101,6 +121,75 @@ class FakeOpenLibraryClient:
 
     async def close(self) -> None:
         return None
+
+
+@pytest.mark.asyncio
+async def test_relink_author_hardcover_resets_last_synced_and_starts_refresh(
+    db_session,
+    monkeypatch,
+):
+    author = Author(
+        name="Wrong Match",
+        hardcover_id=100,
+        hardcover_slug="wrong-match",
+        bio="Old bio",
+        image_url="https://example.test/old.jpg",
+        last_synced_at=datetime(2024, 1, 1),
+    )
+    db_session.add_all([
+        Setting(key="hardcover_api_key", value="test-hardcover-key"),
+        author,
+    ])
+    await db_session.commit()
+
+    refresh_calls = []
+    monkeypatch.setattr(authors_router, "HardcoverClient", FakeAuthorLookupHardcoverClient)
+    monkeypatch.setattr(
+        authors_router,
+        "trigger_author_refresh",
+        lambda author_id, mode="full": refresh_calls.append((author_id, mode)) or True,
+    )
+
+    response = await authors_router.relink_author_hardcover(
+        author.id,
+        authors_router.AuthorRelinkRequest(hardcover_id=200),
+        db_session,
+    )
+
+    await db_session.refresh(author)
+    assert response["status"] == "started"
+    assert response["hardcover_id"] == 200
+    assert refresh_calls == [(author.id, "full")]
+    assert author.name == "Correct Hardcover Author"
+    assert author.hardcover_id == 200
+    assert author.hardcover_slug == "correct-hardcover-author"
+    assert author.bio == "Correct author bio"
+    assert author.image_url == "https://example.test/author.jpg"
+    assert author.last_synced_at is None
+
+
+@pytest.mark.asyncio
+async def test_relink_author_hardcover_rejects_duplicate_hardcover_id(db_session):
+    target = Author(name="Wrong Match", hardcover_id=100)
+    existing = Author(name="Already Linked", hardcover_id=200)
+    db_session.add_all([
+        Setting(key="hardcover_api_key", value="test-hardcover-key"),
+        target,
+        existing,
+    ])
+    await db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        await authors_router.relink_author_hardcover(
+            target.id,
+            authors_router.AuthorRelinkRequest(hardcover_id=200),
+            db_session,
+        )
+
+    await db_session.refresh(target)
+    assert exc.value.status_code == 409
+    assert "Already Linked" in exc.value.detail
+    assert target.hardcover_id == 100
 
 
 @pytest.mark.asyncio

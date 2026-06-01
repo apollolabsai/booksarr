@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models import Book, Setting
+from backend.app.utils.book_metadata import effective_isbn, effective_language
 from backend.app.utils.isbn import has_any_valid_isbn
 
 VISIBILITY_CATEGORY_DEFAULTS = {
@@ -78,7 +79,7 @@ async def get_book_visibility_settings(db: AsyncSession) -> dict[str, bool]:
 
 
 def is_non_english(book: Book) -> bool:
-    language = (book.language or "").strip().lower()
+    language = (effective_language(book) or "").strip().lower()
     if not language:
         return False
     return not (language.startswith("en") or language.startswith("english"))
@@ -133,7 +134,7 @@ def is_book_visible(book: Book, visibility_settings: dict[str, bool], today: str
     if book.manual_visibility == "visible":
         return True
     if visibility_settings["valid_isbn"] and not has_any_valid_isbn(
-        book.isbn,
+        effective_isbn(book),
         book.hardcover_isbn_10,
         book.hardcover_isbn_13,
         book.google_isbn_10,
@@ -187,7 +188,7 @@ def get_hidden_categories(
     if book.manual_visibility == "visible":
         return []
     if visibility_settings["valid_isbn"] and not has_any_valid_isbn(
-        book.isbn,
+        effective_isbn(book),
         book.hardcover_isbn_10,
         book.hardcover_isbn_13,
         book.google_isbn_10,
