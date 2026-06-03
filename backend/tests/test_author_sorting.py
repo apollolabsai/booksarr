@@ -114,3 +114,50 @@ async def test_list_authors_count_sorts_use_surname_tiebreaker(db_session):
 
     assert [author.name for author in by_total] == ["B Smith", "A Xero"]
     assert [author.name for author in by_owned] == ["B Smith", "A Xero"]
+
+
+@pytest.mark.asyncio
+async def test_list_authors_counts_visible_books_and_omits_hidden_only_authors(db_session):
+    visible_author = Author(name="Visible Author")
+    hidden_author = Author(name="Hidden Author")
+    db_session.add_all([visible_author, hidden_author])
+    await db_session.flush()
+
+    db_session.add_all([
+        Book(
+            title="Owned Visible",
+            author_id=visible_author.id,
+            hardcover_id=301,
+            manual_visibility="visible",
+            is_owned=True,
+        ),
+        Book(
+            title="Catalog Visible",
+            author_id=visible_author.id,
+            hardcover_id=302,
+            manual_visibility="visible",
+            is_owned=False,
+        ),
+        Book(
+            title="Hidden",
+            author_id=visible_author.id,
+            hardcover_id=303,
+            manual_visibility="hidden",
+            is_owned=True,
+        ),
+        Book(
+            title="Only Hidden",
+            author_id=hidden_author.id,
+            hardcover_id=304,
+            manual_visibility="hidden",
+            is_owned=True,
+        ),
+    ])
+    await db_session.commit()
+    db_session.expire_all()
+
+    summaries = await list_authors(sort="name", search="", db=db_session)
+
+    assert [author.name for author in summaries] == ["Visible Author"]
+    assert summaries[0].book_count_local == 1
+    assert summaries[0].book_count_total == 2

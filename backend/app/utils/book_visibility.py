@@ -3,7 +3,8 @@ import re
 from datetime import date
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, case, false, func, not_, or_, select, true
+from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models import Book, Setting
@@ -157,6 +158,116 @@ def is_book_visible(book: Book, visibility_settings: dict[str, bool], today: str
         return False
 
     return visibility_settings.get(get_primary_visibility_category(book), True)
+
+
+def _cleaned_sql_value(column: ColumnElement) -> ColumnElement:
+    return func.nullif(func.trim(column), "")
+
+
+def _sql_bool(value: bool) -> ColumnElement:
+    return true() if value else false()
+
+
+def book_visibility_sql_filter(
+    visibility_settings: dict[str, bool],
+    today: str | None = None,
+) -> ColumnElement:
+    """Return the SQL visibility predicate used by aggregate queries."""
+    today = today or date.today().isoformat()
+
+    effective_isbn_expr = func.coalesce(_cleaned_sql_value(Book.manual_isbn), Book.isbn)
+    has_isbn_expr = or_(
+        _cleaned_sql_value(effective_isbn_expr).is_not(None),
+        _cleaned_sql_value(Book.hardcover_isbn_10).is_not(None),
+        _cleaned_sql_value(Book.hardcover_isbn_13).is_not(None),
+        _cleaned_sql_value(Book.google_isbn_10).is_not(None),
+        _cleaned_sql_value(Book.google_isbn_13).is_not(None),
+        _cleaned_sql_value(Book.ol_isbn_10).is_not(None),
+        _cleaned_sql_value(Book.ol_isbn_13).is_not(None),
+    )
+    isbn_gate_expr = has_isbn_expr if visibility_settings["valid_isbn"] else true()
+
+    effective_language_expr = func.lower(
+        func.trim(func.coalesce(_cleaned_sql_value(Book.manual_language), Book.language, ""))
+    )
+    non_english_expr = and_(
+        effective_language_expr != "",
+        not_(or_(
+            effective_language_expr.like("en%"),
+            effective_language_expr.like("english%"),
+        )),
+    )
+    upcoming_expr = and_(Book.release_date.is_not(None), Book.release_date > today)
+
+    lowered_title_expr = func.lower(func.coalesce(Book.title, ""))
+    likely_collection_expr = or_(
+        lowered_title_expr.like("%collection%"),
+        lowered_title_expr.like("%value collection%"),
+        lowered_title_expr.like("%boxed set%"),
+        lowered_title_expr.like("%box set%"),
+        lowered_title_expr.like("%omnibus%"),
+        lowered_title_expr.like("%complete%"),
+        lowered_title_expr.like("%collected tales%"),
+        lowered_title_expr.like("%sampler%"),
+        lowered_title_expr.like("%anthology%"),
+        lowered_title_expr.like("%condensed books%"),
+        lowered_title_expr.like("%select editions%"),
+        lowered_title_expr.like("%trilogy%"),
+        lowered_title_expr.like("%tetralogy%"),
+        lowered_title_expr.like("%series box%"),
+        lowered_title_expr.like("%ebook collection%"),
+    )
+
+    excerpt_expr = and_(
+        func.lower(func.coalesce(Book.hardcover_state, "")) == "pending",
+        Book.book_category_id == 1,
+        Book.pages.is_not(None),
+        Book.pages > 0,
+        Book.pages <= 50,
+        not_(likely_collection_expr),
+    )
+    pending_expr = func.lower(func.coalesce(Book.hardcover_state, "")) == "pending"
+
+    primary_category_visible_expr = case(
+        (Book.book_category_id == 5, _sql_bool(visibility_settings["fan_fiction"])),
+        (Book.book_category_id == 6, _sql_bool(visibility_settings["research_non_book_material"])),
+        (
+            Book.book_category_id.in_([4, 7, 9, 10]),
+            _sql_bool(visibility_settings["graphic_and_alternate_formats"]),
+        ),
+        (
+            or_(Book.compilation == True, Book.book_category_id == 8),
+            _sql_bool(visibility_settings["collections_and_compilations"]),
+        ),
+        (
+            likely_collection_expr,
+            _sql_bool(visibility_settings["likely_collections_by_title"]),
+        ),
+        (Book.book_category_id.in_([2, 3]), _sql_bool(visibility_settings["short_fiction"])),
+        else_=_sql_bool(visibility_settings["standard_books"]),
+    )
+
+    non_owned_visible_expr = and_(
+        true() if visibility_settings["non_english_books"] else not_(non_english_expr),
+        true() if visibility_settings["upcoming_unreleased"] else not_(upcoming_expr),
+        case(
+            (excerpt_expr, _sql_bool(visibility_settings["likely_excerpts"])),
+            else_=and_(
+                true() if visibility_settings["pending_hardcover_records"] else not_(pending_expr),
+                primary_category_visible_expr,
+            ),
+        ),
+    )
+
+    return case(
+        (Book.id.is_(None), false()),
+        (Book.manual_visibility == "hidden", false()),
+        (Book.manual_visibility == "visible", true()),
+        else_=and_(
+            isbn_gate_expr,
+            or_(Book.is_owned == True, non_owned_visible_expr),
+        ),
+    )
 
 
 def is_book_visible_for_metadata_enrichment(
