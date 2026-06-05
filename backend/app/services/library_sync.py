@@ -15,7 +15,13 @@ from sqlalchemy.orm import selectinload
 from backend.app.config import BOOKS_DIR
 from backend.app.database import async_session
 from backend.app.models import Author, Book, BookFile, BookSeries, Series, Setting
-from backend.app.services.scanner import scan_library, extract_best_metadata, _clean_author_text, _clean_title_text
+from backend.app.services.scanner import (
+    FilesystemScanProgress,
+    scan_library,
+    extract_best_metadata,
+    _clean_author_text,
+    _clean_title_text,
+)
 from backend.app.services.hardcover import HardcoverClient, HardcoverLookupError
 from backend.app.services.matcher import titles_match
 from backend.app.services.image_cache import (
@@ -1845,12 +1851,35 @@ async def run_full_sync(force: bool = False):
 
         return update
 
+    def scan_filesystem_progress_callback(progress: FilesystemScanProgress) -> None:
+        if progress.known_files > 0:
+            scan_status.progress = _scale_progress(
+                min(progress.artifacts_seen, progress.known_files),
+                progress.known_files,
+                5.0,
+                19.0,
+            )
+            file_count = f"{progress.artifacts_seen}/{progress.known_files}"
+        else:
+            scan_status.progress = 5.0
+            file_count = str(progress.artifacts_seen)
+
+        scan_status.message = (
+            f"Scanning filesystem... {file_count} file(s) found "
+            f"({progress.new_files} new, {progress.unchanged_files} unchanged, "
+            f"{progress.entries_seen} entries checked)"
+        )
+
     try:
         async with async_session() as db:
             # Phase 1: Fast filesystem change detection
             scan_status.message = "Scanning filesystem..."
             scan_status.progress = 5.0
-            scan_result = await scan_library(db, BOOKS_DIR)
+            scan_result = await scan_library(
+                db,
+                BOOKS_DIR,
+                progress_callback=scan_filesystem_progress_callback,
+            )
             summary.files_total = scan_result.total_files
             summary.files_new = len(scan_result.new_files)
             summary.files_deleted = len(scan_result.deleted_files)

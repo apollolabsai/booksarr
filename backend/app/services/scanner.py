@@ -1,7 +1,10 @@
 import logging
 import re
+import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +22,19 @@ _AUDIOBOOK_NAME_TOKENS = ("audiobook", "audio book", "audio-book")
 _TRAILING_PAREN_RE = re.compile(r"\s*\([^)]*\)\s*$")
 _SERIES_BRACKET_RE = re.compile(r"\s*-\s*\[[^\]]+\]\s*")
 _LEADING_SERIES_TOKEN_RE = re.compile(r"^\s*(?:\[[^\]]+\]|\([^)]*\))\s*-\s*")
+FILESYSTEM_SCAN_PROGRESS_INTERVAL = 500
+FILESYSTEM_SCAN_PROGRESS_SECONDS = 30.0
+
+
+@dataclass(frozen=True)
+class FilesystemScanProgress:
+    entries_seen: int
+    directories_seen: int
+    artifacts_seen: int
+    known_files: int
+    new_files: int
+    unchanged_files: int
+    deleted_files: int = 0
 
 
 def _is_audiobook_archive(path: Path) -> bool:
@@ -67,6 +83,7 @@ async def scan_library(
     db: AsyncSession,
     library_path: Path,
     author_dir_names: set[str] | None = None,
+    progress_callback: Callable[[FilesystemScanProgress], None] | None = None,
 ) -> ScanResult:
     """Scan the library directory using fast set-diff change detection.
 
@@ -119,10 +136,96 @@ async def scan_library(
     current_paths: set[str] = set()
     # Map rel_path -> (author_name, fallback_book_name, standalone_in_author_root, file_format)
     file_context: dict[str, tuple[str, str, bool, str]] = {}
+    entries_seen = 0
+    directories_seen = 0
+    artifacts_seen = 0
+    new_files_seen = 0
+    unchanged_files_seen = 0
+    last_progress_log = time.monotonic()
+    last_progress_entries = 0
+    last_progress_artifacts = 0
+
+    def progress_snapshot(deleted_files: int = 0) -> FilesystemScanProgress:
+        return FilesystemScanProgress(
+            entries_seen=entries_seen,
+            directories_seen=directories_seen,
+            artifacts_seen=artifacts_seen,
+            known_files=len(known_paths),
+            new_files=new_files_seen,
+            unchanged_files=unchanged_files_seen,
+            deleted_files=deleted_files,
+        )
+
+    def report_progress(*, force: bool = False, log: bool = True, deleted_files: int = 0) -> None:
+        nonlocal last_progress_artifacts, last_progress_entries, last_progress_log
+        now = time.monotonic()
+        should_report = (
+            force
+            or entries_seen - last_progress_entries >= FILESYSTEM_SCAN_PROGRESS_INTERVAL
+            or artifacts_seen - last_progress_artifacts >= FILESYSTEM_SCAN_PROGRESS_INTERVAL
+            or now - last_progress_log >= FILESYSTEM_SCAN_PROGRESS_SECONDS
+        )
+        if not should_report:
+            return
+
+        last_progress_log = now
+        last_progress_entries = entries_seen
+        last_progress_artifacts = artifacts_seen
+        progress = progress_snapshot(deleted_files=deleted_files)
+        if log:
+            logger.info(
+                "Filesystem scan progress: %d entries inspected, %d directories inspected, "
+                "%d book artifact(s) found (%d new, %d unchanged so far, %d known in DB)",
+                progress.entries_seen,
+                progress.directories_seen,
+                progress.artifacts_seen,
+                progress.new_files,
+                progress.unchanged_files,
+                progress.known_files,
+            )
+        if progress_callback:
+            progress_callback(progress)
+
+    def record_entry() -> None:
+        nonlocal entries_seen
+        entries_seen += 1
+        report_progress()
+
+    def record_directory() -> None:
+        nonlocal directories_seen
+        directories_seen += 1
+        report_progress()
+
+    def record_artifact(
+        rel_path: str,
+        fmt: str,
+        author_name: str,
+        fallback_book_name: str,
+        standalone_in_author_root: bool,
+    ) -> None:
+        nonlocal artifacts_seen, new_files_seen, unchanged_files_seen
+        current_paths.add(rel_path)
+        artifacts_seen += 1
+        if rel_path in known_paths:
+            unchanged_files_seen += 1
+        else:
+            new_files_seen += 1
+            file_context[rel_path] = (
+                author_name,
+                fallback_book_name,
+                standalone_in_author_root,
+                fmt,
+            )
+        report_progress()
+
+    if progress_callback:
+        progress_callback(progress_snapshot())
 
     for author_dir in sorted(library_path.iterdir()):
+        record_entry()
         if not author_dir.is_dir() or author_dir.name.startswith("."):
             continue
+        record_directory()
         if target_author_dirs is not None and author_dir.name not in target_author_dirs:
             continue
 
@@ -130,32 +233,30 @@ async def scan_library(
         author = await _get_or_create_author(db, author_name)
         await _register_author_directory(db, author, author_dir.name)
 
-        # Support standalone files directly inside the author folder (one book per file).
         for entry in sorted(author_dir.iterdir()):
-            if not entry.is_file() or entry.name.startswith("."):
+            record_entry()
+            if entry.name.startswith("."):
                 continue
-            fmt = _classify_standalone_file(entry)
-            if fmt is None:
-                continue
-
-            rel_path = str(entry.relative_to(library_path))
-            current_paths.add(rel_path)
-            if rel_path not in known_paths:
-                file_context[rel_path] = (
+            if entry.is_dir():
+                record_directory()
+                for rel_path, fmt in _collect_book_dir_artifacts(
+                    entry,
+                    library_path,
+                    progress_callback=record_entry,
+                ):
+                    record_artifact(rel_path, fmt, author_name, entry.name, False)
+            elif entry.is_file():
+                # Support standalone files directly inside the author folder.
+                fmt = _classify_standalone_file(entry)
+                if fmt is None:
+                    continue
+                record_artifact(
+                    str(entry.relative_to(library_path)),
+                    fmt,
                     author_name,
                     _clean_title_text(entry.stem) or entry.stem,
                     True,
-                    fmt,
                 )
-
-        for book_dir in sorted(author_dir.iterdir()):
-            if not book_dir.is_dir() or book_dir.name.startswith("."):
-                continue
-
-            for rel_path, fmt in _collect_book_dir_artifacts(book_dir, library_path):
-                current_paths.add(rel_path)
-                if rel_path not in known_paths:
-                    file_context[rel_path] = (author_name, book_dir.name, False, fmt)
 
     result.total_files = len(current_paths)
 
@@ -167,9 +268,17 @@ async def scan_library(
     result.deleted_files = sorted(deleted_paths)
 
     logger.info(
-        "Change detection: %d total, %d new, %d deleted, %d unchanged",
-        result.total_files, len(new_paths), len(deleted_paths), result.unchanged_files,
+        "Filesystem scan complete: %d entries inspected, %d directories inspected, "
+        "%d book artifact(s) total, %d new, %d deleted, %d unchanged",
+        entries_seen,
+        directories_seen,
+        result.total_files,
+        len(new_paths),
+        len(deleted_paths),
+        result.unchanged_files,
     )
+    if progress_callback:
+        progress_callback(progress_snapshot(deleted_files=len(deleted_paths)))
 
     # Step 4: Process deletions — remove BookFile records and update ownership
     if deleted_paths:
@@ -419,7 +528,11 @@ def _classify_standalone_file(entry: Path) -> str | None:
     return None
 
 
-def _collect_book_dir_artifacts(book_dir: Path, library_path: Path) -> list[tuple[str, str]]:
+def _collect_book_dir_artifacts(
+    book_dir: Path,
+    library_path: Path,
+    progress_callback: Callable[[], None] | None = None,
+) -> list[tuple[str, str]]:
     """Return (rel_path, file_format) tuples for each distinct book artifact in a book directory.
 
     A book directory may contain multiple formats of the same book (epub + mobi + pdf + audiobook).
@@ -430,6 +543,8 @@ def _collect_book_dir_artifacts(book_dir: Path, library_path: Path) -> list[tupl
     has_audio_files = False
 
     for entry in sorted(book_dir.iterdir()):
+        if progress_callback:
+            progress_callback()
         if entry.name.startswith("."):
             continue
         if entry.is_file():

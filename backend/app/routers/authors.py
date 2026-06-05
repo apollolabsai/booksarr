@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -24,7 +24,7 @@ from backend.app.schemas.author import (
 from backend.app.services.hardcover import HardcoverClient, HardcoverLookupError
 from backend.app.services.google_image_search import search_author_portraits
 from backend.app.services.scanner import _classify_standalone_file, _collect_book_dir_artifacts
-from backend.app.utils.book_visibility import get_book_visibility_settings, is_book_visible
+from backend.app.utils.book_visibility import book_visibility_sql_filter, get_book_visibility_settings, is_book_visible
 from backend.app.utils.book_metadata import (
     effective_description,
     effective_has_valid_isbn,
@@ -662,29 +662,49 @@ async def list_authors(
     search: str = Query("", max_length=200),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(Author).options(selectinload(Author.books))
+    visibility_settings = await get_book_visibility_settings(db)
+    visible_filter = book_visibility_sql_filter(visibility_settings)
+    visible_count = func.coalesce(func.sum(case((visible_filter, 1), else_=0)), 0)
+    visible_owned_count = func.coalesce(
+        func.sum(case((and_(visible_filter, Book.is_owned == True), 1), else_=0)),
+        0,
+    )
+    author_columns = (
+        Author.id,
+        Author.name,
+        Author.hardcover_id,
+        Author.hardcover_slug,
+        Author.bio,
+        Author.image_url,
+        Author.image_cached_path,
+    )
+    query = (
+        select(
+            *author_columns,
+            visible_owned_count.label("book_count_local"),
+            visible_count.label("book_count_total"),
+        )
+        .outerjoin(Book, Book.author_id == Author.id)
+        .group_by(*author_columns)
+        .having(visible_count > 0)
+    )
     if search:
         query = query.where(Author.name.ilike(f"%{search}%"))
     result = await db.execute(query)
-    visibility_settings = await get_book_visibility_settings(db)
-    authors = result.scalars().all()
-
-    summaries = []
-    for author in authors:
-        visible_books = [book for book in author.books if is_book_visible(book, visibility_settings)]
-        if not visible_books:
-            continue
-        summaries.append(AuthorSummary(
-            id=author.id,
-            name=author.name,
-            hardcover_id=author.hardcover_id,
-            hardcover_slug=author.hardcover_slug,
-            bio=author.bio,
-            image_url=author.image_url,
-            image_cached_path=author.image_cached_path,
-            book_count_local=sum(1 for book in visible_books if book.is_owned),
-            book_count_total=len(visible_books),
-        ))
+    summaries = [
+        AuthorSummary(
+            id=row.id,
+            name=row.name,
+            hardcover_id=row.hardcover_id,
+            hardcover_slug=row.hardcover_slug,
+            bio=row.bio,
+            image_url=row.image_url,
+            image_cached_path=row.image_cached_path,
+            book_count_local=row.book_count_local,
+            book_count_total=row.book_count_total,
+        )
+        for row in result.all()
+    ]
 
     if sort == "name":
         summaries.sort(key=lambda author: author_sort_key(author.name))
