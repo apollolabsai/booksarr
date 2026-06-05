@@ -8,13 +8,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from backend.app.config import BOOKS_DIR
 from backend.app.database import async_session
-from backend.app.models import Author, Book, BookFile, BookSeries, Series, Setting
+from backend.app.models import Author, AuthorDirectory, Book, BookFile, BookSeries, Series, Setting
 from backend.app.services.scanner import (
     FilesystemScanProgress,
     scan_library,
@@ -22,7 +22,7 @@ from backend.app.services.scanner import (
     _clean_author_text,
     _clean_title_text,
 )
-from backend.app.services.hardcover import HardcoverClient, HardcoverLookupError
+from backend.app.services.hardcover import HCAuthor, HardcoverClient, HardcoverLookupError
 from backend.app.services.matcher import titles_match
 from backend.app.services.image_cache import (
     cache_author_image,
@@ -1275,6 +1275,74 @@ async def refresh_imported_library_file(moved_path, expected_book_id: int | None
         return linked_book is not None and bool(linked_book.is_owned)
 
 
+async def _apply_hardcover_author_match(
+    db: AsyncSession,
+    author: Author,
+    hc_author: HCAuthor,
+    *,
+    author_has_manual_image: bool,
+) -> bool:
+    """Apply a Hardcover author match, merging duplicate author rows without moving files."""
+    existing_result = await db.execute(
+        select(Author).where(
+            Author.hardcover_id == hc_author.id,
+            Author.id != author.id,
+        )
+    )
+    keeper = existing_result.scalar_one_or_none()
+    if keeper is None:
+        author.hardcover_id = hc_author.id
+        author.hardcover_slug = hc_author.slug
+        author.bio = hc_author.bio
+        if not author_has_manual_image:
+            author.image_url = hc_author.image_url
+        return False
+
+    keeper.hardcover_slug = keeper.hardcover_slug or hc_author.slug
+    keeper.bio = keeper.bio or hc_author.bio
+    if not keeper.manual_image_source and not keeper.image_url:
+        keeper.image_url = hc_author.image_url
+    keeper.last_synced_at = None
+
+    keeper_primary_count = (
+        await db.execute(
+            select(func.count(AuthorDirectory.id)).where(
+                AuthorDirectory.author_id == keeper.id,
+                AuthorDirectory.is_primary == True,
+            )
+        )
+    ).scalar() or 0
+    directory_values = {"author_id": keeper.id}
+    if keeper_primary_count:
+        directory_values["is_primary"] = False
+
+    moved_books_result = await db.execute(
+        update(Book)
+        .where(Book.author_id == author.id)
+        .values(author_id=keeper.id)
+    )
+    moved_directories_result = await db.execute(
+        update(AuthorDirectory)
+        .where(AuthorDirectory.author_id == author.id)
+        .values(**directory_values)
+    )
+
+    logger.warning(
+        "Author %r (id=%s) matched Hardcover ID %s already assigned to author %r (id=%s). "
+        "Merged database links without moving folders: %d book(s), %d author folder mapping(s).",
+        author.name,
+        author.id,
+        hc_author.id,
+        keeper.name,
+        keeper.id,
+        moved_books_result.rowcount or 0,
+        moved_directories_result.rowcount or 0,
+    )
+    await db.delete(author)
+    await db.flush()
+    return True
+
+
 async def _sync_author_hardcover_catalog(
     db: AsyncSession,
     author: Author,
@@ -1999,11 +2067,15 @@ async def run_full_sync(force: bool = False):
                             raise
                         if hc_author:
                             summary.hardcover.record_match()
-                            author.hardcover_id = hc_author.id
-                            author.hardcover_slug = hc_author.slug
-                            author.bio = hc_author.bio
-                            if not author_has_manual_image:
-                                author.image_url = hc_author.image_url
+                            absorbed = await _apply_hardcover_author_match(
+                                db,
+                                author,
+                                hc_author,
+                                author_has_manual_image=author_has_manual_image,
+                            )
+                            if absorbed:
+                                await db.commit()
+                                continue
                         else:
                             summary.hardcover.record_failure("no_result")
                     elif author_needs_cached_image and not author.image_url:
@@ -2087,6 +2159,10 @@ async def run_full_sync(force: bool = False):
 
                 if new_author_count:
                     logger.info("Matched %d new author(s) to Hardcover", new_author_count)
+
+                result = await db.execute(select(Author))
+                authors = result.scalars().all()
+                total_authors = len(authors)
 
                 # Phase 3: Fetch books from Hardcover
                 # - force=True: refresh ALL authors

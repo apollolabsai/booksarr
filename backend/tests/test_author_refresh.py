@@ -8,7 +8,12 @@ from backend.app.models import Author, AuthorDirectory, Book, BookFile, BookSeri
 from backend.app.services.google_books import GBook, GoogleLookupResult
 from backend.app.services.hardcover import HCAuthor, HCBook, HCSeriesRef
 from backend.app.services import library_sync, scanner
-from backend.app.services.library_sync import AuthorRefreshStatus, refresh_single_author, refresh_single_book
+from backend.app.services.library_sync import (
+    AuthorRefreshStatus,
+    _apply_hardcover_author_match,
+    refresh_single_author,
+    refresh_single_book,
+)
 from backend.app.services.openlibrary import OLBook, OpenLibraryLookupResult
 from backend.app.routers import authors as authors_router
 
@@ -190,6 +195,67 @@ async def test_relink_author_hardcover_rejects_duplicate_hardcover_id(db_session
     assert exc.value.status_code == 409
     assert "Already Linked" in exc.value.detail
     assert target.hardcover_id == 100
+
+
+@pytest.mark.asyncio
+async def test_hardcover_author_match_merges_duplicate_database_links_without_moving_files(db_session):
+    keeper = Author(
+        name="J. R. R. Tolkien",
+        hardcover_id=123,
+        hardcover_slug="j-r-r-tolkien",
+        last_synced_at=datetime(2024, 1, 1),
+    )
+    duplicate = Author(name="JRR Tolkien")
+    db_session.add_all([keeper, duplicate])
+    await db_session.flush()
+
+    keeper_book = Book(title="The Hobbit", author_id=keeper.id, hardcover_id=10)
+    duplicate_book = Book(title="The Silmarillion", author_id=duplicate.id, hardcover_id=20)
+    db_session.add_all([keeper_book, duplicate_book])
+    await db_session.flush()
+
+    db_session.add_all([
+        AuthorDirectory(author_id=keeper.id, dir_path="J. R. R. Tolkien", is_primary=True),
+        AuthorDirectory(author_id=duplicate.id, dir_path="JRR Tolkien", is_primary=True),
+        BookFile(
+            book_id=duplicate_book.id,
+            file_path="JRR Tolkien/The Silmarillion/The Silmarillion.epub",
+            file_name="The Silmarillion.epub",
+            file_format="epub",
+        ),
+    ])
+    await db_session.commit()
+
+    absorbed = await _apply_hardcover_author_match(
+        db_session,
+        duplicate,
+        HCAuthor(id=123, name="J. R. R. Tolkien", slug="j-r-r-tolkien"),
+        author_has_manual_image=False,
+    )
+    await db_session.commit()
+
+    assert absorbed is True
+
+    authors = (await db_session.execute(select(Author).order_by(Author.id))).scalars().all()
+    assert authors == [keeper]
+
+    refreshed_books = (await db_session.execute(select(Book).order_by(Book.id))).scalars().all()
+    assert [book.author_id for book in refreshed_books] == [keeper.id, keeper.id]
+
+    directories = (
+        await db_session.execute(select(AuthorDirectory).order_by(AuthorDirectory.dir_path))
+    ).scalars().all()
+    assert [(directory.dir_path, directory.author_id, directory.is_primary) for directory in directories] == [
+        ("J. R. R. Tolkien", keeper.id, True),
+        ("JRR Tolkien", keeper.id, False),
+    ]
+
+    book_file = (await db_session.execute(select(BookFile))).scalar_one()
+    assert book_file.book_id == duplicate_book.id
+    assert book_file.file_path == "JRR Tolkien/The Silmarillion/The Silmarillion.epub"
+
+    await db_session.refresh(keeper)
+    assert keeper.last_synced_at is None
 
 
 @pytest.mark.asyncio
