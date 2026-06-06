@@ -50,7 +50,7 @@ from backend.app.services.google_books import (
 )
 from backend.app.utils.epub_cover import get_image_dimensions
 from backend.app.utils.api_usage import begin_api_usage_batch, clear_api_usage_batch, flush_api_usage_batch
-from backend.app.utils.author_name import normalize_author_key
+from backend.app.utils.author_name import normalize_author_key, primary_author_name
 from backend.app.utils.isbn import normalize_isbn, normalized_valid_isbn, extract_isbn_variants
 
 logger = logging.getLogger("booksarr.sync")
@@ -940,11 +940,11 @@ async def _repair_local_file_links(
             bf for bf in candidate_files
             if (
                 (bf.book and bf.book.author_id == author.id)
-                or (normalize_author_key(bf.opf_author) == author_key)
+                or (normalize_author_key(primary_author_name(bf.opf_author)) == author_key)
                 or (bf.file_path and bf.file_path.split("/")[0] in author_dir_paths)
                 or (
                     bf.file_path
-                    and normalize_author_key(bf.file_path.split("/")[0]) == author_key
+                    and normalize_author_key(primary_author_name(bf.file_path.split("/")[0])) == author_key
                 )
             )
         ]
@@ -1060,7 +1060,7 @@ async def _repair_local_file_links(
                         )
                     break
 
-        author_key = normalize_author_key(bf.opf_author)
+        author_key = normalize_author_key(primary_author_name(bf.opf_author))
         author_result = await db.execute(
             select(Author)
             .where(Author.author_key == author_key)
@@ -1078,7 +1078,7 @@ async def _repair_local_file_links(
         # folder name instead. This handles epubs whose dc:creator is corrupt
         # (e.g. set to the book title rather than the author name).
         if not matching_authors and not matched_book:
-            fallback_key = normalize_author_key(fallback_author)
+            fallback_key = normalize_author_key(primary_author_name(fallback_author))
             if fallback_key and fallback_key != author_key:
                 fallback_author_result = await db.execute(
                     select(Author)

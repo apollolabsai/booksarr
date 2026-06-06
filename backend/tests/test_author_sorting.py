@@ -2,7 +2,7 @@ import pytest
 
 from backend.app.models import Author, Book
 from backend.app.routers.authors import list_authors
-from backend.app.utils.author_name import author_sort_key, clean_author_name
+from backend.app.utils.author_name import author_sort_key, clean_author_name, primary_author_name, split_author_names
 
 
 @pytest.mark.parametrize(
@@ -23,6 +23,14 @@ from backend.app.utils.author_name import author_sort_key, clean_author_name
 )
 def test_clean_author_name_preserves_suffixes_but_swaps_last_first(name, expected):
     assert clean_author_name(name) == expected
+
+
+def test_split_author_names_handles_calibre_ampersand_authors():
+    assert split_author_names("Duncan, Lee & Block, Lawrence") == [
+        "Lee Duncan",
+        "Lawrence Block",
+    ]
+    assert primary_author_name("Duncan, Lee & Block, Lawrence") == "Lee Duncan"
 
 
 def test_author_model_name_validator_preserves_suffixes():

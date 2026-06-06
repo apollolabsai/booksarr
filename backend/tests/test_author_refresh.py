@@ -11,6 +11,7 @@ from backend.app.services import library_sync, scanner
 from backend.app.services.library_sync import (
     AuthorRefreshStatus,
     _apply_hardcover_author_match,
+    _repair_local_file_links,
     refresh_single_author,
     refresh_single_book,
 )
@@ -337,6 +338,58 @@ async def test_get_or_create_author_reuses_existing_normalized_author(db_session
     assert resolved_author.id == existing_author.id
     assert resolved_author.name == "Nir Eyal"
     assert len(author_count) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_author_uses_primary_calibre_ampersand_author(db_session):
+    resolved_author = await scanner._get_or_create_author(db_session, "Duncan, Lee & Block, Lawrence")
+    author_count = (await db_session.execute(select(Author))).scalars().all()
+
+    assert resolved_author.name == "Lee Duncan"
+    assert resolved_author.author_key == "lee duncan"
+    assert len(author_count) == 1
+
+
+@pytest.mark.asyncio
+async def test_repair_local_file_links_matches_primary_calibre_ampersand_author(db_session):
+    author = Author(name="Lee Duncan")
+    db_session.add(author)
+    await db_session.flush()
+
+    book = Book(
+        title="Coauthored Book",
+        author_id=author.id,
+        hardcover_id=12345,
+        manual_visibility="visible",
+        is_owned=False,
+    )
+    db_session.add(book)
+    await db_session.flush()
+
+    book_file = BookFile(
+        file_path="Duncan, Lee & Block, Lawrence/Coauthored Book/Coauthored Book.epub",
+        file_name="Coauthored Book.epub",
+        file_format="epub",
+        opf_title="Coauthored Book",
+        opf_author="Duncan, Lee & Block, Lawrence",
+    )
+    db_session.add(book_file)
+    await db_session.commit()
+
+    matched_count, repaired_count, books_added = await _repair_local_file_links(db_session)
+    await db_session.commit()
+
+    await db_session.refresh(book)
+    await db_session.refresh(book_file)
+    authors = (await db_session.execute(select(Author))).scalars().all()
+
+    assert matched_count == 1
+    assert repaired_count == 0
+    assert books_added == 0
+    assert book.is_owned is True
+    assert book_file.book_id == book.id
+    assert book_file.opf_author == "Duncan, Lee & Block, Lawrence"
+    assert [item.name for item in authors] == ["Lee Duncan"]
 
 
 @pytest.mark.asyncio

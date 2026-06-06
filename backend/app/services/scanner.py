@@ -10,7 +10,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models import Author, AuthorDirectory, Book, BookFile
-from backend.app.utils.author_name import clean_author_name, normalize_author_key
+from backend.app.utils.author_name import clean_author_name, normalize_author_key, primary_author_name
 from backend.app.utils.opf_parser import OPFMetadata, parse_epub_opf, parse_opf
 
 logger = logging.getLogger("booksarr.scanner")
@@ -375,7 +375,7 @@ async def _process_deletions(db: AsyncSession, deleted_paths: set[str]):
 
 
 async def _get_or_create_author(db: AsyncSession, name: str) -> Author:
-    clean_name = clean_author_name(name) or name.strip()
+    clean_name = primary_author_name(name) or name.strip()
     author_key = normalize_author_key(clean_name)
     result = await db.execute(
         select(Author)

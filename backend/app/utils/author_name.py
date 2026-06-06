@@ -26,6 +26,7 @@ _SORT_HONORIFICS = {
     "rev",
     "prof",
 }
+_CALIBRE_AUTHOR_SEPARATOR_RE = re.compile(r"\s+&\s+")
 
 
 def clean_author_name(author: str) -> str:
@@ -38,6 +39,20 @@ def clean_author_name(author: str) -> str:
             cleaned = f"{parts[1]} {parts[0]}"
     cleaned = cleaned.rstrip(" ;,")
     return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def split_author_names(author: str | None) -> list[str]:
+    return [
+        cleaned
+        for part in _CALIBRE_AUTHOR_SEPARATOR_RE.split(author or "")
+        for cleaned in [clean_author_name(part)]
+        if cleaned
+    ]
+
+
+def primary_author_name(author: str | None) -> str:
+    names = split_author_names(author)
+    return names[0] if names else clean_author_name(author or "")
 
 
 def normalize_author_key(author: str | None) -> str:
