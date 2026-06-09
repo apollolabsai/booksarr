@@ -1,7 +1,7 @@
 import pytest
 from datetime import datetime
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 from sqlalchemy.orm import selectinload
 
 from backend.app.models import Author, AuthorDirectory, Book, BookFile, BookSeries, Setting, Series
@@ -257,6 +257,55 @@ async def test_hardcover_author_match_merges_duplicate_database_links_without_mo
 
     await db_session.refresh(keeper)
     assert keeper.last_synced_at is None
+
+
+@pytest.mark.asyncio
+async def test_hardcover_author_match_detaches_absorbed_author_from_loaded_scan_list(db_session):
+    keeper = Author(
+        name="Carlton Mellick, III",
+        hardcover_id=1036058,
+        hardcover_slug="carlton-mellick-iii",
+        last_synced_at=datetime(2024, 1, 1),
+    )
+    duplicate = Author(name="Carlton III Mellick")
+    db_session.add_all([keeper, duplicate])
+    await db_session.flush()
+    db_session.add_all([
+        AuthorDirectory(author_id=keeper.id, dir_path="Carlton Mellick, III", is_primary=True),
+        AuthorDirectory(author_id=duplicate.id, dir_path="Mellick, Carlton III", is_primary=True),
+    ])
+    await db_session.commit()
+
+    loaded_authors = (
+        await db_session.execute(select(Author).order_by(Author.id))
+    ).scalars().all()
+    loaded_duplicate = next(author for author in loaded_authors if author.hardcover_id is None)
+
+    absorbed = await _apply_hardcover_author_match(
+        db_session,
+        loaded_duplicate,
+        HCAuthor(id=1036058, name="Carlton Mellick, III", slug="carlton-mellick-iii"),
+        author_has_manual_image=False,
+    )
+    await db_session.commit()
+
+    assert absorbed is True
+    assert inspect(loaded_duplicate).detached
+    assert [(author.id, author.name) for author in loaded_authors] == [
+        (keeper.id, "Carlton Mellick, III"),
+        (duplicate.id, "Carlton III Mellick"),
+    ]
+
+    authors = (await db_session.execute(select(Author).order_by(Author.id))).scalars().all()
+    assert authors == [keeper]
+
+    directories = (
+        await db_session.execute(select(AuthorDirectory).order_by(AuthorDirectory.dir_path))
+    ).scalars().all()
+    assert [(directory.dir_path, directory.author_id, directory.is_primary) for directory in directories] == [
+        ("Carlton Mellick, III", keeper.id, True),
+        ("Mellick, Carlton III", keeper.id, False),
+    ]
 
 
 @pytest.mark.asyncio

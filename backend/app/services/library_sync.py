@@ -1298,6 +1298,11 @@ async def _apply_hardcover_author_match(
             author.image_url = hc_author.image_url
         return False
 
+    duplicate_author_id = author.id
+    duplicate_author_name = author.name
+    keeper_author_id = keeper.id
+    keeper_author_name = keeper.name
+
     keeper.hardcover_slug = keeper.hardcover_slug or hc_author.slug
     keeper.bio = keeper.bio or hc_author.bio
     if not keeper.manual_image_source and not keeper.image_url:
@@ -1312,33 +1317,38 @@ async def _apply_hardcover_author_match(
             )
         )
     ).scalar() or 0
-    directory_values = {"author_id": keeper.id}
+    directory_values = {"author_id": keeper_author_id}
     if keeper_primary_count:
         directory_values["is_primary"] = False
 
     moved_books_result = await db.execute(
         update(Book)
-        .where(Book.author_id == author.id)
-        .values(author_id=keeper.id)
+        .where(Book.author_id == duplicate_author_id)
+        .values(author_id=keeper_author_id)
     )
     moved_directories_result = await db.execute(
         update(AuthorDirectory)
-        .where(AuthorDirectory.author_id == author.id)
+        .where(AuthorDirectory.author_id == duplicate_author_id)
         .values(**directory_values)
     )
 
     logger.warning(
         "Author %r (id=%s) matched Hardcover ID %s already assigned to author %r (id=%s). "
         "Merged database links without moving folders: %d book(s), %d author folder mapping(s).",
-        author.name,
-        author.id,
+        duplicate_author_name,
+        duplicate_author_id,
         hc_author.id,
-        keeper.name,
-        keeper.id,
+        keeper_author_name,
+        keeper_author_id,
         moved_books_result.rowcount or 0,
         moved_directories_result.rowcount or 0,
     )
-    await db.delete(author)
+    db.expunge(author)
+    await db.execute(
+        delete(Author)
+        .where(Author.id == duplicate_author_id)
+        .execution_options(synchronize_session=False)
+    )
     await db.flush()
     return True
 
