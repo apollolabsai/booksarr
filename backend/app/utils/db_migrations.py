@@ -3,6 +3,7 @@ from collections import defaultdict
 from sqlalchemy.engine import Connection
 
 from backend.app.utils.author_name import clean_author_name, normalize_author_key
+from backend.app.utils.title_sort import effective_title_sort_key
 
 
 def _author_priority(row: dict) -> tuple:
@@ -119,6 +120,7 @@ def run_schema_migrations(conn: Connection) -> None:
     existing_author_columns = {row[1] for row in author_rows}
 
     book_column_defs = {
+        "title_sort_key": "VARCHAR",
         "compilation": "BOOLEAN",
         "book_category_id": "INTEGER",
         "book_category_name": "VARCHAR",
@@ -149,6 +151,15 @@ def run_schema_migrations(conn: Connection) -> None:
         if column_name in existing_book_columns:
             continue
         conn.exec_driver_sql(f"ALTER TABLE books ADD COLUMN {column_name} {column_type}")
+        existing_book_columns.add(column_name)
+
+    _backfill_book_title_sort_keys(conn)
+    conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_books_title_sort_key ON books (title_sort_key)"
+    )
+    conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_books_author_title_sort_key ON books (author_id, title_sort_key)"
+    )
 
     book_file_rows = conn.exec_driver_sql("PRAGMA table_info(book_files)").fetchall()
     existing_book_file_columns = {row[1] for row in book_file_rows}
@@ -387,3 +398,19 @@ def run_schema_migrations(conn: Connection) -> None:
     conn.exec_driver_sql(
         "CREATE INDEX IF NOT EXISTS ix_irc_download_jobs_bulk_item_id ON irc_download_jobs (bulk_item_id)"
     )
+
+
+def _backfill_book_title_sort_keys(conn: Connection) -> None:
+    rows = conn.exec_driver_sql(
+        """
+        SELECT id, title, manual_title, title_sort_key
+        FROM books
+        WHERE title_sort_key IS NULL OR title_sort_key = ''
+        """
+    ).fetchall()
+    for row in rows:
+        values = row._mapping
+        conn.exec_driver_sql(
+            "UPDATE books SET title_sort_key = ? WHERE id = ?",
+            (effective_title_sort_key(values["title"], values["manual_title"]), values["id"]),
+        )

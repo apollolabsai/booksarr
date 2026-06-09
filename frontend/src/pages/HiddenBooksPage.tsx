@@ -4,6 +4,7 @@ import { useHiddenBooks, useSetBookVisibility } from "../api/books";
 import SearchBar from "../components/SearchBar";
 import MetadataInfoDialog from "../components/MetadataInfoDialog";
 import { getBookCoverPresentation, getImageUrl } from "../types";
+import { compareTitles } from "../utils/titleSort";
 
 type SortKey = "title" | "author" | "hidden_by" | "year";
 
@@ -133,13 +134,13 @@ export default function HiddenBooksPage() {
     items.sort((a, b) => {
       let comparison = 0;
       if (sortKey === "title") {
-        comparison = a.title.localeCompare(b.title);
+        comparison = compareTitles(a.title, b.title);
       } else if (sortKey === "author") {
-        comparison = a.author_name.localeCompare(b.author_name) || a.title.localeCompare(b.title);
+        comparison = a.author_name.localeCompare(b.author_name) || compareTitles(a.title, b.title);
       } else if (sortKey === "hidden_by") {
-        comparison = a.hidden_category_label.localeCompare(b.hidden_category_label) || a.title.localeCompare(b.title);
+        comparison = a.hidden_category_label.localeCompare(b.hidden_category_label) || compareTitles(a.title, b.title);
       } else if (sortKey === "year") {
-        comparison = (a.release_date || "").localeCompare(b.release_date || "") || a.title.localeCompare(b.title);
+        comparison = (a.release_date || "").localeCompare(b.release_date || "") || compareTitles(a.title, b.title);
       }
       return sortDirection === "asc" ? comparison : -comparison;
     });

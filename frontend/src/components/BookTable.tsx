@@ -7,6 +7,7 @@ import CoverPickerDialog from "./CoverPickerDialog";
 import IrcSearchDialog from "./IrcSearchDialog";
 import BookDownloadSelector from "./BookDownloadSelector";
 import MetadataInfoDialog from "./MetadataInfoDialog";
+import { compareTitles } from "../utils/titleSort";
 
 type BookLike = Book | BookInAuthor;
 type TableSortKey = "title" | "series" | "year" | "rating" | "size";
@@ -234,17 +235,17 @@ export default function BookTable({
     items.sort((a, b) => {
       let comparison = 0;
       if (sortKey === "title") {
-        comparison = a.title.localeCompare(b.title);
+        comparison = compareTitles(a.title, b.title);
       } else if (sortKey === "series") {
-        comparison = formatSeriesPosition(a).localeCompare(formatSeriesPosition(b)) || a.title.localeCompare(b.title);
+        comparison = formatSeriesPosition(a).localeCompare(formatSeriesPosition(b)) || compareTitles(a.title, b.title);
       } else if (sortKey === "year") {
-        comparison = (a.release_date || "").localeCompare(b.release_date || "") || a.title.localeCompare(b.title);
+        comparison = (a.release_date || "").localeCompare(b.release_date || "") || compareTitles(a.title, b.title);
       } else if (sortKey === "rating") {
-        comparison = (a.rating || 0) - (b.rating || 0) || a.title.localeCompare(b.title);
+        comparison = (a.rating || 0) - (b.rating || 0) || compareTitles(a.title, b.title);
       } else if (sortKey === "size") {
         const sizeA = a.local_files.reduce((sum, f) => sum + (f.file_size ?? 0), 0);
         const sizeB = b.local_files.reduce((sum, f) => sum + (f.file_size ?? 0), 0);
-        comparison = sizeA - sizeB || a.title.localeCompare(b.title);
+        comparison = sizeA - sizeB || compareTitles(a.title, b.title);
       }
       return sortDirection === "asc" ? comparison : -comparison;
     });

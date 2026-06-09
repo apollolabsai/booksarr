@@ -284,13 +284,13 @@ async def list_books(
         query = query.where(Book.author_id == author_id)
 
     if sort == "title":
-        query = query.order_by(Book.title.asc())
+        query = query.order_by(Book.title_sort_key.asc(), Book.title.asc(), Book.id.asc())
     elif sort == "-title":
-        query = query.order_by(Book.title.desc())
+        query = query.order_by(Book.title_sort_key.desc(), Book.title.desc(), Book.id.desc())
     elif sort == "author":
-        query = query.join(Author).order_by(Author.name.asc(), Book.title.asc())
+        query = query.join(Author).order_by(Author.name.asc(), Book.title_sort_key.asc(), Book.title.asc(), Book.id.asc())
     elif sort == "-author":
-        query = query.join(Author).order_by(Author.name.desc(), Book.title.asc())
+        query = query.join(Author).order_by(Author.name.desc(), Book.title_sort_key.asc(), Book.title.asc(), Book.id.asc())
     elif sort == "date":
         query = query.order_by(Book.release_date.asc())
     elif sort == "-date":
@@ -315,7 +315,7 @@ async def list_hidden_books(
         selectinload(Book.author),
         selectinload(Book.files),
         selectinload(Book.book_series).selectinload(BookSeries.series),
-    ).order_by(Book.title.asc())
+    ).order_by(Book.title_sort_key.asc(), Book.title.asc(), Book.id.asc())
 
     if search:
         query = (

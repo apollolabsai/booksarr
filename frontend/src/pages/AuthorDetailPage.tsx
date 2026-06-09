@@ -13,6 +13,7 @@ import SearchBar from "../components/SearchBar";
 import AuthorPortraitPickerDialog from "../components/AuthorPortraitPickerDialog";
 import FixAuthorMatchDialog from "../components/FixAuthorMatchDialog";
 import { useIsMobile } from "../hooks/useIsMobile";
+import { compareTitles } from "../utils/titleSort";
 
 const SORT_OPTIONS = [
   { value: "series", label: "By Series" },
@@ -136,7 +137,7 @@ export default function AuthorDetailPage() {
   const sortedBooks = [...filteredBooks].sort((a, b) => {
     switch (sort) {
       case "title":
-        return a.title.localeCompare(b.title);
+        return compareTitles(a.title, b.title);
       case "-date":
         return (b.release_date || "").localeCompare(a.release_date || "");
       case "date":
@@ -255,7 +256,7 @@ export default function AuthorDetailPage() {
               seriesFullBooks.sort((a, b) => {
                 const posA = s.books.find((sb) => sb.book_id === a.id)?.position ?? 9999;
                 const posB = s.books.find((sb) => sb.book_id === b.id)?.position ?? 9999;
-                return posA - posB;
+                return posA - posB || compareTitles(a.title, b.title);
               });
               const ownedCount = s.books.filter((b) => b.is_owned).length;
               return (

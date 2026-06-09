@@ -1,9 +1,10 @@
 from datetime import datetime
 
 from sqlalchemy import Integer, String, Text, DateTime, Boolean, Float, ForeignKey
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from backend.app.database import Base
+from backend.app.utils.title_sort import effective_title_sort_key
 
 
 class Book(Base):
@@ -11,6 +12,7 @@ class Book(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     title: Mapped[str] = mapped_column(String, nullable=False)
+    title_sort_key: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     author_id: Mapped[int] = mapped_column(Integer, ForeignKey("authors.id"), nullable=False, index=True)
     hardcover_id: Mapped[int | None] = mapped_column(Integer, unique=True, nullable=True)
     hardcover_slug: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -62,3 +64,10 @@ class Book(Base):
     author: Mapped["Author"] = relationship("Author", back_populates="books", lazy="selectin")
     book_series: Mapped[list["BookSeries"]] = relationship("BookSeries", back_populates="book", lazy="selectin")
     files: Mapped[list["BookFile"]] = relationship("BookFile", back_populates="book", lazy="selectin")
+
+    @validates("title", "manual_title")
+    def _set_title_sort_key(self, key: str, value: str | None) -> str | None:
+        title = value if key == "title" else self.title
+        manual_title = value if key == "manual_title" else self.manual_title
+        self.title_sort_key = effective_title_sort_key(title, manual_title)
+        return value
