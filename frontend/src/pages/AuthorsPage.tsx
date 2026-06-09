@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { type MutableRefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Author } from "../types";
 import { useAuthors } from "../api/authors";
 import AuthorCard from "../components/AuthorCard";
@@ -9,6 +9,8 @@ import SearchBar from "../components/SearchBar";
 import ViewToggle from "../components/ViewToggle";
 import AddAuthorDialog from "../components/AddAuthorDialog";
 import { useIsMobile } from "../hooks/useIsMobile";
+import { useElementWidth } from "../hooks/useElementWidth";
+import { useWindowVirtualRange } from "../hooks/useWindowVirtualRange";
 
 const SORT_OPTIONS = [
   { value: "name", label: "Name A-Z" },
@@ -18,13 +20,41 @@ const SORT_OPTIONS = [
 ];
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 
-function getAuthorAnchorId(author: Author) {
-  return `author-${author.id}`;
-}
+type AuthorScrollTarget = {
+  id: number;
+  index: number;
+};
 
 function getAuthorInitial(author: Author) {
   const match = author.name.trim().match(/[A-Za-z]/);
   return match ? match[0].toUpperCase() : "";
+}
+
+function getAuthorAnchorId(author: Author) {
+  return `author-${author.id}`;
+}
+
+function getGridColumnCount(width: number) {
+  if (width >= 1280) return 6;
+  if (width >= 1024) return 5;
+  if (width >= 768) return 4;
+  if (width >= 640) return 3;
+  return 2;
+}
+
+function getGridColumnClass(columns: number) {
+  switch (columns) {
+    case 6:
+      return "grid-cols-6";
+    case 5:
+      return "grid-cols-5";
+    case 4:
+      return "grid-cols-4";
+    case 3:
+      return "grid-cols-3";
+    default:
+      return "grid-cols-2";
+  }
 }
 
 export default function AuthorsPage() {
@@ -35,27 +65,27 @@ export default function AuthorsPage() {
   const [selectedLetter, setSelectedLetter] = useState<string | null>(null);
   const { data: authors, isLoading } = useAuthors(sort, search);
   const isMobile = useIsMobile();
+  const scrollToAuthorRef = useRef<((target: AuthorScrollTarget) => void) | null>(null);
 
   const handleSearch = useCallback((v: string) => setSearch(v), []);
   const letterTargets = useMemo(() => {
-    const targets = new Map<string, number>();
+    const targets = new Map<string, AuthorScrollTarget>();
+    const authorsById = new Map((authors ?? []).map((author, index) => [author.id, index]));
     const sortedAuthors = [...(authors ?? [])].sort((a, b) => a.name.localeCompare(b.name));
     sortedAuthors.forEach((author) => {
       const initial = getAuthorInitial(author);
-      if (initial && !targets.has(initial)) {
-        targets.set(initial, author.id);
+      const index = authorsById.get(author.id);
+      if (initial && index != null && !targets.has(initial)) {
+        targets.set(initial, { id: author.id, index });
       }
     });
     return targets;
   }, [authors]);
   const handleLetterSelect = useCallback((letter: string) => {
-    const authorId = letterTargets.get(letter);
-    if (!authorId) return;
+    const target = letterTargets.get(letter);
+    if (target == null) return;
     setSelectedLetter(letter);
-    document.getElementById(`author-${authorId}`)?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-    });
+    scrollToAuthorRef.current?.(target);
   }, [letterTargets]);
   const authorCount = authors?.length ?? 0;
   const ownedBookCount = authors?.reduce((sum, author) => sum + author.book_count_local, 0) ?? 0;
@@ -121,7 +151,7 @@ export default function AuthorsPage() {
       ) : isMobile ? (
         <>
           <div className="pr-7">
-            <MobileAuthorList authors={authors} getItemId={getAuthorAnchorId} />
+            <MobileAuthorList authors={authors} getItemId={getAuthorAnchorId} scrollToAuthorRef={scrollToAuthorRef} />
           </div>
           <AuthorLetterIndex
             targets={letterTargets}
@@ -133,7 +163,12 @@ export default function AuthorsPage() {
       ) : view === "table" ? (
         <>
           <div className="pr-8">
-            <AuthorTable authors={authors} getRowId={getAuthorAnchorId} />
+            <AuthorTable
+              authors={authors}
+              getRowId={getAuthorAnchorId}
+              initialSort={sort}
+              scrollToAuthorRef={scrollToAuthorRef}
+            />
           </div>
           <AuthorLetterIndex
             targets={letterTargets}
@@ -143,11 +178,11 @@ export default function AuthorsPage() {
         </>
       ) : (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 pr-8">
-            {authors.map((author) => (
-              <AuthorCard key={author.id} id={getAuthorAnchorId(author)} author={author} />
-            ))}
-          </div>
+          <VirtualAuthorGrid
+            authors={authors}
+            getItemId={getAuthorAnchorId}
+            scrollToAuthorRef={scrollToAuthorRef}
+          />
           <AuthorLetterIndex
             targets={letterTargets}
             selectedLetter={selectedLetter}
@@ -166,7 +201,7 @@ function AuthorLetterIndex({
   onSelect,
   compact = false,
 }: {
-  targets: Map<string, number>;
+  targets: Map<string, AuthorScrollTarget>;
   selectedLetter: string | null;
   onSelect: (letter: string) => void;
   compact?: boolean;
@@ -201,5 +236,57 @@ function AuthorLetterIndex({
         );
       })}
     </nav>
+  );
+}
+
+function VirtualAuthorGrid({
+  authors,
+  getItemId,
+  scrollToAuthorRef,
+}: {
+  authors: Author[];
+  getItemId: (author: Author) => string;
+  scrollToAuthorRef: MutableRefObject<((target: AuthorScrollTarget) => void) | null>;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const width = useElementWidth(containerRef);
+  const fallbackWidth = typeof window === "undefined" ? 1280 : window.innerWidth;
+  const columns = getGridColumnCount(width || fallbackWidth);
+  const gap = 16;
+  const cardWidth = width > 0 ? (width - gap * (columns - 1)) / columns : 160;
+  const rowHeight = Math.ceil(cardWidth * 4 / 3 + 84 + gap);
+  const rowCount = Math.ceil(authors.length / columns);
+  const virtualRows = useWindowVirtualRange(containerRef, rowCount, rowHeight, 4);
+
+  useEffect(() => {
+    scrollToAuthorRef.current = (target: AuthorScrollTarget) => {
+      virtualRows.scrollToIndex(Math.floor(target.index / columns));
+    };
+    return () => {
+      scrollToAuthorRef.current = null;
+    };
+  }, [columns, scrollToAuthorRef, virtualRows.scrollToIndex]);
+
+  return (
+    <div className="pr-8">
+      <div ref={containerRef} className="relative" style={{ height: virtualRows.totalSize }}>
+        <div
+          className="absolute left-0 right-0 space-y-4"
+          style={{ transform: `translateY(${virtualRows.offsetTop}px)` }}
+        >
+          {virtualRows.virtualIndexes.map((rowIndex) => {
+            const start = rowIndex * columns;
+            const rowAuthors = authors.slice(start, start + columns);
+            return (
+              <div key={rowIndex} className={`grid ${getGridColumnClass(columns)} gap-4`}>
+                {rowAuthors.map((author) => (
+                  <AuthorCard key={author.id} id={getItemId(author)} author={author} />
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
   );
 }

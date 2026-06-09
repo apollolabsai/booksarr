@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { type MutableRefObject, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import type { Author } from "../types";
 import { getImageUrl } from "../types";
+import { useWindowVirtualRange } from "../hooks/useWindowVirtualRange";
 
 type SortKey = "name" | "-name" | "owned" | "-owned" | "total" | "-total" | "completion" | "-completion";
 
@@ -15,12 +16,15 @@ export default function AuthorTable({
   authors,
   initialSort = "name",
   getRowId,
+  scrollToAuthorRef,
 }: {
   authors: Author[];
   initialSort?: SortKey | string;
   getRowId?: (author: Author) => string;
+  scrollToAuthorRef?: MutableRefObject<((target: { id: number; index: number }) => void) | null>;
 }) {
   const [sort, setSort] = useState<SortKey>("name");
+  const bodyRef = useRef<HTMLTableSectionElement>(null);
 
   useEffect(() => {
     if (initialSort === "-name" || initialSort === "owned" || initialSort === "-owned") {
@@ -68,6 +72,19 @@ export default function AuthorTable({
   const toggleSort = (asc: SortKey, desc: SortKey) => {
     setSort((current) => (current === asc ? desc : asc));
   };
+  const rowHeight = 52;
+  const virtualRows = useWindowVirtualRange(bodyRef, sortedAuthors.length, rowHeight, 12);
+
+  useEffect(() => {
+    if (!scrollToAuthorRef) return;
+    scrollToAuthorRef.current = (target: { id: number; index: number }) => {
+      const sortedIndex = sortedAuthors.findIndex((author) => author.id === target.id);
+      virtualRows.scrollToIndex(sortedIndex === -1 ? target.index : sortedIndex);
+    };
+    return () => {
+      scrollToAuthorRef.current = null;
+    };
+  }, [scrollToAuthorRef, sortedAuthors, virtualRows.scrollToIndex]);
 
   const headerClass =
     "px-4 py-3 transition-colors hover:text-slate-200";
@@ -110,8 +127,15 @@ export default function AuthorTable({
             </th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-slate-700">
-          {sortedAuthors.map((author) => {
+        <tbody ref={bodyRef} className="divide-y divide-slate-700">
+          {virtualRows.offsetTop > 0 && (
+            <tr aria-hidden="true">
+              <td colSpan={5} style={{ height: virtualRows.offsetTop, padding: 0 }} />
+            </tr>
+          )}
+          {virtualRows.virtualIndexes.map((index) => {
+            const author = sortedAuthors[index];
+            if (!author) return null;
             const imgUrl = getImageUrl(author.image_cached_path, author.image_url);
             const pct = author.book_count_total > 0
               ? Math.round((author.book_count_local / author.book_count_total) * 100)
@@ -125,7 +149,7 @@ export default function AuthorTable({
                 <td className="px-4 py-2">
                   <div className="w-8 h-8 rounded-full overflow-hidden bg-slate-700 flex-shrink-0">
                     {imgUrl ? (
-                      <img src={imgUrl} alt="" className="w-full h-full object-cover" />
+                      <img src={imgUrl} alt="" className="w-full h-full object-cover" decoding="async" loading="lazy" />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center text-xs font-bold text-slate-500">
                         {author.name.charAt(0)}
@@ -161,6 +185,17 @@ export default function AuthorTable({
               </tr>
             );
           })}
+          {virtualRows.totalSize - virtualRows.offsetTop - virtualRows.virtualIndexes.length * rowHeight > 0 && (
+            <tr aria-hidden="true">
+              <td
+                colSpan={5}
+                style={{
+                  height: virtualRows.totalSize - virtualRows.offsetTop - virtualRows.virtualIndexes.length * rowHeight,
+                  padding: 0,
+                }}
+              />
+            </tr>
+          )}
         </tbody>
       </table>
     </div>
