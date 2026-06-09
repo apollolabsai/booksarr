@@ -1,4 +1,4 @@
-import { type MutableRefObject, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import type { Author } from "../types";
 import { getImageUrl } from "../types";
@@ -7,25 +7,20 @@ import { useWindowVirtualRange } from "../hooks/useWindowVirtualRange";
 export default function MobileAuthorList({
   authors,
   getItemId,
-  scrollToAuthorRef,
+  scrollRequest,
 }: {
   authors: Author[];
   getItemId?: (author: Author) => string;
-  scrollToAuthorRef?: MutableRefObject<((target: { id: number; index: number }) => void) | null>;
+  scrollRequest?: { id: number; index: number; sequence: number } | null;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const rowHeight = 92;
   const virtualRows = useWindowVirtualRange(containerRef, authors.length, rowHeight, 12);
 
   useEffect(() => {
-    if (!scrollToAuthorRef) return;
-    scrollToAuthorRef.current = (target: { id: number; index: number }) => {
-      virtualRows.scrollToIndex(target.index);
-    };
-    return () => {
-      scrollToAuthorRef.current = null;
-    };
-  }, [scrollToAuthorRef, virtualRows.scrollToIndex]);
+    if (!scrollRequest) return;
+    virtualRows.scrollToIndex(scrollRequest.index);
+  }, [scrollRequest, virtualRows.scrollToIndex]);
 
   return (
     <div ref={containerRef} className="relative" style={{ height: virtualRows.totalSize }}>

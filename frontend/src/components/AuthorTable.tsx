@@ -1,4 +1,4 @@
-import { type MutableRefObject, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import type { Author } from "../types";
 import { getImageUrl } from "../types";
@@ -16,12 +16,12 @@ export default function AuthorTable({
   authors,
   initialSort = "name",
   getRowId,
-  scrollToAuthorRef,
+  scrollRequest,
 }: {
   authors: Author[];
   initialSort?: SortKey | string;
   getRowId?: (author: Author) => string;
-  scrollToAuthorRef?: MutableRefObject<((target: { id: number; index: number }) => void) | null>;
+  scrollRequest?: { id: number; index: number; sequence: number } | null;
 }) {
   const [sort, setSort] = useState<SortKey>("name");
   const bodyRef = useRef<HTMLTableSectionElement>(null);
@@ -76,15 +76,10 @@ export default function AuthorTable({
   const virtualRows = useWindowVirtualRange(bodyRef, sortedAuthors.length, rowHeight, 12);
 
   useEffect(() => {
-    if (!scrollToAuthorRef) return;
-    scrollToAuthorRef.current = (target: { id: number; index: number }) => {
-      const sortedIndex = sortedAuthors.findIndex((author) => author.id === target.id);
-      virtualRows.scrollToIndex(sortedIndex === -1 ? target.index : sortedIndex);
-    };
-    return () => {
-      scrollToAuthorRef.current = null;
-    };
-  }, [scrollToAuthorRef, sortedAuthors, virtualRows.scrollToIndex]);
+    if (!scrollRequest) return;
+    const sortedIndex = sortedAuthors.findIndex((author) => author.id === scrollRequest.id);
+    virtualRows.scrollToIndex(sortedIndex === -1 ? scrollRequest.index : sortedIndex);
+  }, [scrollRequest, sortedAuthors, virtualRows.scrollToIndex]);
 
   const headerClass =
     "px-4 py-3 transition-colors hover:text-slate-200";
