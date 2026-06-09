@@ -17,6 +17,13 @@ export function compareTitles(left: string | null | undefined, right: string | n
   return titleSortKey(left).localeCompare(titleSortKey(right)) || (left ?? "").localeCompare(right ?? "");
 }
 
+export function titleSortInitial(title: string | null | undefined): string {
+  const key = titleSortKey(title);
+  const first = key.match(/[a-z0-9]/i)?.[0] ?? "";
+  if (!first) return "";
+  return /\d/.test(first) ? "#" : first.toUpperCase();
+}
+
 function stripEdgeNonAlnum(value: string): string {
   const chars = Array.from(value);
   const start = chars.findIndex((char) => /[\p{L}\p{N}]/u.test(char));

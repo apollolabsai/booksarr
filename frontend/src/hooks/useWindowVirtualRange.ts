@@ -100,7 +100,8 @@ function getScrollParent(element: HTMLElement): ScrollParent {
   let parent = element.parentElement;
   while (parent) {
     const overflowY = window.getComputedStyle(parent).overflowY;
-    if (overflowY === "auto" || overflowY === "scroll") {
+    const canScrollVertically = parent.scrollHeight > parent.clientHeight + 1;
+    if ((overflowY === "auto" || overflowY === "scroll") && canScrollVertically) {
       return parent;
     }
     parent = parent.parentElement;

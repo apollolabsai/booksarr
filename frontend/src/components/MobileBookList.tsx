@@ -1,7 +1,9 @@
+import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import type { Book, BookInAuthor } from "../types";
 import { getBookCoverPresentation, getImageUrl } from "../types";
 import BookDownloadSelector from "./BookDownloadSelector";
+import { useWindowVirtualRange } from "../hooks/useWindowVirtualRange";
 
 type BookLike = Book | BookInAuthor;
 
@@ -21,15 +23,29 @@ export default function MobileBookList({
   showAuthor = true,
   selectedBookIds,
   onToggleSelected,
+  scrollRequest,
 }: {
   books: BookLike[];
   showAuthor?: boolean;
   selectedBookIds?: Set<number>;
   onToggleSelected?: (bookId: number) => void;
+  scrollRequest?: { id: number; index: number; sequence: number } | null;
 }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const rowHeight = 144;
+  const virtualRows = useWindowVirtualRange(containerRef, books.length, rowHeight, 8);
+
+  useEffect(() => {
+    if (!scrollRequest) return;
+    const index = books.findIndex((book) => book.id === scrollRequest.id);
+    virtualRows.scrollToIndex(index === -1 ? scrollRequest.index : index);
+  }, [books, scrollRequest, virtualRows.scrollToIndex]);
+
   return (
-    <div className="space-y-3">
-      {books.map((book) => {
+    <div ref={containerRef} className="relative" style={{ height: virtualRows.totalSize }}>
+      {virtualRows.virtualIndexes.map((index) => {
+        const book = books[index];
+        if (!book) return null;
         const imageUrl = getImageUrl(book.cover_image_cached_path, "cover_image_url" in book ? book.cover_image_url : null);
         const seriesLabel = getSeriesLabel(book);
         const coverPresentation = getBookCoverPresentation(book.cover_aspect_ratio);
@@ -38,85 +54,102 @@ export default function MobileBookList({
         return (
           <div
             key={book.id}
-            className={`rounded-2xl border p-3 ${
-              isSelected
-                ? "border-emerald-500/60 bg-emerald-500/5"
-                : "border-slate-800 bg-slate-900/70"
-            }`}
+            className="absolute left-0 right-0"
+            style={{ top: index * rowHeight, height: rowHeight - 12 }}
           >
-            <div className="flex gap-3">
-              <div className={`h-24 w-16 flex-shrink-0 overflow-hidden rounded-xl ${coverPresentation.frameClassName}`}>
-                {imageUrl ? (
-                  coverPresentation.innerClassName ? (
-                    <div className="flex h-full w-full items-center justify-center bg-slate-800">
-                      <img src={imageUrl} alt={book.title} className={coverPresentation.imageClassName} />
-                    </div>
+            <div
+              className={`h-full overflow-hidden rounded-2xl border p-3 ${
+                isSelected
+                  ? "border-emerald-500/60 bg-emerald-500/5"
+                  : "border-slate-800 bg-slate-900/70"
+              }`}
+            >
+              <div className="flex gap-3">
+                <div className={`h-24 w-16 flex-shrink-0 overflow-hidden rounded-xl ${coverPresentation.frameClassName}`}>
+                  {imageUrl ? (
+                    coverPresentation.innerClassName ? (
+                      <div className="flex h-full w-full items-center justify-center bg-slate-800">
+                        <img
+                          src={imageUrl}
+                          alt={book.title}
+                          className={coverPresentation.imageClassName}
+                          decoding="async"
+                          loading="lazy"
+                        />
+                      </div>
+                    ) : (
+                      <img
+                        src={imageUrl}
+                        alt={book.title}
+                        className={coverPresentation.imageClassName}
+                        decoding="async"
+                        loading="lazy"
+                      />
+                    )
                   ) : (
-                    <img src={imageUrl} alt={book.title} className={coverPresentation.imageClassName} />
-                  )
-                ) : (
-                  <div className="flex h-full w-full items-center justify-center bg-slate-800 p-2 text-center text-[10px] text-slate-500">
-                    {book.title}
-                  </div>
-                )}
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="line-clamp-2 text-sm font-semibold text-slate-100">{book.title}</div>
-                  {onToggleSelected && (
-                    <input
-                      type="checkbox"
-                      checked={isSelected}
-                      onChange={() => onToggleSelected(book.id)}
-                      aria-label={`Select ${book.title}`}
-                      className="mt-0.5 h-4 w-4 rounded border-slate-500 bg-slate-800 text-emerald-500 focus:ring-emerald-500"
-                    />
+                    <div className="flex h-full w-full items-center justify-center bg-slate-800 p-2 text-center text-[10px] text-slate-500">
+                      {book.title}
+                    </div>
                   )}
                 </div>
-                {showAuthor && isFullBook(book) && (
-                  <Link to={`/authors/${book.author_id}`} className="mt-1 block truncate text-xs text-slate-400">
-                    {book.author_name}
-                  </Link>
-                )}
-                <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-400">
-                  {seriesLabel && <span className="rounded-full bg-slate-800 px-2 py-0.5">{seriesLabel}</span>}
-                  {book.release_date && <span>{book.release_date.substring(0, 4)}</span>}
-                  {book.is_owned && (
-                    <span className="rounded-full bg-emerald-500/12 px-2 py-0.5 text-emerald-300">
-                      {book.owned_copy_count > 1 ? `${book.owned_copy_count} owned` : "Owned"}
-                    </span>
-                  )}
-                </div>
-                <div className="mt-3 flex gap-2">
-                  {book.hardcover_slug && (
-                    <a
-                      href={`https://hardcover.app/books/${book.hardcover_slug}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200"
-                    >
-                      Details
-                    </a>
-                  )}
-                  <BookDownloadSelector
-                    bookId={book.id}
-                    localFiles={book.local_files}
-                    disabled={!book.is_owned}
-                    target="location"
-                    align="left"
-                    direction="down"
-                    menuWidthClassName="w-[18rem]"
-                    renderTrigger={({ toggle, disabled, hasMultiple }) => (
-                      <button
-                        type="button"
-                        onClick={toggle}
-                        disabled={disabled}
-                        className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
-                      >
-                        {hasMultiple ? "Download..." : "Download"}
-                      </button>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="line-clamp-2 text-sm font-semibold text-slate-100">{book.title}</div>
+                    {onToggleSelected && (
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => onToggleSelected(book.id)}
+                        aria-label={`Select ${book.title}`}
+                        className="mt-0.5 h-4 w-4 rounded border-slate-500 bg-slate-800 text-emerald-500 focus:ring-emerald-500"
+                      />
                     )}
-                  />
+                  </div>
+                  {showAuthor && isFullBook(book) && (
+                    <Link to={`/authors/${book.author_id}`} className="mt-1 block truncate text-xs text-slate-400">
+                      {book.author_name}
+                    </Link>
+                  )}
+                  <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-400">
+                    {seriesLabel && <span className="rounded-full bg-slate-800 px-2 py-0.5">{seriesLabel}</span>}
+                    {book.release_date && <span>{book.release_date.substring(0, 4)}</span>}
+                    {book.is_owned && (
+                      <span className="rounded-full bg-emerald-500/12 px-2 py-0.5 text-emerald-300">
+                        {book.owned_copy_count > 1 ? `${book.owned_copy_count} owned` : "Owned"}
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-3 flex gap-2">
+                    {book.hardcover_slug && (
+                      <a
+                        href={`https://hardcover.app/books/${book.hardcover_slug}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="rounded-xl border border-slate-700 px-3 py-2 text-xs font-medium text-slate-200"
+                      >
+                        Details
+                      </a>
+                    )}
+                    <BookDownloadSelector
+                      bookId={book.id}
+                      localFiles={book.local_files}
+                      disabled={!book.is_owned}
+                      target="location"
+                      align="left"
+                      direction="down"
+                      menuWidthClassName="w-[18rem]"
+                      renderTrigger={({ toggle, disabled, hasMultiple }) => (
+                        <button
+                          type="button"
+                          onClick={toggle}
+                          disabled={disabled}
+                          className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+                        >
+                          {hasMultiple ? "Download..." : "Download"}
+                        </button>
+                      )}
+                    />
+                  </div>
                 </div>
               </div>
             </div>

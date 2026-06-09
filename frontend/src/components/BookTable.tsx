@@ -8,6 +8,7 @@ import IrcSearchDialog from "./IrcSearchDialog";
 import BookDownloadSelector from "./BookDownloadSelector";
 import MetadataInfoDialog from "./MetadataInfoDialog";
 import { compareTitles } from "../utils/titleSort";
+import { useWindowVirtualRange } from "../hooks/useWindowVirtualRange";
 
 type BookLike = Book | BookInAuthor;
 type TableSortKey = "title" | "series" | "year" | "rating" | "size";
@@ -200,12 +201,14 @@ export default function BookTable({
   authorName: contextAuthorName = null,
   selectedBookIds,
   onToggleSelected,
+  scrollRequest,
 }: {
   books: BookLike[];
   showAuthor?: boolean;
   authorName?: string | null;
   selectedBookIds?: Set<number>;
   onToggleSelected?: (bookId: number) => void;
+  scrollRequest?: { id: number; index: number; sequence: number } | null;
 }) {
   const refreshBook = useRefreshBook();
   const setBookVisibility = useSetBookVisibility();
@@ -215,6 +218,7 @@ export default function BookTable({
   const [sortKey, setSortKey] = useState<TableSortKey | null>(null);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
+  const bodyRef = useRef<HTMLTableSectionElement>(null);
   const showSelectionColumn = Boolean(onToggleSelected);
 
   const handleSort = (nextKey: TableSortKey) => {
@@ -257,6 +261,14 @@ export default function BookTable({
     if (sortKey !== key) return null;
     return <span className="ml-1 text-emerald-400">{sortDirection === "asc" ? "▲" : "▼"}</span>;
   };
+  const rowHeight = 64;
+  const virtualRows = useWindowVirtualRange(bodyRef, sortedBooks.length, rowHeight, 12);
+
+  useEffect(() => {
+    if (!scrollRequest) return;
+    const index = sortedBooks.findIndex((book) => book.id === scrollRequest.id);
+    virtualRows.scrollToIndex(index === -1 ? scrollRequest.index : index);
+  }, [scrollRequest, sortedBooks, virtualRows.scrollToIndex]);
 
   const toggleExpanded = (bookId: number) => {
     setExpandedRows((current) => {
@@ -309,8 +321,15 @@ export default function BookTable({
               <th className="px-4 py-2 text-right"></th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-700">
-            {sortedBooks.map((book, index) => {
+          <tbody ref={bodyRef} className="divide-y divide-slate-700">
+            {virtualRows.offsetTop > 0 && (
+              <tr aria-hidden="true">
+                <td colSpan={detailColSpan} style={{ height: virtualRows.offsetTop, padding: 0 }} />
+              </tr>
+            )}
+            {virtualRows.virtualIndexes.map((index) => {
+              const book = sortedBooks[index];
+              if (!book) return null;
               const imgUrl = getImageUrl(
                 book.cover_image_cached_path,
                 "cover_image_url" in book ? book.cover_image_url : null
@@ -343,10 +362,22 @@ export default function BookTable({
                         {imgUrl ? (
                           coverPresentation.innerClassName ? (
                             <div className="flex h-full w-full items-center justify-center p-0.5">
-                              <img src={imgUrl} alt="" className={coverPresentation.imageClassName} />
+                              <img
+                                src={imgUrl}
+                                alt=""
+                                className={coverPresentation.imageClassName}
+                                decoding="async"
+                                loading="lazy"
+                              />
                             </div>
                           ) : (
-                            <img src={imgUrl} alt="" className={coverPresentation.imageClassName} />
+                            <img
+                              src={imgUrl}
+                              alt=""
+                              className={coverPresentation.imageClassName}
+                              decoding="async"
+                              loading="lazy"
+                            />
                           )
                         ) : (
                           <div className="w-full h-full flex items-center justify-center text-[8px] text-slate-500 p-0.5 text-center leading-tight">
@@ -523,6 +554,17 @@ export default function BookTable({
                 </Fragment>
               );
             })}
+            {virtualRows.totalSize - virtualRows.offsetTop - virtualRows.virtualIndexes.length * rowHeight > 0 && (
+              <tr aria-hidden="true">
+                <td
+                  colSpan={detailColSpan}
+                  style={{
+                    height: virtualRows.totalSize - virtualRows.offsetTop - virtualRows.virtualIndexes.length * rowHeight,
+                    padding: 0,
+                  }}
+                />
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

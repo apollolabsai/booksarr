@@ -8,7 +8,10 @@ import ViewToggle from "../components/ViewToggle";
 import BookTable from "../components/BookTable";
 import BookCard from "../components/BookCard";
 import { useIsMobile } from "../hooks/useIsMobile";
+import { useElementWidth } from "../hooks/useElementWidth";
+import { useWindowVirtualRange } from "../hooks/useWindowVirtualRange";
 import type { Book } from "../types";
+import { compareTitles, titleSortInitial } from "../utils/titleSort";
 
 const SORT_OPTIONS = [
   { value: "title", label: "Title A-Z" },
@@ -26,8 +29,18 @@ const FILTER_OPTIONS = [
   { value: "pdf", label: "PDF" },
   { value: "audiobook", label: "Audiobook" },
 ] as const;
+const INDEX_KEYS = ["#", ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("")];
 
 type FilterKey = Exclude<(typeof FILTER_OPTIONS)[number]["value"], "all">;
+
+type BookScrollTarget = {
+  id: number;
+  index: number;
+};
+
+type BookScrollRequest = BookScrollTarget & {
+  sequence: number;
+};
 
 function bookMatchesFilter(book: Book, filter: FilterKey): boolean {
   if (filter === "missing") return !book.is_owned;
@@ -41,6 +54,26 @@ function getFilterLabel(selected: FilterKey[]) {
     return FILTER_OPTIONS.find((option) => option.value === selected[0])?.label ?? "All Books";
   }
   return `${selected.length} Filters`;
+}
+
+function getGridColumnCount(width: number) {
+  if (width >= 1024) return 8;
+  if (width >= 768) return 6;
+  if (width >= 640) return 4;
+  return 3;
+}
+
+function getGridColumnClass(columns: number) {
+  switch (columns) {
+    case 8:
+      return "grid-cols-8";
+    case 6:
+      return "grid-cols-6";
+    case 4:
+      return "grid-cols-4";
+    default:
+      return "grid-cols-3";
+  }
 }
 
 function MultiSelectBookFilter({
@@ -114,6 +147,8 @@ export default function BooksPage() {
   const [view, setView] = useState<"grid" | "table">("grid");
   const [selectedBookIds, setSelectedBookIds] = useState<Set<number>>(new Set());
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
+  const [selectedIndexKey, setSelectedIndexKey] = useState<string | null>(null);
+  const [scrollRequest, setScrollRequest] = useState<BookScrollRequest | null>(null);
   const filterMenuRef = useRef<HTMLDivElement | null>(null);
   const { data: books, isLoading } = useBooks(sort, undefined, search);
   const isMobile = useIsMobile();
@@ -123,8 +158,33 @@ export default function BooksPage() {
     if (filters.length === 0) return books;
     return books.filter((book) => filters.some((filter) => bookMatchesFilter(book, filter)));
   }, [books, filters]);
+  const showTitleIndex = sort === "title" || sort === "-title";
+  const indexTargets = useMemo(() => {
+    const targets = new Map<string, BookScrollTarget>();
+    const booksById = new Map(filteredBooks.map((book, index) => [book.id, index]));
+    const sortedBooks = [...filteredBooks].sort((a, b) => (
+      sort === "-title" ? compareTitles(b.title, a.title) : compareTitles(a.title, b.title)
+    ));
+    sortedBooks.forEach((book) => {
+      const initial = titleSortInitial(book.title);
+      const index = booksById.get(book.id);
+      if (initial && index != null && !targets.has(initial)) {
+        targets.set(initial, { id: book.id, index });
+      }
+    });
+    return targets;
+  }, [filteredBooks, sort]);
 
   const handleSearch = useCallback((v: string) => setSearch(v), []);
+  const handleIndexSelect = useCallback((key: string) => {
+    const target = indexTargets.get(key);
+    if (target == null) return;
+    setSelectedIndexKey(key);
+    setScrollRequest((current) => ({
+      ...target,
+      sequence: (current?.sequence ?? 0) + 1,
+    }));
+  }, [indexTargets]);
   const selectedBooks = useMemo(
     () => filteredBooks.filter((book) => selectedBookIds.has(book.id)),
     [filteredBooks, selectedBookIds],
@@ -298,26 +358,164 @@ export default function BooksPage() {
           <p className="text-slate-400 text-lg">No books found</p>
         </div>
       ) : isMobile ? (
-        <MobileBookList
-          books={filteredBooks}
-          showAuthor={true}
-          selectedBookIds={selectedBookIds}
-          onToggleSelected={toggleBookSelection}
-        />
+        <>
+          <div className={showTitleIndex ? "pr-7" : ""}>
+            <MobileBookList
+              books={filteredBooks}
+              showAuthor={true}
+              selectedBookIds={selectedBookIds}
+              onToggleSelected={toggleBookSelection}
+              scrollRequest={scrollRequest}
+            />
+          </div>
+          {showTitleIndex && (
+            <BookTitleIndex
+              targets={indexTargets}
+              selectedKey={selectedIndexKey}
+              onSelect={handleIndexSelect}
+              compact
+            />
+          )}
+        </>
       ) : view === "table" ? (
-        <BookTable
-          books={filteredBooks}
-          showAuthor={true}
-          selectedBookIds={showBulkIrcControls ? selectedBookIds : undefined}
-          onToggleSelected={showBulkIrcControls ? toggleBookSelection : undefined}
-        />
+        <>
+          <div className={showTitleIndex ? "pr-8" : ""}>
+            <BookTable
+              books={filteredBooks}
+              showAuthor={true}
+              selectedBookIds={showBulkIrcControls ? selectedBookIds : undefined}
+              onToggleSelected={showBulkIrcControls ? toggleBookSelection : undefined}
+              scrollRequest={scrollRequest}
+            />
+          </div>
+          {showTitleIndex && (
+            <BookTitleIndex
+              targets={indexTargets}
+              selectedKey={selectedIndexKey}
+              onSelect={handleIndexSelect}
+            />
+          )}
+        </>
       ) : (
-        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-4">
-          {filteredBooks.map((book) => (
-            <BookCard key={book.id} book={book} showAuthor={true} />
-          ))}
-        </div>
+        <>
+          <VirtualBookGrid
+            books={filteredBooks}
+            selectedBookIds={selectedBookIds}
+            onToggleSelected={showBulkIrcControls ? toggleBookSelection : undefined}
+            scrollRequest={scrollRequest}
+            reserveIndexSpace={showTitleIndex}
+          />
+          {showTitleIndex && (
+            <BookTitleIndex
+              targets={indexTargets}
+              selectedKey={selectedIndexKey}
+              onSelect={handleIndexSelect}
+            />
+          )}
+        </>
       )}
+    </div>
+  );
+}
+
+function BookTitleIndex({
+  targets,
+  selectedKey,
+  onSelect,
+  compact = false,
+}: {
+  targets: Map<string, BookScrollTarget>;
+  selectedKey: string | null;
+  onSelect: (key: string) => void;
+  compact?: boolean;
+}) {
+  return (
+    <nav
+      aria-label="Book title index"
+      className={`fixed right-2 top-1/2 z-30 flex -translate-y-1/2 flex-col rounded-full border border-slate-700 bg-slate-950/90 py-1 shadow-xl shadow-black/30 backdrop-blur ${
+        compact ? "max-h-[70vh]" : "max-h-[80vh]"
+      }`}
+    >
+      {INDEX_KEYS.map((key) => {
+        const enabled = targets.has(key);
+        const selected = selectedKey === key;
+        return (
+          <button
+            key={key}
+            type="button"
+            disabled={!enabled}
+            aria-label={key === "#" ? "Jump to numeric titles" : `Jump to books starting with ${key}`}
+            onClick={() => onSelect(key)}
+            className={`h-5 w-7 text-[11px] font-semibold leading-5 transition ${
+              selected
+                ? "text-emerald-300"
+                : enabled
+                  ? "text-slate-300 hover:text-emerald-300"
+                  : "cursor-default text-slate-700"
+            }`}
+          >
+            {key}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+function VirtualBookGrid({
+  books,
+  selectedBookIds,
+  onToggleSelected,
+  scrollRequest,
+  reserveIndexSpace = false,
+}: {
+  books: Book[];
+  selectedBookIds: Set<number>;
+  onToggleSelected?: (bookId: number) => void;
+  scrollRequest: BookScrollRequest | null;
+  reserveIndexSpace?: boolean;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const width = useElementWidth(containerRef);
+  const fallbackWidth = typeof window === "undefined" ? 1280 : window.innerWidth;
+  const columns = getGridColumnCount(width || fallbackWidth);
+  const gap = 16;
+  const cardWidth = width > 0 ? (width - gap * (columns - 1)) / columns : 140;
+  const rowHeight = Math.ceil(cardWidth * 4 / 3 + 78 + gap);
+  const rowCount = Math.ceil(books.length / columns);
+  const virtualRows = useWindowVirtualRange(containerRef, rowCount, rowHeight, 4);
+
+  useEffect(() => {
+    if (!scrollRequest) return;
+    virtualRows.scrollToIndex(Math.floor(scrollRequest.index / columns));
+  }, [columns, scrollRequest, virtualRows.scrollToIndex]);
+
+  return (
+    <div className={reserveIndexSpace ? "pr-8" : ""}>
+      <div ref={containerRef} className="relative" style={{ height: virtualRows.totalSize }}>
+        <div
+          className="absolute left-0 right-0 space-y-4"
+          style={{ transform: `translateY(${virtualRows.offsetTop}px)` }}
+        >
+          {virtualRows.virtualIndexes.map((rowIndex) => {
+            const start = rowIndex * columns;
+            const rowBooks = books.slice(start, start + columns);
+            return (
+              <div key={rowIndex} className={`grid ${getGridColumnClass(columns)} gap-4`}>
+                {rowBooks.map((book) => (
+                  <BookCard
+                    key={book.id}
+                    book={book}
+                    showAuthor={true}
+                    selected={selectedBookIds.has(book.id)}
+                    onToggleSelected={onToggleSelected ? () => onToggleSelected(book.id) : undefined}
+                  />
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
