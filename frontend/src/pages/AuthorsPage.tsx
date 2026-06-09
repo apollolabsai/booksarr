@@ -11,6 +11,7 @@ import AddAuthorDialog from "../components/AddAuthorDialog";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { useElementWidth } from "../hooks/useElementWidth";
 import { useWindowVirtualRange } from "../hooks/useWindowVirtualRange";
+import { authorSortInitial, compareAuthorsBySortName } from "../utils/authorSort";
 
 const SORT_OPTIONS = [
   { value: "name", label: "Name A-Z" },
@@ -28,11 +29,6 @@ type AuthorScrollTarget = {
 type AuthorScrollRequest = AuthorScrollTarget & {
   sequence: number;
 };
-
-function getAuthorInitial(author: Author) {
-  const match = author.name.trim().match(/[A-Za-z]/);
-  return match ? match[0].toUpperCase() : "";
-}
 
 function getAuthorAnchorId(author: Author) {
   return `author-${author.id}`;
@@ -75,9 +71,9 @@ export default function AuthorsPage() {
   const letterTargets = useMemo(() => {
     const targets = new Map<string, AuthorScrollTarget>();
     const authorsById = new Map((authors ?? []).map((author, index) => [author.id, index]));
-    const sortedAuthors = [...(authors ?? [])].sort((a, b) => a.name.localeCompare(b.name));
+    const sortedAuthors = [...(authors ?? [])].sort(compareAuthorsBySortName);
     sortedAuthors.forEach((author) => {
-      const initial = getAuthorInitial(author);
+      const initial = authorSortInitial(author);
       const index = authorsById.get(author.id);
       if (initial && index != null && !targets.has(initial)) {
         targets.set(initial, { id: author.id, index });

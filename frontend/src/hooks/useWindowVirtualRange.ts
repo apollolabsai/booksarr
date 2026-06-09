@@ -9,6 +9,8 @@ type VirtualRange = {
   virtualIndexes: number[];
 };
 
+type ScrollParent = HTMLElement | Window;
+
 export function useWindowVirtualRange<T extends HTMLElement>(
   containerRef: RefObject<T>,
   count: number,
@@ -24,10 +26,11 @@ export function useWindowVirtualRange<T extends HTMLElement>(
 
   const measure = useCallback(() => {
     const element = containerRef.current;
-    const top = element ? element.getBoundingClientRect().top + window.scrollY : 0;
+    const scrollParent = element ? getScrollParent(element) : window;
+    const { height, scrollTop, top } = getScrollMetrics(element, scrollParent);
     setViewport({
-      height: window.innerHeight,
-      scrollY: window.scrollY,
+      height,
+      scrollY: scrollTop,
       top,
     });
   }, [containerRef]);
@@ -45,11 +48,13 @@ export function useWindowVirtualRange<T extends HTMLElement>(
   }, [count, estimateSize, measure]);
 
   useEffect(() => {
+    const element = containerRef.current;
+    const scrollParent = element ? getScrollParent(element) : window;
     scheduleMeasure();
-    window.addEventListener("scroll", scheduleMeasure, { passive: true });
+    scrollParent.addEventListener("scroll", scheduleMeasure, { passive: true });
     window.addEventListener("resize", scheduleMeasure);
     return () => {
-      window.removeEventListener("scroll", scheduleMeasure);
+      scrollParent.removeEventListener("scroll", scheduleMeasure);
       window.removeEventListener("resize", scheduleMeasure);
       if (frameRef.current !== null) {
         window.cancelAnimationFrame(frameRef.current);
@@ -72,9 +77,11 @@ export function useWindowVirtualRange<T extends HTMLElement>(
   const scrollToIndex = useCallback((index: number) => {
     const clamped = Math.min(Math.max(0, index), Math.max(0, count - 1));
     const element = containerRef.current;
-    const top = element ? element.getBoundingClientRect().top + window.scrollY : 0;
-    window.scrollTo({
-      top: Math.max(0, top + clamped * safeEstimate - 24),
+    const scrollParent = element ? getScrollParent(element) : window;
+    const { top } = getScrollMetrics(element, scrollParent);
+    const scrollTop = Math.max(0, top + clamped * safeEstimate - 24);
+    scrollParent.scrollTo({
+      top: scrollTop,
       behavior: "smooth",
     });
   }, [containerRef, count, safeEstimate]);
@@ -86,5 +93,35 @@ export function useWindowVirtualRange<T extends HTMLElement>(
     startIndex,
     totalSize,
     virtualIndexes,
+  };
+}
+
+function getScrollParent(element: HTMLElement): ScrollParent {
+  let parent = element.parentElement;
+  while (parent) {
+    const overflowY = window.getComputedStyle(parent).overflowY;
+    if (overflowY === "auto" || overflowY === "scroll") {
+      return parent;
+    }
+    parent = parent.parentElement;
+  }
+  return window;
+}
+
+function getScrollMetrics(element: HTMLElement | null, scrollParent: ScrollParent) {
+  if (scrollParent === window) {
+    return {
+      height: window.innerHeight,
+      scrollTop: window.scrollY,
+      top: element ? element.getBoundingClientRect().top + window.scrollY : 0,
+    };
+  }
+
+  const parent = scrollParent as HTMLElement;
+  const parentRect = parent.getBoundingClientRect();
+  return {
+    height: parent.clientHeight,
+    scrollTop: parent.scrollTop,
+    top: element ? element.getBoundingClientRect().top - parentRect.top + parent.scrollTop : 0,
   };
 }

@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import type { Author } from "../types";
 import { getImageUrl } from "../types";
 import { useWindowVirtualRange } from "../hooks/useWindowVirtualRange";
+import { compareAuthorsBySortName } from "../utils/authorSort";
 
 type SortKey = "name" | "-name" | "owned" | "-owned" | "total" | "-total" | "completion" | "-completion";
 
@@ -47,21 +48,21 @@ export default function AuthorTable({
     list.sort((a, b) => {
       switch (sort) {
         case "name":
-          return a.name.localeCompare(b.name);
+          return compareAuthorsBySortName(a, b);
         case "-name":
-          return b.name.localeCompare(a.name);
+          return compareAuthorsBySortName(b, a);
         case "owned":
-          return a.book_count_local - b.book_count_local || a.name.localeCompare(b.name);
+          return a.book_count_local - b.book_count_local || compareAuthorsBySortName(a, b);
         case "-owned":
-          return b.book_count_local - a.book_count_local || a.name.localeCompare(b.name);
+          return b.book_count_local - a.book_count_local || compareAuthorsBySortName(a, b);
         case "total":
-          return a.book_count_total - b.book_count_total || a.name.localeCompare(b.name);
+          return a.book_count_total - b.book_count_total || compareAuthorsBySortName(a, b);
         case "-total":
-          return b.book_count_total - a.book_count_total || a.name.localeCompare(b.name);
+          return b.book_count_total - a.book_count_total || compareAuthorsBySortName(a, b);
         case "completion":
-          return getCompletion(a) - getCompletion(b) || a.name.localeCompare(b.name);
+          return getCompletion(a) - getCompletion(b) || compareAuthorsBySortName(a, b);
         case "-completion":
-          return getCompletion(b) - getCompletion(a) || a.name.localeCompare(b.name);
+          return getCompletion(b) - getCompletion(a) || compareAuthorsBySortName(a, b);
         default:
           return 0;
       }
