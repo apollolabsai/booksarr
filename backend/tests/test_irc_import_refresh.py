@@ -1,10 +1,11 @@
 import logging
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 from sqlalchemy import select
 
-from backend.app.models import Author, Book, BookFile
+from backend.app.models import Author, Book, BookFile, IrcDownloadJob
 from backend.app.services import irc_worker, library_sync
 
 
@@ -27,6 +28,20 @@ class StubMetadata:
         self.description = description
 
 
+class StubSessionFactory:
+    def __init__(self, session):
+        self._session = session
+
+    def __call__(self):
+        return self
+
+    async def __aenter__(self):
+        return self._session
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
 @pytest.mark.asyncio
 async def test_trigger_library_scan_after_irc_import_refreshes_immediately_when_idle(monkeypatch):
     calls: list[tuple[Path, int | None]] = []
@@ -42,6 +57,49 @@ async def test_trigger_library_scan_after_irc_import_refreshes_immediately_when_
 
     assert calls == [(moved_path, 238)]
     assert not irc_worker._pending_import_refresh_tasks
+
+
+@pytest.mark.asyncio
+async def test_expire_stale_download_jobs_uses_first_byte_timeout(db_session, monkeypatch):
+    now = datetime.utcnow()
+    stalled_zero_byte_job = IrcDownloadJob(
+        status="downloading",
+        bytes_downloaded=0,
+        updated_at=now - timedelta(
+            seconds=irc_worker.IRC_DCC_BOOK_FIRST_BYTE_TIMEOUT_SECONDS + 1
+        ),
+    )
+    active_transfer_job = IrcDownloadJob(
+        status="downloading",
+        bytes_downloaded=1,
+        updated_at=now - timedelta(
+            seconds=irc_worker.IRC_DCC_BOOK_FIRST_BYTE_TIMEOUT_SECONDS + 1
+        ),
+    )
+    waiting_offer_job = IrcDownloadJob(
+        status="waiting_dcc",
+        updated_at=now - timedelta(seconds=irc_worker.IRC_DCC_WAIT_TIMEOUT_SECONDS + 1),
+    )
+    db_session.add_all([stalled_zero_byte_job, active_transfer_job, waiting_offer_job])
+    await db_session.commit()
+
+    monkeypatch.setattr(irc_worker, "async_session", StubSessionFactory(db_session))
+
+    await irc_worker._expire_stale_download_jobs()
+
+    assert stalled_zero_byte_job.status == "failed"
+    assert stalled_zero_byte_job.completed_at is not None
+    assert (
+        stalled_zero_byte_job.error_message
+        == "Timed out after 30 seconds waiting for the first DCC book bytes"
+    )
+    assert active_transfer_job.status == "downloading"
+    assert active_transfer_job.error_message is None
+    assert waiting_offer_job.status == "failed"
+    assert (
+        waiting_offer_job.error_message
+        == "Timed out after 30 seconds waiting for the DCC book transfer"
+    )
 
 
 @pytest.mark.asyncio

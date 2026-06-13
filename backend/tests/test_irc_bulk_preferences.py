@@ -2,6 +2,8 @@ from backend.app.models import Author, Book, IrcSearchResult
 from backend.app.services.irc_worker import (
     _choose_best_bulk_result,
     _classify_bulk_result_type,
+    _reset_online_nicks,
+    _track_online_nick,
     normalize_bulk_file_type_preferences,
 )
 
@@ -14,13 +16,14 @@ def _make_result(
     file_size_text: str | None,
     normalized_title: str = "freakonomics",
     normalized_author: str = "steven d levitt",
+    bot_name: str = "artemis_serv",
 ) -> IrcSearchResult:
     return IrcSearchResult(
         id=result_id,
         search_job_id=1,
         result_index=result_id,
         raw_line=display_name,
-        bot_name="artemis_serv",
+        bot_name=bot_name,
         display_name=display_name,
         normalized_title=normalized_title,
         normalized_author=normalized_author,
@@ -136,3 +139,89 @@ def test_choose_best_bulk_result_excludes_disabled_types():
     )
 
     assert selected is None
+
+
+def test_choose_best_bulk_result_prefers_online_bot_when_channel_cache_is_populated():
+    _reset_online_nicks()
+    try:
+        _track_online_nick("Oatmeal")
+        author = Author(id=1, name="Steven D. Levitt")
+        book = Book(id=1, author_id=1, title="Freakonomics", author=author, is_owned=False)
+        offline_result = _make_result(
+            result_id=1,
+            display_name="Freakonomics - Steven D. Levitt.epub",
+            file_format="epub",
+            file_size_text="900KB",
+            bot_name="Dumbledore",
+        )
+        online_result = _make_result(
+            result_id=2,
+            display_name="Freakonomics - Steven D. Levitt.epub",
+            file_format="epub",
+            file_size_text="900KB",
+            bot_name="Oatmeal",
+        )
+
+        selected = _choose_best_bulk_result(
+            book=book,
+            results=[offline_result, online_result],
+            attempted_ids=[],
+            previous_result=None,
+            prefer_different_bot=False,
+        )
+
+        assert selected is not None
+        assert selected.id == online_result.id
+    finally:
+        _reset_online_nicks()
+
+
+def test_choose_best_bulk_result_skips_all_offline_bots_when_channel_cache_is_populated():
+    _reset_online_nicks()
+    try:
+        _track_online_nick("Oatmeal")
+        author = Author(id=1, name="Steven D. Levitt")
+        book = Book(id=1, author_id=1, title="Freakonomics", author=author, is_owned=False)
+        offline_result = _make_result(
+            result_id=1,
+            display_name="Freakonomics - Steven D. Levitt.epub",
+            file_format="epub",
+            file_size_text="900KB",
+            bot_name="Dumbledore",
+        )
+
+        selected = _choose_best_bulk_result(
+            book=book,
+            results=[offline_result],
+            attempted_ids=[],
+            previous_result=None,
+            prefer_different_bot=False,
+        )
+
+        assert selected is None
+    finally:
+        _reset_online_nicks()
+
+
+def test_choose_best_bulk_result_keeps_legacy_selection_when_channel_cache_is_empty():
+    _reset_online_nicks()
+    author = Author(id=1, name="Steven D. Levitt")
+    book = Book(id=1, author_id=1, title="Freakonomics", author=author, is_owned=False)
+    result = _make_result(
+        result_id=1,
+        display_name="Freakonomics - Steven D. Levitt.epub",
+        file_format="epub",
+        file_size_text="900KB",
+        bot_name="Dumbledore",
+    )
+
+    selected = _choose_best_bulk_result(
+        book=book,
+        results=[result],
+        attempted_ids=[],
+        previous_result=None,
+        prefer_different_bot=False,
+    )
+
+    assert selected is not None
+    assert selected.id == result.id

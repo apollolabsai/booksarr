@@ -45,6 +45,7 @@ IRC_MAX_TIMEOUT_SECONDS = 60
 IRC_CONNECT_TIMEOUT_SECONDS = 30
 IRC_DCC_CONNECT_TIMEOUT_SECONDS = 15
 IRC_DCC_WAIT_TIMEOUT_SECONDS = 30
+IRC_DCC_BOOK_FIRST_BYTE_TIMEOUT_SECONDS = 30
 IRC_DCC_BOOK_IDLE_TIMEOUT_SECONDS = 180
 IRC_DCC_CHUNK_TIMEOUT_SECONDS = 10
 IRC_DCC_TRAILING_READ_TIMEOUT_SECONDS = 1.0
@@ -115,6 +116,10 @@ def get_runtime_status() -> IrcRuntimeState:
 
 def get_online_irc_nicks() -> list[str]:
     return sorted(_online_channel_nicks.values(), key=str.lower)
+
+
+def has_online_irc_nicks() -> bool:
+    return bool(_online_channel_nicks)
 
 
 def is_bot_online(bot_name: str | None) -> bool | None:
@@ -883,8 +888,13 @@ def _choose_best_bulk_result(
         (score, result) for score, result in candidates
         if is_bot_online(result.bot_name)
     ]
-    if online_candidates:
+    if has_online_irc_nicks():
         candidates = online_candidates
+    elif online_candidates:
+        candidates = online_candidates
+
+    if not candidates:
+        return None
 
     candidates.sort(key=lambda item: item[0], reverse=True)
     if prefer_different_bot and previous_result and previous_result.bot_name:
@@ -1785,9 +1795,14 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
         with download_path.open("wb") as handle:
             while bytes_received < size_bytes:
                 remaining = size_bytes - bytes_received
+                read_timeout = (
+                    IRC_DCC_BOOK_FIRST_BYTE_TIMEOUT_SECONDS
+                    if bytes_received == 0
+                    else IRC_DCC_BOOK_IDLE_TIMEOUT_SECONDS
+                )
                 chunk = await asyncio.wait_for(
                     reader.read(min(65536, remaining)),
-                    timeout=IRC_DCC_BOOK_IDLE_TIMEOUT_SECONDS,
+                    timeout=read_timeout,
                 )
                 if not chunk:
                     raise RuntimeError(
@@ -1954,10 +1969,16 @@ async def _download_book_file(job_id: int, offer: dict[str, Any]):
         raise
     except Exception as exc:
         if isinstance(exc, TimeoutError):
-            error_message = (
-                f"Timed out waiting for more DCC data while downloading the book for "
-                f"{IRC_DCC_BOOK_IDLE_TIMEOUT_SECONDS} seconds"
-            )
+            if bytes_received == 0:
+                error_message = (
+                    f"Timed out after {IRC_DCC_BOOK_FIRST_BYTE_TIMEOUT_SECONDS} seconds "
+                    "waiting for the first DCC book bytes"
+                )
+            else:
+                error_message = (
+                    f"Timed out waiting for more DCC data while downloading the book for "
+                    f"{IRC_DCC_BOOK_IDLE_TIMEOUT_SECONDS} seconds"
+                )
         else:
             error_message = str(exc).strip() or exc.__class__.__name__
         logger.exception("IRC download job %s failed during DCC book handling: %s", job_id, error_message)
@@ -2164,7 +2185,11 @@ async def _expire_stale_download_jobs():
         now = datetime.utcnow()
         for job in jobs:
             age_seconds = (now - job.updated_at).total_seconds()
+            bytes_downloaded = job.bytes_downloaded or 0
             timeout_seconds = (
+                IRC_DCC_BOOK_FIRST_BYTE_TIMEOUT_SECONDS
+                if job.status == "downloading" and bytes_downloaded == 0
+                else
                 IRC_DCC_BOOK_IDLE_TIMEOUT_SECONDS
                 if job.status == "downloading"
                 else IRC_DCC_WAIT_TIMEOUT_SECONDS
@@ -2174,9 +2199,15 @@ async def _expire_stale_download_jobs():
 
             previous_status = job.status
             job.status = "failed"
-            job.error_message = (
-                f"Timed out after {timeout_seconds} seconds waiting for the DCC book transfer"
-            )
+            if previous_status == "downloading" and bytes_downloaded == 0:
+                job.error_message = (
+                    f"Timed out after {IRC_DCC_BOOK_FIRST_BYTE_TIMEOUT_SECONDS} seconds "
+                    "waiting for the first DCC book bytes"
+                )
+            else:
+                job.error_message = (
+                    f"Timed out after {timeout_seconds} seconds waiting for the DCC book transfer"
+                )
             job.updated_at = now
             job.completed_at = now
             logger.warning(
