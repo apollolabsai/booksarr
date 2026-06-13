@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import type { BookInAuthor, Book } from "../types";
 import { getBookCoverPresentation, getImageUrl } from "../types";
@@ -9,6 +10,15 @@ import BookDownloadSelector from "./BookDownloadSelector";
 import MetadataInfoDialog from "./MetadataInfoDialog";
 
 type BookLike = BookInAuthor | Book;
+type MenuPosition = {
+  left: number;
+  top: number;
+};
+
+const ACTION_MENU_WIDTH = 224;
+const ACTION_MENU_GAP = 8;
+const ACTION_MENU_MARGIN = 8;
+const ACTION_MENU_ESTIMATED_HEIGHT = 224;
 
 function isFullBook(book: BookLike): book is Book {
   return "author_name" in book;
@@ -60,7 +70,10 @@ export default function BookCard({
   const [ircSearchOpen, setIrcSearchOpen] = useState(false);
   const [metadataInfoOpen, setMetadataInfoOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuContentRef = useRef<HTMLDivElement | null>(null);
   const imgUrl = getImageUrl(
     book.cover_image_cached_path,
     "cover_image_url" in book ? book.cover_image_url : null
@@ -79,18 +92,60 @@ export default function BookCard({
     }
   };
 
+  const updateMenuPosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+
+    const rect = trigger.getBoundingClientRect();
+    const menuHeight = menuContentRef.current?.offsetHeight || ACTION_MENU_ESTIMATED_HEIGHT;
+    const maxLeft = Math.max(ACTION_MENU_MARGIN, window.innerWidth - ACTION_MENU_WIDTH - ACTION_MENU_MARGIN);
+    const left = Math.min(Math.max(ACTION_MENU_MARGIN, rect.left), maxLeft);
+    const hasRoomBelow = window.innerHeight - rect.bottom >= menuHeight + ACTION_MENU_GAP + ACTION_MENU_MARGIN;
+    const preferredTop = hasRoomBelow
+      ? rect.bottom + ACTION_MENU_GAP
+      : rect.top - menuHeight - ACTION_MENU_GAP;
+    const maxTop = Math.max(ACTION_MENU_MARGIN, window.innerHeight - menuHeight - ACTION_MENU_MARGIN);
+    const top = Math.min(Math.max(ACTION_MENU_MARGIN, preferredTop), maxTop);
+
+    setMenuPosition({ left, top });
+  }, []);
+
   useEffect(() => {
     if (!menuOpen) return;
 
     const handlePointerDown = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (
+        menuRef.current?.contains(target)
+        || menuContentRef.current?.contains(target)
+      ) {
+        return;
+      }
+      setMenuOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
         setMenuOpen(false);
       }
     };
+    const handleViewportChange = () => setMenuOpen(false);
 
     document.addEventListener("mousedown", handlePointerDown);
-    return () => document.removeEventListener("mousedown", handlePointerDown);
-  }, [menuOpen]);
+    document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("scroll", handleViewportChange, true);
+    window.addEventListener("resize", handleViewportChange);
+    updateMenuPosition();
+    const frame = window.requestAnimationFrame(updateMenuPosition);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("scroll", handleViewportChange, true);
+      window.removeEventListener("resize", handleViewportChange);
+      window.cancelAnimationFrame(frame);
+    };
+  }, [menuOpen, updateMenuPosition]);
+
+  const closeMenu = () => setMenuOpen(false);
 
   return (
     <>
@@ -159,12 +214,15 @@ export default function BookCard({
           )}
           <div ref={menuRef} className="absolute bottom-2 left-2 right-2">
             <button
+              ref={triggerRef}
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
                 setMenuOpen((current) => !current);
               }}
-              className="rounded-md border border-slate-500/60 bg-slate-900/70 px-1.5 py-1 text-slate-100 opacity-0 transition-opacity hover:bg-slate-800/90 group-hover:opacity-100"
+              className={`rounded-md border border-slate-500/60 bg-slate-900/70 px-1.5 py-1 text-slate-100 transition-opacity hover:bg-slate-800/90 ${
+                menuOpen ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+              }`}
               title="Book actions"
             >
               <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
@@ -173,49 +231,54 @@ export default function BookCard({
                 <circle cx="19" cy="12" r="1.75" />
               </svg>
             </button>
-            {menuOpen && (
+            {menuOpen && menuPosition && createPortal(
               <div
-                className="absolute bottom-9 left-0 right-0 z-[90] rounded-lg border border-slate-600 bg-slate-900/95 p-1 shadow-xl"
+                ref={menuContentRef}
+                className="fixed z-[140] w-56 max-w-[calc(100vw-1rem)] rounded-lg border border-slate-600 bg-slate-900/95 p-1 shadow-2xl shadow-black/40 ring-1 ring-black/30"
+                style={{
+                  left: menuPosition.left,
+                  top: menuPosition.top,
+                }}
                 onClick={(e) => e.stopPropagation()}
               >
                 <button
                   type="button"
                   onClick={() => {
-                    setMenuOpen(false);
+                    closeMenu();
                     setMetadataInfoOpen(true);
                   }}
-                  className="flex w-full items-center rounded-md px-2.5 py-1.5 text-xs text-slate-200 transition-colors hover:bg-slate-800"
+                  className="flex w-full items-center whitespace-nowrap rounded-md px-3 py-2 text-sm text-slate-200 transition-colors hover:bg-slate-800"
                 >
                   Metadata Info
                 </button>
                 <button
                   type="button"
                   onClick={() => {
-                    setMenuOpen(false);
+                    closeMenu();
                     setCoverPickerOpen(true);
                   }}
-                  className="flex w-full items-center rounded-md px-2.5 py-1.5 text-xs text-slate-200 transition-colors hover:bg-slate-800"
+                  className="flex w-full items-center whitespace-nowrap rounded-md px-3 py-2 text-sm text-slate-200 transition-colors hover:bg-slate-800"
                 >
                   Choose Poster
                 </button>
                 <button
                   type="button"
                   onClick={() => {
-                    setMenuOpen(false);
+                    closeMenu();
                     setIrcSearchOpen(true);
                   }}
-                  className="flex w-full items-center rounded-md px-2.5 py-1.5 text-xs text-slate-200 transition-colors hover:bg-slate-800"
+                  className="flex w-full items-center whitespace-nowrap rounded-md px-3 py-2 text-sm text-slate-200 transition-colors hover:bg-slate-800"
                 >
                   Search IRC
                 </button>
                 <button
                   type="button"
                   onClick={() => {
-                    setMenuOpen(false);
+                    closeMenu();
                     refreshBook.mutate(book.id);
                   }}
                   disabled={refreshBook.isPending}
-                  className="flex w-full items-center rounded-md px-2.5 py-1.5 text-xs text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="flex w-full items-center whitespace-nowrap rounded-md px-3 py-2 text-sm text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Refresh
                 </button>
@@ -227,13 +290,13 @@ export default function BookCard({
                   direction="down"
                   wrapperClassName="flex w-full"
                   menuWidthClassName="w-[18rem]"
-                  onDownloadStart={() => setMenuOpen(false)}
+                  onDownloadStart={closeMenu}
                   renderTrigger={({ toggle, disabled, hasMultiple }) => (
                     <button
                       type="button"
                       onClick={toggle}
                       disabled={disabled}
-                      className="flex w-full items-center rounded-md px-2.5 py-1.5 text-xs text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="flex w-full items-center whitespace-nowrap rounded-md px-3 py-2 text-sm text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {hasMultiple ? "Download..." : "Download Book"}
                     </button>
@@ -242,15 +305,16 @@ export default function BookCard({
                 <button
                   type="button"
                   onClick={() => {
-                    setMenuOpen(false);
+                    closeMenu();
                     setBookVisibility.mutate({ bookId: book.id, action: "hide" });
                   }}
                   disabled={setBookVisibility.isPending}
-                  className="flex w-full items-center rounded-md px-2.5 py-1.5 text-xs text-rose-300 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="flex w-full items-center whitespace-nowrap rounded-md px-3 py-2 text-sm text-rose-300 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Hide Book
                 </button>
-              </div>
+              </div>,
+              document.body,
             )}
           </div>
           {book.is_owned && <OwnedBadge count={book.owned_copy_count} />}
