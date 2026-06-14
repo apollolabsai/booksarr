@@ -2,6 +2,8 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { fetchApi } from "./client";
 import type {
   Author,
+  AuthorAddStartResponse,
+  AuthorAddStatus,
   AuthorDetail,
   AuthorDirectoryMergeResponse,
   AuthorRefreshStatus,
@@ -84,13 +86,24 @@ export function useAddAuthorFromHardcover() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (hardcoverId: number) =>
-      fetchApi<Author>("/authors/add-from-hardcover", {
+      fetchApi<AuthorAddStartResponse>("/authors/add-from-hardcover", {
         method: "POST",
         body: JSON.stringify({ hardcover_id: hardcoverId }),
       }),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["authorAddStatus"] });
       queryClient.invalidateQueries({ queryKey: ["authors"] });
     },
+  });
+}
+
+export function useAuthorAddStatus(enabled: boolean = true) {
+  return useQuery({
+    queryKey: ["authorAddStatus"],
+    queryFn: () => fetchApi<AuthorAddStatus>("/authors/add-from-hardcover/status"),
+    enabled,
+    refetchInterval: (query) => query.state.data?.status === "adding" ? 1000 : false,
+    refetchIntervalInBackground: true,
   });
 }
 

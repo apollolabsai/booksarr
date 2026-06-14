@@ -31,6 +31,24 @@ export interface AuthorSearchResponse {
   candidates: AuthorSearchCandidate[];
 }
 
+export interface AuthorAddStatus {
+  status: "idle" | "adding" | "completed" | "failed";
+  hardcover_id: number | null;
+  author_id: number | null;
+  author_name: string | null;
+  progress: number;
+  message: string;
+  started_at: string | null;
+  completed_at: string | null;
+  error: string | null;
+}
+
+export interface AuthorAddStartResponse {
+  status: "started" | "already_adding";
+  message: string;
+  add: AuthorAddStatus;
+}
+
 export interface AuthorPortraitOption {
   key: string;
   source: string;

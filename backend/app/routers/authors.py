@@ -1,3 +1,5 @@
+import asyncio
+import errno
 import json
 import logging
 import re
@@ -11,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from backend.app.config import BOOKS_DIR
-from backend.app.database import get_db
+from backend.app.database import async_session, get_db
 from backend.app.models import Author, AuthorDirectory, Book, BookFile, BookSeries, Series
 from backend.app.schemas.author import (
     AuthorSummary, AuthorDetail, BookInAuthor, SeriesPositionInfo,
@@ -54,6 +56,79 @@ logger = logging.getLogger("booksarr.authors")
 _IGNORABLE_FOLDER_MERGE_FILES = {".ds_store", "thumbs.db", "desktop.ini"}
 
 
+class AuthorAddStatus:
+    def __init__(self):
+        self.status = "idle"
+        self.hardcover_id: int | None = None
+        self.author_id: int | None = None
+        self.author_name: str | None = None
+        self.progress = 0.0
+        self.message = ""
+        self.started_at: str | None = None
+        self.completed_at: str | None = None
+        self.error: str | None = None
+
+    def start(self, hardcover_id: int):
+        self.status = "adding"
+        self.hardcover_id = hardcover_id
+        self.author_id = None
+        self.author_name = None
+        self.progress = 0.0
+        self.message = "Starting author import..."
+        self.started_at = datetime.utcnow().isoformat()
+        self.completed_at = None
+        self.error = None
+
+    def update(
+        self,
+        *,
+        progress: float | None = None,
+        message: str | None = None,
+        author_id: int | None = None,
+        author_name: str | None = None,
+    ):
+        if progress is not None:
+            self.progress = max(0.0, min(100.0, progress))
+        if message is not None:
+            self.message = message
+        if author_id is not None:
+            self.author_id = author_id
+        if author_name is not None:
+            self.author_name = author_name
+
+    def complete(self, author: AuthorSummary):
+        self.status = "completed"
+        self.author_id = author.id
+        self.author_name = author.name
+        self.progress = 100.0
+        self.message = f"Finished adding {author.name}."
+        self.completed_at = datetime.utcnow().isoformat()
+        self.error = None
+
+    def fail(self, error: str):
+        self.status = "failed"
+        self.progress = 0.0
+        self.message = f"Author import failed: {error}"
+        self.completed_at = datetime.utcnow().isoformat()
+        self.error = error
+
+    def to_dict(self) -> dict:
+        return {
+            "status": self.status,
+            "hardcover_id": self.hardcover_id,
+            "author_id": self.author_id,
+            "author_name": self.author_name,
+            "progress": self.progress,
+            "message": self.message,
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+            "error": self.error,
+        }
+
+
+author_add_status = AuthorAddStatus()
+
+
 @router.get("/hardcover-search", response_model=AuthorSearchResponse)
 async def search_hardcover_authors(
     query: str = Query(..., min_length=3, max_length=200),
@@ -89,79 +164,140 @@ async def search_hardcover_authors(
     )
 
 
-@router.post("/add-from-hardcover", response_model=AuthorSummary)
-async def add_author_from_hardcover(
-    body: AuthorAddRequest,
-    db: AsyncSession = Depends(get_db),
-):
+async def _build_author_summary(db: AsyncSession, author: Author) -> AuthorSummary:
+    visibility_settings = await get_book_visibility_settings(db)
+    visible_books = [book for book in author.books if is_book_visible(book, visibility_settings)]
+    return AuthorSummary(
+        id=author.id,
+        name=author.name,
+        hardcover_id=author.hardcover_id,
+        hardcover_slug=author.hardcover_slug,
+        bio=author.bio,
+        image_url=author.image_url,
+        image_cached_path=author.image_cached_path,
+        book_count_local=sum(1 for book in visible_books if book.is_owned),
+        book_count_total=len(visible_books),
+    )
+
+
+async def _ensure_author_directory_mapping(db: AsyncSession, author: Author, folder_name: str) -> None:
+    folder_path = BOOKS_DIR / folder_name
+    try:
+        folder_path.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        if exc.errno not in {errno.EACCES, errno.EPERM, errno.EROFS}:
+            raise
+        logger.warning(
+            "Could not create author folder %s because the books library is not writable; "
+            "continuing with Hardcover catalog import",
+            folder_path,
+        )
+    else:
+        logger.info("Ensured author folder exists: %s", folder_path)
+
+    await _upsert_author_directory(db, author, folder_name)
+
+
+async def _prepare_author_from_hardcover(
+    db: AsyncSession,
+    hardcover_id: int,
+    client: HardcoverClient,
+) -> Author:
+    author_add_status.update(progress=8.0, message="Fetching Hardcover author profile...")
+    hc_author = await client.get_author(hardcover_id)
+    if hc_author is None:
+        raise ValueError("Hardcover author not found")
+
+    result = await db.execute(select(Author).where(Author.hardcover_id == hc_author.id))
+    author = result.scalar_one_or_none()
+    if author is None:
+        result = await db.execute(
+            select(Author)
+            .where(Author.author_key == normalize_author_key(hc_author.name))
+            .order_by(
+                Author.hardcover_id.is_(None),
+                Author.book_count_local.desc(),
+                Author.book_count_total.desc(),
+                Author.id,
+            )
+            .limit(1)
+        )
+        author = result.scalar_one_or_none()
+
+    if author is None:
+        author = Author(
+            name=hc_author.name,
+            hardcover_id=hc_author.id,
+            hardcover_slug=hc_author.slug,
+            bio=hc_author.bio,
+            image_url=hc_author.image_url,
+        )
+        db.add(author)
+        await db.flush()
+        message = f"Created local author record for {hc_author.name}."
+    else:
+        author.name = hc_author.name
+        author.hardcover_id = hc_author.id
+        author.hardcover_slug = hc_author.slug
+        author.bio = hc_author.bio
+        if not author.manual_image_source:
+            author.image_url = hc_author.image_url
+        message = f"Updating existing local author record for {hc_author.name}."
+
+    folder_name = _sanitize_author_folder_name(hc_author.name)
+    await _ensure_author_directory_mapping(db, author, folder_name)
+
+    author_add_status.update(
+        progress=18.0,
+        message=message,
+        author_id=author.id,
+        author_name=author.name,
+    )
+    return author
+
+
+async def _add_author_from_hardcover(
+    db: AsyncSession,
+    hardcover_id: int,
+) -> AuthorSummary:
     api_key = await get_api_key(db)
     if not api_key:
-        raise HTTPException(status_code=400, detail="Hardcover API key is not configured")
+        raise ValueError("Hardcover API key is not configured")
 
+    author_add_status.update(progress=5.0, message="Connecting to Hardcover...")
     client = HardcoverClient(api_key)
     usage_token = begin_api_usage_batch()
     try:
-        logger.info("Add author requested from Hardcover: hardcover_id=%s", body.hardcover_id)
-        hc_author = await client.get_author(body.hardcover_id)
-        if hc_author is None:
-            raise HTTPException(status_code=404, detail="Hardcover author not found")
+        logger.info("Add author requested from Hardcover: hardcover_id=%s", hardcover_id)
+        author = await _prepare_author_from_hardcover(db, hardcover_id, client)
 
-        result = await db.execute(select(Author).where(Author.hardcover_id == hc_author.id))
-        author = result.scalar_one_or_none()
-        if author is None:
-            result = await db.execute(
-                select(Author)
-                .where(Author.author_key == normalize_author_key(hc_author.name))
-                .order_by(
-                    Author.hardcover_id.is_(None),
-                    Author.book_count_local.desc(),
-                    Author.book_count_total.desc(),
-                    Author.id,
-                )
-                .limit(1)
-            )
-            author = result.scalar_one_or_none()
-
-        if author is None:
-            author = Author(
-                name=hc_author.name,
-                hardcover_id=hc_author.id,
-                hardcover_slug=hc_author.slug,
-                bio=hc_author.bio,
-                image_url=hc_author.image_url,
-            )
-            db.add(author)
-            await db.flush()
-        else:
-            author.name = hc_author.name
-            author.hardcover_id = hc_author.id
-            author.hardcover_slug = hc_author.slug
-            author.bio = hc_author.bio
-            if not author.manual_image_source:
-                author.image_url = hc_author.image_url
-
-        folder_name = _sanitize_author_folder_name(hc_author.name)
-        folder_path = BOOKS_DIR / folder_name
-        folder_path.mkdir(parents=True, exist_ok=True)
-        await _upsert_author_directory(db, author, folder_name)
-        logger.info("Ensured author folder exists: %s", folder_path)
-
-        hc_books = await client.get_author_books(hc_author.id)
+        author_add_status.update(progress=25.0, message=f"Fetching Hardcover catalog for {author.name}...")
+        hc_books = await client.get_author_books(author.hardcover_id)
         canonical_books = [b for b in hc_books if b.is_canonical]
         valid_books = [b for b in canonical_books if _is_valid_title(b.title)]
         eligible_books = _deduplicate_books(valid_books)
         author.book_count_total = len(eligible_books)
         logger.info(
             "Importing Hardcover author %s (hc_id=%s): %d raw, %d canonical, %d valid, %d eligible",
-            hc_author.name,
-            hc_author.id,
+            author.name,
+            author.hardcover_id,
             len(hc_books),
             len(canonical_books),
             len(valid_books),
             len(eligible_books),
         )
+        author_add_status.update(
+            progress=35.0,
+            message=f"Importing {len(eligible_books)} Hardcover book records for {author.name}...",
+        )
         imported_book_ids: list[int] = []
-        for hc_book in eligible_books:
+        total_books = max(len(eligible_books), 1)
+        for index, hc_book in enumerate(eligible_books, start=1):
+            if index == 1 or index == len(eligible_books) or index % 10 == 0:
+                author_add_status.update(
+                    progress=35.0 + (index / total_books) * 35.0,
+                    message=f"Importing book {index}/{len(eligible_books)}: {hc_book.title}",
+                )
             book_result = await db.execute(select(Book).where(Book.hardcover_id == hc_book.id))
             book = book_result.scalar_one_or_none()
             tags_json = json.dumps(hc_book.tags) if hc_book.tags else None
@@ -237,8 +373,20 @@ async def add_author_from_hardcover(
                     db.add(BookSeries(book_id=book.id, series_id=series.id, position=sr.position))
             imported_book_ids.append(book.id)
 
+        author_add_status.update(progress=72.0, message="Saving imported catalog...")
         await db.commit()
-        await enrich_imported_books_metadata(db, imported_book_ids)
+
+        def enrichment_progress(stage: str, processed: int, total: int, title: str) -> None:
+            phase_start = 74.0 if stage == "google" else 84.0
+            phase_end = 84.0 if stage == "google" else 96.0
+            label = "Google Books" if stage == "google" else "Open Library"
+            author_add_status.update(
+                progress=phase_start + (processed / max(total, 1)) * (phase_end - phase_start),
+                message=f"Reconciling metadata with {label} {processed}/{total}: {title}",
+            )
+
+        author_add_status.update(progress=74.0, message="Reconciling imported metadata...")
+        await enrich_imported_books_metadata(db, imported_book_ids, enrichment_progress)
         await flush_api_usage_batch(db)
         await db.commit()
         result = await db.execute(
@@ -255,24 +403,83 @@ async def add_author_from_hardcover(
         )
     except HardcoverLookupError as exc:
         await db.rollback()
-        raise HTTPException(status_code=502, detail=f"Hardcover lookup failed: {exc}") from exc
+        raise RuntimeError(f"Hardcover lookup failed: {exc}") from exc
     finally:
         clear_api_usage_batch(usage_token)
         await client.close()
 
-    visibility_settings = await get_book_visibility_settings(db)
-    visible_books = [book for book in author.books if is_book_visible(book, visibility_settings)]
-    return AuthorSummary(
-        id=author.id,
-        name=author.name,
-        hardcover_id=author.hardcover_id,
-        hardcover_slug=author.hardcover_slug,
-        bio=author.bio,
-        image_url=author.image_url,
-        image_cached_path=author.image_cached_path,
-        book_count_local=sum(1 for book in visible_books if book.is_owned),
-        book_count_total=len(visible_books),
-    )
+    return await _build_author_summary(db, author)
+
+
+async def _run_add_author_task(hardcover_id: int):
+    try:
+        async with async_session() as db:
+            author = await _add_author_from_hardcover(db, hardcover_id)
+    except Exception as exc:
+        author_add_status.fail(str(exc))
+        logger.exception("Add author from Hardcover failed: hardcover_id=%s", hardcover_id)
+    else:
+        author_add_status.complete(author)
+
+
+@router.post("/add-from-hardcover")
+async def add_author_from_hardcover(
+    body: AuthorAddRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    if author_add_status.status == "adding":
+        return {
+            "status": "already_adding",
+            "message": "An author import is already in progress",
+            "add": author_add_status.to_dict(),
+        }
+
+    api_key = await get_api_key(db)
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Hardcover API key is not configured")
+
+    author_add_status.start(body.hardcover_id)
+    client = HardcoverClient(api_key)
+    usage_token = begin_api_usage_batch()
+    try:
+        author_add_status.update(progress=5.0, message="Connecting to Hardcover...")
+        author = await _prepare_author_from_hardcover(db, body.hardcover_id, client)
+        await flush_api_usage_batch(db)
+        await db.commit()
+        result = await db.execute(
+            select(Author)
+            .options(selectinload(Author.books))
+            .where(Author.id == author.id)
+        )
+        author = result.scalar_one()
+        author_summary = await _build_author_summary(db, author)
+    except HardcoverLookupError as exc:
+        await db.rollback()
+        author_add_status.fail(f"Hardcover lookup failed: {exc}")
+        raise HTTPException(status_code=502, detail=f"Hardcover lookup failed: {exc}") from exc
+    except ValueError as exc:
+        await db.rollback()
+        author_add_status.fail(str(exc))
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finally:
+        clear_api_usage_batch(usage_token)
+        await client.close()
+
+    asyncio.create_task(_run_add_author_task(body.hardcover_id))
+    payload = author_summary.model_dump()
+    payload.update({
+        "status": "started",
+        "message": "Author import started",
+        "add": author_add_status.to_dict(),
+    })
+    return {
+        **payload,
+    }
+
+
+@router.get("/add-from-hardcover/status")
+async def get_add_author_status():
+    return author_add_status.to_dict()
 
 
 @router.post("/{author_id}/relink-hardcover")

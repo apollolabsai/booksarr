@@ -1692,7 +1692,11 @@ async def get_google_api_key(db: AsyncSession) -> str:
     return GOOGLE_BOOKS_API_KEY
 
 
-async def enrich_imported_books_metadata(db: AsyncSession, book_ids: list[int]) -> None:
+async def enrich_imported_books_metadata(
+    db: AsyncSession,
+    book_ids: list[int],
+    progress_callback: Callable[[str, int, int, str], None] | None = None,
+) -> None:
     """Populate Google/Open Library metadata for freshly imported Hardcover books."""
     if not book_ids:
         return
@@ -1714,6 +1718,7 @@ async def enrich_imported_books_metadata(db: AsyncSession, book_ids: list[int]) 
     if not books_to_reconcile:
         logger.info("Imported author books did not require immediate Google/Open Library enrichment")
         return
+    total_reconcile = len(books_to_reconcile)
 
     author_ids = sorted({book.author_id for book in books_to_reconcile})
     author_map: dict[int, str] = {}
@@ -1729,7 +1734,9 @@ async def enrich_imported_books_metadata(db: AsyncSession, book_ids: list[int]) 
         try:
             fetched = 0
             cached = 0
-            for book in books_to_reconcile:
+            for index, book in enumerate(books_to_reconcile, start=1):
+                if progress_callback:
+                    progress_callback("google", index, total_reconcile, book.title)
                 if book.google_id == "_none":
                     cached += 1
                     continue
@@ -1786,7 +1793,7 @@ async def enrich_imported_books_metadata(db: AsyncSession, book_ids: list[int]) 
                 fetched,
                 cached,
                 len(google_retry_ids),
-                len(books_to_reconcile),
+                total_reconcile,
             )
         finally:
             await google_client.close()
@@ -1797,7 +1804,9 @@ async def enrich_imported_books_metadata(db: AsyncSession, book_ids: list[int]) 
     try:
         fetched_ol = 0
         cached_ol = 0
-        for book in books_to_reconcile:
+        for index, book in enumerate(books_to_reconcile, start=1):
+            if progress_callback:
+                progress_callback("openlibrary", index, total_reconcile, book.title)
             if book.ol_edition_key == "_none":
                 cached_ol += 1
                 continue
@@ -1843,7 +1852,7 @@ async def enrich_imported_books_metadata(db: AsyncSession, book_ids: list[int]) 
             fetched_ol,
             cached_ol,
             finalized,
-            len(books_to_reconcile),
+            total_reconcile,
         )
     finally:
         await ol_client.close()

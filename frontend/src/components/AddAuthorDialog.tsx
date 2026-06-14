@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { useAddAuthorFromHardcover, useSearchHardcoverAuthors } from "../api/authors";
+import { useAddAuthorFromHardcover, useAuthorAddStatus, useSearchHardcoverAuthors } from "../api/authors";
 import { getImageUrl } from "../types";
 
 export default function AddAuthorDialog({
@@ -11,9 +12,13 @@ export default function AddAuthorDialog({
   onClose: () => void;
 }) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [query, setQuery] = useState("");
+  const [activeHardcoverId, setActiveHardcoverId] = useState<number | null>(null);
+  const navigatedAuthorId = useRef<number | null>(null);
   const searchAuthors = useSearchHardcoverAuthors();
   const addAuthor = useAddAuthorFromHardcover();
+  const { data: addStatus } = useAuthorAddStatus(open);
 
   useEffect(() => {
     if (!open) {
@@ -21,9 +26,33 @@ export default function AddAuthorDialog({
     }
   }, [open]);
 
-  if (!open) return null;
+  useEffect(() => {
+    if (!addStatus || addStatus.status !== "completed" || !addStatus.author_id) return;
+    if (activeHardcoverId === null || addStatus.hardcover_id !== activeHardcoverId) return;
+    if (navigatedAuthorId.current === addStatus.author_id) return;
+
+    navigatedAuthorId.current = addStatus.author_id;
+    queryClient.invalidateQueries({ queryKey: ["authors"] });
+    queryClient.invalidateQueries({ queryKey: ["authors", addStatus.author_id] });
+    onClose();
+    navigate(`/authors/${addStatus.author_id}`);
+  }, [activeHardcoverId, addStatus, navigate, onClose, queryClient]);
 
   const candidates = searchAuthors.data?.candidates ?? [];
+  const activeAddStatus = addStatus && (
+    addStatus?.status === "adding"
+    || (activeHardcoverId !== null && addStatus?.hardcover_id === activeHardcoverId)
+  ) ? addStatus : null;
+  const addProgress = Math.max(0, Math.min(100, Math.round(activeAddStatus?.progress ?? 0)));
+  const isAdding = activeAddStatus?.status === "adding" || addAuthor.isPending;
+  const statusTitle = useMemo(() => {
+    if (!activeAddStatus) return null;
+    if (activeAddStatus.status === "failed") return "Author import failed";
+    if (activeAddStatus.status === "completed") return "Author import complete";
+    return activeAddStatus.author_name ? `Adding ${activeAddStatus.author_name}` : "Adding author";
+  }, [activeAddStatus]);
+
+  if (!open) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-6">
@@ -116,14 +145,19 @@ export default function AddAuthorDialog({
                       <button
                         type="button"
                         onClick={async () => {
-                          const author = await addAuthor.mutateAsync(candidate.hardcover_id);
-                          onClose();
-                          navigate(`/authors/${author.id}`);
+                          setActiveHardcoverId(candidate.hardcover_id);
+                          navigatedAuthorId.current = null;
+                          const response = await addAuthor.mutateAsync(candidate.hardcover_id);
+                          setActiveHardcoverId(response.add.hardcover_id);
                         }}
-                        disabled={addAuthor.isPending}
+                        disabled={isAdding}
                         className="shrink-0 rounded-md border border-slate-600 bg-slate-700 px-3 py-1.5 text-xs font-medium text-slate-100 transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        {addAuthor.isPending ? "Adding..." : "Select"}
+                        {activeAddStatus?.status === "adding" && activeAddStatus.hardcover_id === candidate.hardcover_id
+                          ? `${addProgress}%`
+                          : addAuthor.isPending && activeHardcoverId === candidate.hardcover_id
+                            ? "Starting..."
+                            : "Select"}
                       </button>
                     </div>
                   );
@@ -131,8 +165,36 @@ export default function AddAuthorDialog({
               </div>
             )}
 
-            {addAuthor.isError && (
-              <div className="mt-3 text-sm text-rose-300">Failed to add selected author.</div>
+            {activeAddStatus && activeAddStatus.status !== "idle" && (
+              <div className={`mt-4 rounded-lg border p-3 ${
+                activeAddStatus.status === "failed"
+                  ? "border-rose-500/40 bg-rose-950/30"
+                  : "border-emerald-500/30 bg-emerald-950/20"
+              }`}>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <div className="min-w-0 text-sm font-medium text-slate-100">{statusTitle}</div>
+                  <div className="shrink-0 text-xs tabular-nums text-slate-400">
+                    {activeAddStatus.status === "adding" ? `${addProgress}%` : ""}
+                  </div>
+                </div>
+                <div className={`mb-2 line-clamp-2 text-xs ${
+                  activeAddStatus.status === "failed" ? "text-rose-200" : "text-slate-300"
+                }`}>
+                  {activeAddStatus.message || activeAddStatus.error || "Working..."}
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-slate-900">
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ${
+                      activeAddStatus.status === "failed" ? "bg-rose-500" : "bg-emerald-500"
+                    }`}
+                    style={{ width: `${activeAddStatus.status === "failed" ? 100 : addProgress}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {addAuthor.isError && !activeAddStatus && (
+              <div className="mt-3 text-sm text-rose-300">Failed to start selected author import.</div>
             )}
           </div>
         </div>

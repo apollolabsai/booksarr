@@ -273,6 +273,7 @@ export default function AuthorDetailPage() {
                     authorName={author.name}
                     selectedBookIds={showBulkIrcControls ? selectedBookIds : undefined}
                     onToggleSelected={showBulkIrcControls ? toggleBookSelection : undefined}
+                    virtualized={false}
                   />
                 </div>
               );
@@ -286,6 +287,7 @@ export default function AuthorDetailPage() {
                   authorName={author.name}
                   selectedBookIds={showBulkIrcControls ? selectedBookIds : undefined}
                   onToggleSelected={showBulkIrcControls ? toggleBookSelection : undefined}
+                  virtualized={false}
                 />
               </div>
             )}

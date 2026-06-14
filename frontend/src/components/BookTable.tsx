@@ -202,6 +202,7 @@ export default function BookTable({
   selectedBookIds,
   onToggleSelected,
   scrollRequest,
+  virtualized = true,
 }: {
   books: BookLike[];
   showAuthor?: boolean;
@@ -209,6 +210,7 @@ export default function BookTable({
   selectedBookIds?: Set<number>;
   onToggleSelected?: (bookId: number) => void;
   scrollRequest?: { id: number; index: number; sequence: number } | null;
+  virtualized?: boolean;
 }) {
   const refreshBook = useRefreshBook();
   const setBookVisibility = useSetBookVisibility();
@@ -263,6 +265,12 @@ export default function BookTable({
   };
   const rowHeight = 64;
   const virtualRows = useWindowVirtualRange(bodyRef, sortedBooks.length, rowHeight, 12);
+  const renderedIndexes = virtualized
+    ? virtualRows.virtualIndexes
+    : sortedBooks.map((_, index) => index);
+  const bottomSpacerHeight = virtualized
+    ? virtualRows.totalSize - virtualRows.offsetTop - virtualRows.virtualIndexes.length * rowHeight
+    : 0;
 
   useEffect(() => {
     if (!scrollRequest) return;
@@ -322,12 +330,12 @@ export default function BookTable({
             </tr>
           </thead>
           <tbody ref={bodyRef} className="divide-y divide-slate-700">
-            {virtualRows.offsetTop > 0 && (
+            {virtualized && virtualRows.offsetTop > 0 && (
               <tr aria-hidden="true">
                 <td colSpan={detailColSpan} style={{ height: virtualRows.offsetTop, padding: 0 }} />
               </tr>
             )}
-            {virtualRows.virtualIndexes.map((index) => {
+            {renderedIndexes.map((index) => {
               const book = sortedBooks[index];
               if (!book) return null;
               const imgUrl = getImageUrl(
@@ -554,12 +562,12 @@ export default function BookTable({
                 </Fragment>
               );
             })}
-            {virtualRows.totalSize - virtualRows.offsetTop - virtualRows.virtualIndexes.length * rowHeight > 0 && (
+            {bottomSpacerHeight > 0 && (
               <tr aria-hidden="true">
                 <td
                   colSpan={detailColSpan}
                   style={{
-                    height: virtualRows.totalSize - virtualRows.offsetTop - virtualRows.virtualIndexes.length * rowHeight,
+                    height: bottomSpacerHeight,
                     padding: 0,
                   }}
                 />
