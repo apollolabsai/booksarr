@@ -587,6 +587,22 @@ async def _upsert_author_directory(db: AsyncSession, author: Author, dir_name: s
     author_dir.author_id = author.id
 
 
+def _display_book_series_links(book: Book) -> list[BookSeries]:
+    """Hide duplicate alternate series links when a positioned series is present.
+
+    Hardcover can attach the same work to an English canonical series and to
+    translated/alternate series with no position. Showing all of them creates
+    duplicate author-detail groups while the book row still points at the
+    positioned canonical series.
+    """
+    links = list(book.book_series)
+    if any(link.position is not None for link in links):
+        positioned_links = [link for link in links if link.position is not None]
+        if positioned_links:
+            return positioned_links
+    return links
+
+
 @router.post("/{author_id}/refresh")
 async def refresh_author_route(
     author_id: int,
@@ -984,7 +1000,7 @@ async def get_author(author_id: int, db: AsyncSession = Depends(get_db)):
     books_out = []
     for book in books:
         series_info = []
-        for bs in book.book_series:
+        for bs in _display_book_series_links(book):
             s = bs.series
             series_info.append(SeriesPositionInfo(
                 series_id=s.id,

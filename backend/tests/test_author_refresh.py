@@ -19,6 +19,32 @@ from backend.app.services.openlibrary import OLBook, OpenLibraryLookupResult
 from backend.app.routers import authors as authors_router
 
 
+def test_display_book_series_links_hides_unpositioned_alternates_when_positioned_series_exists():
+    canonical = Series(id=1, name="The Famous Five", hardcover_id=11185)
+    translated = Series(id=2, name="An Cúigear Cróga", hardcover_id=128723)
+    book = Book(id=1, title="Good Old Timmy")
+    book.book_series = [
+        BookSeries(book_id=1, series_id=canonical.id, series=canonical, position=19.5),
+        BookSeries(book_id=1, series_id=translated.id, series=translated, position=None),
+    ]
+
+    links = authors_router._display_book_series_links(book)
+
+    assert [link.series.name for link in links] == ["The Famous Five"]
+
+
+def test_display_book_series_links_keeps_unpositioned_series_when_no_positioned_series_exists():
+    translated = Series(id=2, name="An Cúigear Cróga", hardcover_id=128723)
+    book = Book(id=1, title="Good Old Timmy")
+    book.book_series = [
+        BookSeries(book_id=1, series_id=translated.id, series=translated, position=None),
+    ]
+
+    links = authors_router._display_book_series_links(book)
+
+    assert [link.series.name for link in links] == ["An Cúigear Cróga"]
+
+
 def test_author_refresh_status_reports_new_release_count():
     status = AuthorRefreshStatus()
     status.start(42, mode="new_releases")
