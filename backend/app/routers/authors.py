@@ -301,6 +301,7 @@ async def _add_author_from_hardcover(
             book_result = await db.execute(select(Book).where(Book.hardcover_id == hc_book.id))
             book = book_result.scalar_one_or_none()
             tags_json = json.dumps(hc_book.tags) if hc_book.tags else None
+            genres_json = json.dumps(hc_book.genres)
             if book:
                 if book.title != hc_book.title:
                     book.google_id = None
@@ -331,6 +332,7 @@ async def _add_author_from_hardcover(
                 book.release_date = hc_book.release_date
                 book.cover_image_url = hc_book.image_url
                 book.tags = tags_json
+                book.genres = genres_json
                 book.rating = hc_book.rating
                 book.pages = hc_book.pages
                 book.language = hc_book.language
@@ -352,6 +354,7 @@ async def _add_author_from_hardcover(
                     release_date=hc_book.release_date,
                     cover_image_url=hc_book.image_url,
                     tags=tags_json,
+                    genres=genres_json,
                     rating=hc_book.rating,
                     pages=hc_book.pages,
                     language=hc_book.language,

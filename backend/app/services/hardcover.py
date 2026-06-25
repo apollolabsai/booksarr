@@ -83,6 +83,7 @@ class HCBook:
     isbn_10: str | None = None
     isbn_13: str | None = None
     tags: list[str] = field(default_factory=list)
+    genres: list[str] = field(default_factory=list)
     series_refs: list[HCSeriesRef] = field(default_factory=list)
 
 
@@ -439,13 +440,19 @@ class HardcoverClient:
             image_url = img.get("url", "")
 
         tags = []
+        genres = []
         cached_tags = b.get("cached_tags")
         if cached_tags and isinstance(cached_tags, dict):
-            for category_tags in cached_tags.values():
-                if isinstance(category_tags, list):
-                    for t in category_tags[:3]:
-                        if isinstance(t, dict) and "tag" in t:
-                            tags.append(t["tag"])
+            for category, category_tags in cached_tags.items():
+                if not isinstance(category_tags, list):
+                    continue
+                for tag_data in category_tags[:3]:
+                    if isinstance(tag_data, dict) and isinstance(tag_data.get("tag"), str):
+                        tag = tag_data["tag"].strip()
+                        if tag:
+                            tags.append(tag)
+                            if isinstance(category, str) and category.casefold() == "genre":
+                                genres.append(tag)
 
         series_refs = []
         for bs in b.get("book_series", []):
@@ -498,6 +505,7 @@ class HardcoverClient:
             isbn_10=isbn_10,
             isbn_13=isbn_13,
             tags=tags,
+            genres=genres,
             series_refs=series_refs,
         )
 

@@ -221,6 +221,7 @@ export interface Book {
   cover_image_url: string | null;
   cover_image_cached_path: string | null;
   cover_aspect_ratio: number | null;
+  genres: string[];
   rating: number | null;
   pages: number | null;
   is_owned: boolean;

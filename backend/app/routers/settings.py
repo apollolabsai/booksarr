@@ -109,6 +109,9 @@ async def update_settings(body: SettingsUpdate, db: AsyncSession = Depends(get_d
         )
 
     await db.commit()
+    if body.hardcover_api_key:
+        from backend.app.services.genre_backfill import start_genre_backfill
+        await start_genre_backfill()
     return {"status": "ok"}
 
 

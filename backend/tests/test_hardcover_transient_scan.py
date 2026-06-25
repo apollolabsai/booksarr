@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from backend.app.models import Author, Book, Setting
 from backend.app.services import library_sync
-from backend.app.services.hardcover import HCAuthor, HCBook, HardcoverLookupError
+from backend.app.services.hardcover import HCAuthor, HCBook, HardcoverClient, HardcoverLookupError
 from backend.app.services.openlibrary import OpenLibraryLookupResult
 from backend.app.services.scanner import ScanResult
 
@@ -65,6 +65,34 @@ def _reset_scan_status() -> None:
     library_sync.scan_status.status = "idle"
     library_sync.scan_status.progress = 0.0
     library_sync.scan_status.message = ""
+
+
+def test_hardcover_book_parser_keeps_all_tags_and_separates_genres():
+    client = HardcoverClient("test-key")
+
+    book = client._parse_hc_book({
+        "id": 123,
+        "title": "Genre Test",
+        "cached_tags": {
+            "Genre": [
+                {"tag": "Fantasy"},
+                {"tag": "Adventure"},
+                {"tag": "Young Adult"},
+                {"tag": "Fiction"},
+            ],
+            "Mood": [{"tag": "Adventurous"}],
+            "ContentWarning": [{"tag": "Animal cruelty"}],
+        },
+    })
+
+    assert book.tags == [
+        "Fantasy",
+        "Adventure",
+        "Young Adult",
+        "Adventurous",
+        "Animal cruelty",
+    ]
+    assert book.genres == ["Fantasy", "Adventure", "Young Adult"]
 
 
 @pytest.mark.asyncio

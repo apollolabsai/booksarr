@@ -33,6 +33,11 @@ const INDEX_KEYS = ["#", ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("")];
 
 type FilterKey = Exclude<(typeof FILTER_OPTIONS)[number]["value"], "all">;
 
+type GenreOption = {
+  value: string;
+  label: string;
+};
+
 type BookScrollTarget = {
   id: number;
   index: number;
@@ -54,6 +59,18 @@ function getFilterLabel(selected: FilterKey[]) {
     return FILTER_OPTIONS.find((option) => option.value === selected[0])?.label ?? "All Books";
   }
   return `${selected.length} Filters`;
+}
+
+function normalizedGenre(genre: string) {
+  return genre.trim().toLocaleLowerCase();
+}
+
+function getGenreFilterLabel(selected: string[], options: GenreOption[]) {
+  if (selected.length === 0) return "All Genres";
+  if (selected.length === 1) {
+    return options.find((option) => option.value === selected[0])?.label ?? "1 Genre";
+  }
+  return `${selected.length} Genres`;
 }
 
 function getGridColumnCount(width: number) {
@@ -139,25 +156,129 @@ function MultiSelectBookFilter({
   );
 }
 
+function MultiSelectGenreFilter({
+  options,
+  selected,
+  open,
+  onToggleOpen,
+  onToggleValue,
+  onClear,
+  menuRef,
+}: {
+  options: GenreOption[];
+  selected: string[];
+  open: boolean;
+  onToggleOpen: () => void;
+  onToggleValue: (value: string) => void;
+  onClear: () => void;
+  menuRef: { current: HTMLDivElement | null };
+}) {
+  return (
+    <div ref={(node) => { menuRef.current = node; }} className="relative">
+      <button
+        type="button"
+        onClick={onToggleOpen}
+        disabled={options.length === 0}
+        aria-expanded={open}
+        className="min-w-[164px] rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-slate-200 flex items-center justify-between gap-3 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <span className="truncate">{getGenreFilterLabel(selected, options)}</span>
+        <svg className="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute right-0 z-20 mt-2 w-72 rounded-lg border border-slate-600 bg-slate-800 p-2 shadow-xl">
+          <div className="mb-2 flex items-center justify-between px-1">
+            <span className="text-xs font-medium text-slate-400">
+              {selected.length === 0 ? "All genres shown" : `${selected.length} selected`}
+            </span>
+            <button
+              type="button"
+              onClick={onClear}
+              className="text-xs text-emerald-400 hover:text-emerald-300"
+            >
+              Clear
+            </button>
+          </div>
+          <div className="max-h-80 space-y-1 overflow-y-auto">
+            <label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm text-slate-200 hover:bg-slate-700">
+              <input
+                type="checkbox"
+                checked={selected.length === 0}
+                onChange={onClear}
+                className="rounded border-slate-600 bg-slate-700 text-emerald-500 focus:ring-emerald-500"
+              />
+              <span>All Genres</span>
+            </label>
+            {options.map((option) => (
+              <label
+                key={option.value}
+                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm text-slate-200 hover:bg-slate-700"
+              >
+                <input
+                  type="checkbox"
+                  checked={selected.includes(option.value)}
+                  onChange={() => onToggleValue(option.value)}
+                  className="rounded border-slate-600 bg-slate-700 text-emerald-500 focus:ring-emerald-500"
+                />
+                <span className="truncate">{option.label}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function BooksPage() {
   const navigate = useNavigate();
   const [sort, setSort] = useState("title");
   const [filters, setFilters] = useState<FilterKey[]>([]);
+  const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [view, setView] = useState<"grid" | "table">("grid");
   const [selectedBookIds, setSelectedBookIds] = useState<Set<number>>(new Set());
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
+  const [genreMenuOpen, setGenreMenuOpen] = useState(false);
   const [selectedIndexKey, setSelectedIndexKey] = useState<string | null>(null);
   const [scrollRequest, setScrollRequest] = useState<BookScrollRequest | null>(null);
   const filterMenuRef = useRef<HTMLDivElement | null>(null);
+  const genreMenuRef = useRef<HTMLDivElement | null>(null);
   const { data: books, isLoading } = useBooks(sort, undefined, search);
   const isMobile = useIsMobile();
   const showBulkIrcControls = !isMobile && view === "table";
+  const genreOptions = useMemo<GenreOption[]>(() => {
+    const labelsByGenre = new Map<string, Map<string, number>>();
+    for (const book of books ?? []) {
+      for (const genre of book.genres) {
+        const value = normalizedGenre(genre);
+        if (!value) continue;
+        const labels = labelsByGenre.get(value) ?? new Map<string, number>();
+        labels.set(genre, (labels.get(genre) ?? 0) + 1);
+        labelsByGenre.set(value, labels);
+      }
+    }
+
+    return Array.from(labelsByGenre, ([value, labels]) => {
+      const label = Array.from(labels.entries()).sort((a, b) => (
+        b[1] - a[1] || a[0].localeCompare(b[0])
+      ))[0][0];
+      return { value, label };
+    }).sort((a, b) => a.label.localeCompare(b.label));
+  }, [books]);
   const filteredBooks = useMemo(() => {
     if (!books) return [];
-    if (filters.length === 0) return books;
-    return books.filter((book) => filters.some((filter) => bookMatchesFilter(book, filter)));
-  }, [books, filters]);
+    return books.filter((book) => {
+      const matchesBookFilter = filters.length === 0
+        || filters.some((filter) => bookMatchesFilter(book, filter));
+      const bookGenres = new Set(book.genres.map(normalizedGenre));
+      const matchesGenre = selectedGenres.length === 0
+        || selectedGenres.some((genre) => bookGenres.has(genre));
+      return matchesBookFilter && matchesGenre;
+    });
+  }, [books, filters, selectedGenres]);
   const showTitleIndex = sort === "title" || sort === "-title";
   const indexTargets = useMemo(() => {
     const targets = new Map<string, BookScrollTarget>();
@@ -208,6 +329,9 @@ export default function BooksPage() {
       if (filterMenuRef.current && !filterMenuRef.current.contains(event.target as Node)) {
         setFilterMenuOpen(false);
       }
+      if (genreMenuRef.current && !genreMenuRef.current.contains(event.target as Node)) {
+        setGenreMenuOpen(false);
+      }
     };
 
     document.addEventListener("mousedown", handlePointerDown);
@@ -251,6 +375,14 @@ export default function BooksPage() {
     ));
   }, []);
 
+  const toggleGenreValue = useCallback((value: string) => {
+    setSelectedGenres((current) => (
+      current.includes(value)
+        ? current.filter((item) => item !== value)
+        : [...current, value]
+    ));
+  }, []);
+
   const openIrcDownloads = useCallback(() => {
     if (selectedBooks.length === 0) return;
     navigate("/irc-downloads", {
@@ -282,10 +414,25 @@ export default function BooksPage() {
           <MultiSelectBookFilter
             selected={filters}
             open={filterMenuOpen}
-            onToggleOpen={() => setFilterMenuOpen((current) => !current)}
+            onToggleOpen={() => {
+              setGenreMenuOpen(false);
+              setFilterMenuOpen((current) => !current);
+            }}
             onToggleValue={toggleFilterValue}
             onClear={() => setFilters([])}
             menuRef={filterMenuRef}
+          />
+          <MultiSelectGenreFilter
+            options={genreOptions}
+            selected={selectedGenres}
+            open={genreMenuOpen}
+            onToggleOpen={() => {
+              setFilterMenuOpen(false);
+              setGenreMenuOpen((current) => !current);
+            }}
+            onToggleValue={toggleGenreValue}
+            onClear={() => setSelectedGenres([])}
+            menuRef={genreMenuRef}
           />
           {isMobile ? (
             <select

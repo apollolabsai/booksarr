@@ -1422,6 +1422,7 @@ async def _sync_author_hardcover_catalog(
         existing = await db.execute(select(Book).where(Book.hardcover_id == hc_book.id))
         book = existing.scalar_one_or_none()
         tags_json = json.dumps(hc_book.tags) if hc_book.tags else None
+        genres_json = json.dumps(hc_book.genres)
 
         if book:
             book.title = hc_book.title
@@ -1439,6 +1440,7 @@ async def _sync_author_hardcover_catalog(
             book.release_date = hc_book.release_date
             book.cover_image_url = hc_book.image_url
             book.tags = tags_json
+            book.genres = genres_json
             book.rating = hc_book.rating
             book.pages = hc_book.pages
             book.language = hc_book.language
@@ -1460,6 +1462,7 @@ async def _sync_author_hardcover_catalog(
                 release_date=hc_book.release_date,
                 cover_image_url=hc_book.image_url,
                 tags=tags_json,
+                genres=genres_json,
                 rating=hc_book.rating,
                 pages=hc_book.pages,
                 language=hc_book.language,
@@ -2321,6 +2324,7 @@ async def run_full_sync(force: bool = False):
                         )
                         book = existing.scalar_one_or_none()
                         tags_json = json.dumps(hc_book.tags) if hc_book.tags else None
+                        genres_json = json.dumps(hc_book.genres)
 
                         if book:
                             # If title changed, clear cached Google/OL matches so
@@ -2344,6 +2348,7 @@ async def run_full_sync(force: bool = False):
                             book.release_date = hc_book.release_date
                             book.cover_image_url = hc_book.image_url
                             book.tags = tags_json
+                            book.genres = genres_json
                             book.rating = hc_book.rating
                             book.pages = hc_book.pages
                             book.hardcover_slug = hc_book.slug
@@ -2374,6 +2379,7 @@ async def run_full_sync(force: bool = False):
                                 release_date=hc_book.release_date,
                                 cover_image_url=hc_book.image_url,
                                 tags=tags_json,
+                                genres=genres_json,
                                 rating=hc_book.rating,
                                 pages=hc_book.pages,
                                 language=hc_book.language,
@@ -3277,6 +3283,7 @@ async def _refresh_book_from_scratch(db: AsyncSession, book: Book) -> None:
     book.description = local_description
     book.release_date = None
     book.tags = None
+    book.genres = None
     book.rating = None
     book.pages = None
     book.google_id = None
@@ -3303,12 +3310,14 @@ async def _refresh_book_from_scratch(db: AsyncSession, book: Book) -> None:
 
         if hc_book:
             tags_json = json.dumps(hc_book.tags) if hc_book.tags else None
+            genres_json = json.dumps(hc_book.genres)
             book.title = hc_book.title
             book.hardcover_slug = hc_book.slug
             book.description = hc_book.description
             book.release_date = hc_book.release_date
             book.cover_image_url = hc_book.image_url
             book.tags = tags_json
+            book.genres = genres_json
             book.rating = hc_book.rating
             book.pages = hc_book.pages
             book.compilation = hc_book.compilation

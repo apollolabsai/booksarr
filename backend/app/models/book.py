@@ -55,6 +55,7 @@ class Book(Base):
     manual_series_name: Mapped[str | None] = mapped_column(String, nullable=True)
     manual_series_position: Mapped[float | None] = mapped_column(Float, nullable=True)
     tags: Mapped[str | None] = mapped_column(Text, nullable=True)
+    genres: Mapped[str | None] = mapped_column(Text, nullable=True)
     rating: Mapped[float | None] = mapped_column(Float, nullable=True)
     pages: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_owned: Mapped[bool] = mapped_column(Boolean, default=False)

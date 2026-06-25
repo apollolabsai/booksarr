@@ -37,11 +37,14 @@ async def lifespan(app: FastAPI):
 
     from backend.app.services.scheduler import start_scheduler, stop_scheduler
     from backend.app.services.irc_worker import start_irc_worker, stop_irc_worker
+    from backend.app.services.genre_backfill import start_genre_backfill, stop_genre_backfill
     await start_scheduler()
     await start_irc_worker()
+    await start_genre_backfill()
 
     yield
 
+    await stop_genre_backfill()
     await stop_irc_worker()
     await stop_scheduler()
     logger.info("Shutting down Booksarr")

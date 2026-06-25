@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy import select
@@ -70,6 +72,26 @@ async def test_list_books_title_sort_uses_indexed_normalized_key(db_session):
 
 
 @pytest.mark.asyncio
+async def test_list_books_exposes_normalized_hardcover_genres(db_session):
+    author = Author(name="Example Author")
+    db_session.add(author)
+    await db_session.flush()
+    db_session.add(
+        Book(
+            title="Genre Test",
+            author_id=author.id,
+            manual_visibility="visible",
+            genres=json.dumps(["Fantasy", " Science Fiction ", "fantasy", "", 42]),
+        )
+    )
+    await db_session.commit()
+
+    summaries = await list_books(sort="title", owned=None, author_id=None, search="", db=db_session)
+
+    assert summaries[0].genres == ["Fantasy", "Science Fiction"]
+
+
+@pytest.mark.asyncio
 async def test_book_title_sort_key_tracks_manual_title_overrides(db_session):
     author = Author(name="Example Author")
     db_session.add(author)
@@ -112,3 +134,18 @@ def test_schema_migration_backfills_missing_book_title_sort_keys(tmp_path):
         row = conn.exec_driver_sql("SELECT title_sort_key FROM books").fetchone()
         assert row is not None
         assert row[0] == effective_title_sort_key("Z Original", "The Alpha Override")
+
+
+def test_schema_migration_adds_book_genres_column(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'test.db'}")
+    with engine.begin() as conn:
+        Base.metadata.create_all(conn)
+        conn.exec_driver_sql("ALTER TABLE books DROP COLUMN genres")
+
+        run_schema_migrations(conn)
+
+        columns = {
+            row[1]
+            for row in conn.exec_driver_sql("PRAGMA table_info(books)").fetchall()
+        }
+        assert "genres" in columns

@@ -145,6 +145,7 @@ def run_schema_migrations(conn: Connection) -> None:
         "manual_language": "VARCHAR",
         "manual_series_name": "VARCHAR",
         "manual_series_position": "FLOAT",
+        "genres": "TEXT",
     }
 
     for column_name, column_type in book_column_defs.items():

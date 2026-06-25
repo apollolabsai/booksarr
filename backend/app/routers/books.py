@@ -1,3 +1,4 @@
+import json
 import tempfile
 import zipfile
 from pathlib import Path
@@ -193,6 +194,32 @@ def _archive_directory_for_download(source_dir: Path) -> Path:
     return archive_path
 
 
+def _book_genres(book: Book) -> list[str]:
+    if not book.genres:
+        return []
+
+    try:
+        raw_genres = json.loads(book.genres)
+    except (TypeError, json.JSONDecodeError):
+        return []
+
+    if not isinstance(raw_genres, list):
+        return []
+
+    genres: list[str] = []
+    seen: set[str] = set()
+    for raw_genre in raw_genres:
+        if not isinstance(raw_genre, str):
+            continue
+        genre = raw_genre.strip()
+        key = genre.casefold()
+        if not genre or key in seen:
+            continue
+        seen.add(key)
+        genres.append(genre)
+    return genres
+
+
 def _book_summary(book: Book) -> BookSummary:
     owned_copy_count = len(book.files) if book.is_owned else 0
     return BookSummary(
@@ -231,6 +258,7 @@ def _book_summary(book: Book) -> BookSummary:
         cover_image_url=book.cover_image_url,
         cover_image_cached_path=book.cover_image_cached_path,
         cover_aspect_ratio=get_cached_cover_aspect_ratio(book.cover_image_cached_path),
+        genres=_book_genres(book),
         rating=book.rating,
         pages=book.pages,
         is_owned=book.is_owned,
@@ -604,6 +632,7 @@ async def get_book(book_id: int, db: AsyncSession = Depends(get_db)):
         cover_image_cached_path=book.cover_image_cached_path,
         cover_aspect_ratio=get_cached_cover_aspect_ratio(book.cover_image_cached_path),
         tags=book.tags,
+        genres=_book_genres(book),
         rating=book.rating,
         pages=book.pages,
         is_owned=book.is_owned,
