@@ -81,7 +81,17 @@ async def test_list_books_exposes_normalized_hardcover_genres(db_session):
             title="Genre Test",
             author_id=author.id,
             manual_visibility="visible",
-            genres=json.dumps(["Fantasy", " Science Fiction ", "fantasy", "", 42]),
+            genres=json.dumps([
+                "Fantasy",
+                " Science Fiction ",
+                "fantasy",
+                "FIC009020",
+                "General",
+                "Audiobook",
+                "Mystery / Detective",
+                "",
+                42,
+            ]),
         )
     )
     await db_session.commit()
@@ -149,3 +159,31 @@ def test_schema_migration_adds_book_genres_column(tmp_path):
             for row in conn.exec_driver_sql("PRAGMA table_info(books)").fetchall()
         }
         assert "genres" in columns
+
+
+def test_schema_migration_normalizes_existing_book_genres(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'test.db'}")
+    with engine.begin() as conn:
+        Base.metadata.create_all(conn)
+        conn.exec_driver_sql(
+            "INSERT INTO authors (name, author_key, book_count_local, book_count_total, created_at, updated_at) "
+            "VALUES ('Example Author', 'example author', 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        )
+        conn.exec_driver_sql(
+            "INSERT INTO books (title, author_id, genres, is_owned, created_at, updated_at) "
+            "VALUES ('Genre Test', 1, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            (json.dumps([
+                "Adventure fiction",
+                "Adventure stories",
+                "FIC009020",
+                "General",
+                "Audiobook",
+                "Mystery",
+            ]),),
+        )
+
+        run_schema_migrations(conn)
+
+        row = conn.exec_driver_sql("SELECT genres FROM books").fetchone()
+        assert row is not None
+        assert json.loads(row[0]) == ["Adventure", "Mystery"]

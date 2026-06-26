@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.database import async_session
 from backend.app.models import Author, Book, Setting
+from backend.app.services.genre_normalization import normalize_genres
 from backend.app.services.hardcover import HardcoverClient, HardcoverLookupError
 from backend.app.services.library_sync import get_api_key
 
@@ -95,7 +96,7 @@ async def backfill_missing_genres(
                         continue
                     genre_updates.append((
                         local_book_id,
-                        json.dumps(hardcover_book.genres),
+                        json.dumps(normalize_genres(hardcover_book.genres)),
                     ))
 
                 for local_book_id, genres_json in genre_updates:
@@ -132,7 +133,7 @@ async def backfill_missing_genres(
                 await db.execute(
                     update(Book)
                     .where(Book.id == local_book_id)
-                    .values(genres=json.dumps(hardcover_book.genres))
+                    .values(genres=json.dumps(normalize_genres(hardcover_book.genres)))
                 )
                 await db.commit()
                 updated += 1

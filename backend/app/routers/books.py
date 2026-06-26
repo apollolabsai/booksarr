@@ -56,6 +56,7 @@ from backend.app.services.library_sync import (
     get_book_cover_options,
     set_book_cover_selection,
 )
+from backend.app.services.genre_normalization import normalize_genres
 from backend.app.services.image_cache import get_cached_cover_aspect_ratio
 from backend.app.utils.opf_parser import OPFMetadata, write_epub_opf_metadata
 
@@ -206,18 +207,7 @@ def _book_genres(book: Book) -> list[str]:
     if not isinstance(raw_genres, list):
         return []
 
-    genres: list[str] = []
-    seen: set[str] = set()
-    for raw_genre in raw_genres:
-        if not isinstance(raw_genre, str):
-            continue
-        genre = raw_genre.strip()
-        key = genre.casefold()
-        if not genre or key in seen:
-            continue
-        seen.add(key)
-        genres.append(genre)
-    return genres
+    return normalize_genres(raw_genres)
 
 
 def _book_summary(book: Book) -> BookSummary:

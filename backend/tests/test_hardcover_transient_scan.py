@@ -76,8 +76,8 @@ def test_hardcover_book_parser_keeps_all_tags_and_separates_genres():
         "cached_tags": {
             "Genre": [
                 {"tag": "Fantasy"},
-                {"tag": "Adventure"},
-                {"tag": "Young Adult"},
+                {"tag": "Adventure fiction"},
+                {"tag": "FIC009020"},
                 {"tag": "Fiction"},
             ],
             "Mood": [{"tag": "Adventurous"}],
@@ -87,12 +87,12 @@ def test_hardcover_book_parser_keeps_all_tags_and_separates_genres():
 
     assert book.tags == [
         "Fantasy",
-        "Adventure",
-        "Young Adult",
+        "Adventure fiction",
+        "FIC009020",
         "Adventurous",
         "Animal cruelty",
     ]
-    assert book.genres == ["Fantasy", "Adventure", "Young Adult"]
+    assert book.genres == ["Fantasy", "Adventure"]
 
 
 @pytest.mark.asyncio

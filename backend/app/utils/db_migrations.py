@@ -1,7 +1,9 @@
 from collections import defaultdict
+import json
 
 from sqlalchemy.engine import Connection
 
+from backend.app.services.genre_normalization import normalize_genres
 from backend.app.utils.author_name import clean_author_name, normalize_author_key
 from backend.app.utils.title_sort import effective_title_sort_key
 
@@ -113,6 +115,30 @@ def _merge_duplicate_authors(conn: Connection) -> None:
             conn.exec_driver_sql("DELETE FROM authors WHERE id = ?", (duplicate_id,))
 
 
+def _normalize_book_genres(conn: Connection) -> None:
+    rows = conn.exec_driver_sql(
+        "SELECT id, genres FROM books WHERE genres IS NOT NULL"
+    ).fetchall()
+    for book_id, genres_json in rows:
+        try:
+            raw_genres = json.loads(genres_json)
+        except (TypeError, json.JSONDecodeError):
+            normalized_genres: list[str] = []
+        else:
+            if isinstance(raw_genres, list):
+                normalized_genres = normalize_genres(raw_genres)
+            else:
+                normalized_genres = []
+
+        normalized_json = json.dumps(normalized_genres)
+        if normalized_json == genres_json:
+            continue
+        conn.exec_driver_sql(
+            "UPDATE books SET genres = ? WHERE id = ?",
+            (normalized_json, book_id),
+        )
+
+
 def run_schema_migrations(conn: Connection) -> None:
     book_rows = conn.exec_driver_sql("PRAGMA table_info(books)").fetchall()
     existing_book_columns = {row[1] for row in book_rows}
@@ -154,6 +180,7 @@ def run_schema_migrations(conn: Connection) -> None:
         conn.exec_driver_sql(f"ALTER TABLE books ADD COLUMN {column_name} {column_type}")
         existing_book_columns.add(column_name)
 
+    _normalize_book_genres(conn)
     _backfill_book_title_sort_keys(conn)
     conn.exec_driver_sql(
         "CREATE INDEX IF NOT EXISTS ix_books_title_sort_key ON books (title_sort_key)"

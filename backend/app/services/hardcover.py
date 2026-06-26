@@ -10,6 +10,7 @@ from email.utils import parsedate_to_datetime
 
 import httpx
 
+from backend.app.services.genre_normalization import normalize_genres
 from backend.app.utils.api_usage import record_api_call
 
 logger = logging.getLogger("booksarr.hardcover")
@@ -505,7 +506,7 @@ class HardcoverClient:
             isbn_10=isbn_10,
             isbn_13=isbn_13,
             tags=tags,
-            genres=genres,
+            genres=normalize_genres(genres),
             series_refs=series_refs,
         )
 
