@@ -117,6 +117,39 @@ class BookVisibilityRequest(BaseModel):
     action: str
 
 
+class BookMatchCandidate(BaseModel):
+    id: int
+    title: str
+    author_id: int
+    author_name: str
+    release_date: str | None
+    cover_image_url: str | None
+    cover_image_cached_path: str | None
+    cover_aspect_ratio: float | None
+    is_owned: bool
+    owned_copy_count: int
+    is_hidden: bool
+    hidden_categories: list[HiddenCategoryTag]
+    series_info: list[SeriesPositionInfo]
+
+
+class BookMatchCandidatesResponse(BaseModel):
+    candidates: list[BookMatchCandidate]
+
+
+class BookFixMatchRequest(BaseModel):
+    target_book_id: int
+    book_file_ids: list[int]
+
+
+class BookFixMatchResponse(BaseModel):
+    status: str
+    message: str
+    source_book_id: int
+    target_book_id: int
+    moved_file_ids: list[int]
+
+
 class CoverSearchResult(BaseModel):
     url: str
     thumbnail_url: str

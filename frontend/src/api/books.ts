@@ -3,6 +3,8 @@ import { fetchApi } from "./client";
 import type {
   Book,
   BookMetadataField,
+  BookFixMatchResponse,
+  BookMatchCandidatesResponse,
   BookMetadataInfoResponse,
   BookMetadataValues,
   BookMetadataWriteOpfResponse,
@@ -82,6 +84,31 @@ export function useBookMetadataInfo(bookId: number | null, enabled: boolean) {
   });
 }
 
+export function useBookMatchCandidates({
+  search,
+  authorId,
+  excludeBookId,
+  enabled,
+}: {
+  search: string;
+  authorId?: number | null;
+  excludeBookId?: number | null;
+  enabled: boolean;
+}) {
+  return useQuery({
+    queryKey: ["bookMatchCandidates", search, authorId ?? null, excludeBookId ?? null],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (search.trim()) params.set("search", search.trim());
+      if (authorId != null) params.set("author_id", String(authorId));
+      if (excludeBookId != null) params.set("exclude_book_id", String(excludeBookId));
+      return fetchApi<BookMatchCandidatesResponse>(`/books/match-candidates?${params}`);
+    },
+    enabled,
+    placeholderData: keepPreviousData,
+  });
+}
+
 function invalidateBookMetadataQueries(queryClient: ReturnType<typeof useQueryClient>, bookId: number) {
   queryClient.invalidateQueries({ queryKey: ["books"] });
   queryClient.invalidateQueries({ queryKey: ["hiddenBooks"] });
@@ -156,6 +183,30 @@ export function useWriteOpfBookMetadata() {
       }),
     onSuccess: (_, variables) => {
       invalidateBookMetadataQueries(queryClient, variables.bookId);
+    },
+  });
+}
+
+export function useFixBookMatch() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      sourceBookId,
+      targetBookId,
+      bookFileIds,
+    }: {
+      sourceBookId: number;
+      targetBookId: number;
+      bookFileIds: number[];
+    }) =>
+      fetchApi<BookFixMatchResponse>(`/books/${sourceBookId}/fix-match`, {
+        method: "POST",
+        body: JSON.stringify({ target_book_id: targetBookId, book_file_ids: bookFileIds }),
+      }),
+    onSuccess: (_, variables) => {
+      invalidateBookMetadataQueries(queryClient, variables.sourceBookId);
+      invalidateBookMetadataQueries(queryClient, variables.targetBookId);
+      queryClient.invalidateQueries({ queryKey: ["bookMatchCandidates"] });
     },
   });
 }

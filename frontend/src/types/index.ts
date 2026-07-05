@@ -239,6 +239,37 @@ export interface HiddenBook extends Book {
   }>;
 }
 
+export interface BookMatchCandidate {
+  id: number;
+  title: string;
+  author_id: number;
+  author_name: string;
+  release_date: string | null;
+  cover_image_url: string | null;
+  cover_image_cached_path: string | null;
+  cover_aspect_ratio: number | null;
+  is_owned: boolean;
+  owned_copy_count: number;
+  is_hidden: boolean;
+  hidden_categories: Array<{
+    key: string;
+    label: string;
+  }>;
+  series_info: SeriesPositionInfo[];
+}
+
+export interface BookMatchCandidatesResponse {
+  candidates: BookMatchCandidate[];
+}
+
+export interface BookFixMatchResponse {
+  status: string;
+  message: string;
+  source_book_id: number;
+  target_book_id: number;
+  moved_file_ids: number[];
+}
+
 export interface CoverOption {
   key: string;
   source: string;

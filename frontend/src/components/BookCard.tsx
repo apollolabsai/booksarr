@@ -8,6 +8,7 @@ import IrcSearchDialog from "./IrcSearchDialog";
 import { useRefreshBook, useSetBookVisibility } from "../api/books";
 import BookDownloadSelector from "./BookDownloadSelector";
 import MetadataInfoDialog from "./MetadataInfoDialog";
+import FixBookMatchDialog from "./FixBookMatchDialog";
 
 type BookLike = BookInAuthor | Book;
 type MenuPosition = {
@@ -69,6 +70,7 @@ export default function BookCard({
   const [coverPickerOpen, setCoverPickerOpen] = useState(false);
   const [ircSearchOpen, setIrcSearchOpen] = useState(false);
   const [metadataInfoOpen, setMetadataInfoOpen] = useState(false);
+  const [fixMatchOpen, setFixMatchOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -275,6 +277,17 @@ export default function BookCard({
                   type="button"
                   onClick={() => {
                     closeMenu();
+                    setFixMatchOpen(true);
+                  }}
+                  disabled={book.local_files.length === 0}
+                  className="flex w-full items-center whitespace-nowrap rounded-md px-3 py-2 text-sm text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Fix Match
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    closeMenu();
                     refreshBook.mutate(book.id);
                   }}
                   disabled={refreshBook.isPending}
@@ -357,6 +370,14 @@ export default function BookCard({
         title={book.title}
         open={metadataInfoOpen}
         onClose={() => setMetadataInfoOpen(false)}
+      />
+      <FixBookMatchDialog
+        sourceBookId={book.id}
+        sourceTitle={book.title}
+        sourceAuthorName={isFullBook(book) ? book.author_name : authorName}
+        localFiles={book.local_files}
+        open={fixMatchOpen}
+        onClose={() => setFixMatchOpen(false)}
       />
     </>
   );

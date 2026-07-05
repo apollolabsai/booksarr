@@ -7,6 +7,7 @@ import CoverPickerDialog from "./CoverPickerDialog";
 import IrcSearchDialog from "./IrcSearchDialog";
 import BookDownloadSelector from "./BookDownloadSelector";
 import MetadataInfoDialog from "./MetadataInfoDialog";
+import FixBookMatchDialog from "./FixBookMatchDialog";
 import { compareTitles } from "../utils/titleSort";
 import { useWindowVirtualRange } from "../hooks/useWindowVirtualRange";
 
@@ -217,6 +218,12 @@ export default function BookTable({
   const [coverPickerBook, setCoverPickerBook] = useState<{ id: number; title: string } | null>(null);
   const [ircSearchBook, setIrcSearchBook] = useState<{ id: number; title: string; authorName: string | null } | null>(null);
   const [metadataInfoBook, setMetadataInfoBook] = useState<{ id: number; title: string } | null>(null);
+  const [fixMatchBook, setFixMatchBook] = useState<{
+    id: number;
+    title: string;
+    authorName: string | null;
+    localFiles: BookLike["local_files"];
+  } | null>(null);
   const [sortKey, setSortKey] = useState<TableSortKey | null>(null);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
@@ -469,6 +476,21 @@ export default function BookTable({
                             <circle cx="11" cy="11" r="6" strokeWidth={2} />
                           </svg>
                         </ActionIconButton>
+                        <ActionIconButton
+                          label="Fix match"
+                          onClick={() => setFixMatchBook({
+                            id: book.id,
+                            title: book.title,
+                            authorName: authorName ?? contextAuthorName ?? null,
+                            localFiles,
+                          })}
+                          disabled={localFiles.length === 0}
+                          preferBelow={index === 0}
+                        >
+                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h10m0 0-3-3m3 3-3 3M17 17H7m0 0 3 3m-3-3 3-3" />
+                          </svg>
+                        </ActionIconButton>
                         <BookDownloadSelector
                           bookId={book.id}
                           localFiles={localFiles}
@@ -594,6 +616,14 @@ export default function BookTable({
         title={metadataInfoBook?.title ?? ""}
         open={metadataInfoBook !== null}
         onClose={() => setMetadataInfoBook(null)}
+      />
+      <FixBookMatchDialog
+        sourceBookId={fixMatchBook?.id ?? null}
+        sourceTitle={fixMatchBook?.title ?? ""}
+        sourceAuthorName={fixMatchBook?.authorName ?? null}
+        localFiles={fixMatchBook?.localFiles ?? []}
+        open={fixMatchBook !== null}
+        onClose={() => setFixMatchBook(null)}
       />
     </>
   );

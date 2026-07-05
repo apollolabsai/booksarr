@@ -33,6 +33,10 @@ from backend.app.schemas.book import (
     BookMetadataWriteOpfRequest,
     BookMetadataWriteOpfResponse,
     BookOpfMetadataFile,
+    BookFixMatchRequest,
+    BookFixMatchResponse,
+    BookMatchCandidate,
+    BookMatchCandidatesResponse,
 )
 from backend.app.utils.book_metadata import (
     effective_author_name,
@@ -274,6 +278,18 @@ def _book_summary(book: Book) -> BookSummary:
     )
 
 
+def _series_info(book: Book) -> list[SeriesPositionInfo]:
+    return [
+        SeriesPositionInfo(
+            series_id=bs.series.id,
+            series_name=bs.series.name,
+            position=bs.position,
+        )
+        for bs in book.book_series
+        if bs.series is not None
+    ]
+
+
 @router.get("", response_model=list[BookSummary])
 async def list_books(
     sort: str = Query("title", regex="^(title|-title|author|-author|date|-date)$"),
@@ -324,6 +340,68 @@ async def list_books(
     return [_book_summary(book) for book in books]
 
 
+@router.get("/match-candidates", response_model=BookMatchCandidatesResponse)
+async def list_book_match_candidates(
+    search: str = Query("", max_length=200),
+    author_id: int | None = Query(None),
+    exclude_book_id: int | None = Query(None),
+    limit: int = Query(30, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    query = (
+        select(Book)
+        .join(Author)
+        .options(
+            selectinload(Book.author),
+            selectinload(Book.files),
+            selectinload(Book.book_series).selectinload(BookSeries.series),
+        )
+    )
+
+    normalized_search = search.strip()
+    if normalized_search:
+        query = query.where(
+            or_(
+                Book.title.ilike(f"%{normalized_search}%"),
+                Book.manual_title.ilike(f"%{normalized_search}%"),
+                Author.name.ilike(f"%{normalized_search}%"),
+                Book.manual_author_name.ilike(f"%{normalized_search}%"),
+            )
+        )
+    if author_id is not None:
+        query = query.where(Book.author_id == author_id)
+    if exclude_book_id is not None:
+        query = query.where(Book.id != exclude_book_id)
+
+    query = query.order_by(Author.name.asc(), Book.title_sort_key.asc(), Book.title.asc(), Book.id.asc()).limit(limit)
+    result = await db.execute(query)
+    visibility_settings = await get_book_visibility_settings(db)
+    candidates: list[BookMatchCandidate] = []
+    for book in result.scalars().all():
+        hidden_categories = [
+            HiddenCategoryTag(key=key, label=label)
+            for key, label in get_hidden_categories(book, visibility_settings)
+        ]
+        candidates.append(
+            BookMatchCandidate(
+                id=book.id,
+                title=effective_title(book),
+                author_id=book.author_id,
+                author_name=effective_author_name(book),
+                release_date=effective_release_date(book),
+                cover_image_url=book.cover_image_url,
+                cover_image_cached_path=book.cover_image_cached_path,
+                cover_aspect_ratio=get_cached_cover_aspect_ratio(book.cover_image_cached_path),
+                is_owned=book.is_owned,
+                owned_copy_count=len(book.files) if book.is_owned else 0,
+                is_hidden=bool(hidden_categories),
+                hidden_categories=hidden_categories,
+                series_info=_series_info(book),
+            )
+        )
+    return BookMatchCandidatesResponse(candidates=candidates)
+
+
 @router.get("/hidden", response_model=list[HiddenBookSummary])
 async def list_hidden_books(
     search: str = Query("", max_length=200),
@@ -367,6 +445,68 @@ async def list_hidden_books(
             ],
         ))
     return hidden_books
+
+
+@router.post("/{book_id}/fix-match", response_model=BookFixMatchResponse)
+async def fix_book_match(
+    book_id: int,
+    body: BookFixMatchRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    if body.target_book_id == book_id:
+        raise HTTPException(status_code=400, detail="Target book must be different")
+
+    file_ids = sorted(set(body.book_file_ids))
+    if not file_ids:
+        raise HTTPException(status_code=400, detail="Select at least one local file")
+
+    source_result = await db.execute(
+        select(Book)
+        .where(Book.id == book_id)
+        .options(selectinload(Book.files))
+    )
+    source_book = source_result.scalar_one_or_none()
+    if not source_book:
+        raise HTTPException(status_code=404, detail="Source book not found")
+
+    target_result = await db.execute(
+        select(Book)
+        .where(Book.id == body.target_book_id)
+        .options(selectinload(Book.files))
+    )
+    target_book = target_result.scalar_one_or_none()
+    if not target_book:
+        raise HTTPException(status_code=404, detail="Target book not found")
+
+    selected_files = [book_file for book_file in source_book.files if book_file.id in file_ids]
+    found_file_ids = {book_file.id for book_file in selected_files}
+    missing_file_ids = [file_id for file_id in file_ids if file_id not in found_file_ids]
+    if missing_file_ids:
+        raise HTTPException(status_code=404, detail=f"Local file not found on source book: {missing_file_ids[0]}")
+
+    remaining_source_files = len([book_file for book_file in source_book.files if book_file.id not in found_file_ids])
+    for book_file in selected_files:
+        book_file.book = target_book
+
+    target_book.is_owned = True
+    target_book.manual_visibility = "visible"
+
+    if remaining_source_files <= 0:
+        if source_book.hardcover_id:
+            source_book.is_owned = False
+        else:
+            await db.delete(source_book)
+    else:
+        source_book.is_owned = True
+
+    await db.commit()
+    return BookFixMatchResponse(
+        status="ok",
+        message=f"Moved {len(selected_files)} local file(s) to {effective_title(target_book)}",
+        source_book_id=book_id,
+        target_book_id=target_book.id,
+        moved_file_ids=file_ids,
+    )
 
 
 @router.get("/{book_id}/metadata-info", response_model=BookMetadataInfoResponse)
