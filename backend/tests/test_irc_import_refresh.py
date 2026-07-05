@@ -277,6 +277,78 @@ async def test_repair_local_file_links_uses_path_title_when_opf_title_is_front_m
 
 
 @pytest.mark.asyncio
+async def test_repair_local_file_links_prefers_path_title_when_opf_title_matches_wrong_book(
+    db_session,
+    monkeypatch,
+    tmp_path,
+):
+    author = Author(name="Matt Dinniman")
+    db_session.add(author)
+    await db_session.flush()
+
+    dungeon_crawler_carl = Book(
+        title="Dungeon Crawler Carl",
+        author_id=author.id,
+        hardcover_id=390,
+        is_owned=True,
+    )
+    carls_doomsday = Book(
+        title="Carl's Doomsday Scenario",
+        author_id=author.id,
+        hardcover_id=391,
+        is_owned=False,
+    )
+    db_session.add_all([dungeon_crawler_carl, carls_doomsday])
+    await db_session.flush()
+
+    relative_path = (
+        "Matt Dinniman/Carls Doomsday Scenario (391)/"
+        "Carls Doomsday Scenario - Matt Dinniman.epub"
+    )
+    book_path = tmp_path / relative_path
+    book_path.parent.mkdir(parents=True, exist_ok=True)
+    book_path.write_text("placeholder", encoding="utf-8")
+
+    db_session.add(
+        BookFile(
+            file_path=relative_path,
+            file_name=book_path.name,
+            book_id=dungeon_crawler_carl.id,
+            file_format="epub",
+            opf_title="Dungeon Crawler Carl",
+            opf_author="Matt Dinniman",
+        )
+    )
+    await db_session.commit()
+
+    monkeypatch.setattr(library_sync, "BOOKS_DIR", tmp_path)
+    monkeypatch.setattr(
+        library_sync,
+        "extract_best_metadata",
+        lambda *_args, **_kwargs: StubMetadata(
+            title="Dungeon Crawler Carl",
+            author="Matt Dinniman",
+        ),
+    )
+
+    matched_count, repaired_count, books_added = await library_sync._repair_local_file_links(
+        db_session,
+        file_paths={relative_path},
+    )
+
+    refreshed_file = await db_session.get(BookFile, 1)
+    refreshed_dungeon_crawler_carl = await db_session.get(Book, dungeon_crawler_carl.id)
+    refreshed_carls_doomsday = await db_session.get(Book, carls_doomsday.id)
+
+    assert matched_count == 1
+    assert repaired_count == 1
+    assert books_added == 0
+    assert refreshed_file.book_id == carls_doomsday.id
+    assert refreshed_dungeon_crawler_carl.is_owned is False
+    assert refreshed_carls_doomsday.is_owned is True
+
+
+@pytest.mark.asyncio
 async def test_repair_local_file_links_keeps_existing_hardcover_match_when_opf_title_is_bad(
     db_session,
     monkeypatch,

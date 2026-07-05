@@ -862,6 +862,18 @@ def _best_local_title(book_file: BookFile) -> str | None:
     return book_file.opf_title or None
 
 
+def _book_matches_path_title(book: Book, path_title_candidates: list[str]) -> bool:
+    if not path_title_candidates:
+        return True
+    return any(titles_match(path_title, book.title) for path_title in path_title_candidates)
+
+
+def _opf_title_matches_path_title(opf_title: str | None, path_title_candidates: list[str]) -> bool:
+    if not opf_title or not path_title_candidates:
+        return True
+    return any(titles_match(opf_title, path_title) for path_title in path_title_candidates)
+
+
 def _repair_progress_status_message(
     processed: int,
     total: int,
@@ -919,6 +931,7 @@ async def _repair_local_file_links(
             bf.book_id is None
             or (bf.book and bf.book.hardcover_id is None)
             or (bf.book and not _linked_book_matches_local_metadata(bf.book, bf.opf_title, bf.opf_isbn))
+            or (bf.book and not _book_matches_path_title(bf.book, _local_path_title_candidates(bf)))
             or (
                 expected_book_ids is not None
                 and expected_book_ids.get(bf.file_path) is not None
@@ -1031,6 +1044,7 @@ async def _repair_local_file_links(
                 for sibling_book_id in sibling_book_ids
                 if sibling_book_id in books_by_id
                 and (not current_book or sibling_book_id != current_book.id)
+                and _book_matches_path_title(books_by_id[sibling_book_id], path_title_candidates)
             ]
             if sibling_books:
                 matched_book = sorted(
@@ -1126,7 +1140,11 @@ async def _repair_local_file_links(
                     matched_book = book
                     break
 
-        if not matched_book and bf.opf_title:
+        if (
+            not matched_book
+            and bf.opf_title
+            and _opf_title_matches_path_title(bf.opf_title, path_title_candidates)
+        ):
             for book in candidate_books:
                 if titles_match(bf.opf_title, book.title):
                     matched_book = book
